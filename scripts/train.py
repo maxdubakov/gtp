@@ -6,6 +6,7 @@ every 10K steps, ~100K steps total.
 Usage:
     python scripts/train.py                          # full run on auto device
     python scripts/train.py --max-steps 5 --eval-steps 5 --save-steps 5 -v
+    python scripts/train.py --resume runs/finetune/step_0000005_final.pth
 """
 
 import sys
@@ -59,13 +60,24 @@ def auto_device():
 
 
 def load_note_model(checkpoint_path):
-    """Extract and return the note model with pretrained weights loaded."""
+    """Load the note model from either a pretrained or fine-tuned checkpoint.
+
+    Pretrained checkpoints have nested format: checkpoint['model']['note_model'].
+    Fine-tuned checkpoints have flat format: checkpoint['model'] is a state dict.
+
+    Returns (model, checkpoint) where checkpoint is the full dict (may be used
+    by the caller to restore optimizer state and step count).
+    """
     model = Regress_onset_offset_frame_velocity_CRNN(
         frames_per_second=100, classes_num=88
     )
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-    model.load_state_dict(checkpoint['model']['note_model'])
-    return model
+    state = checkpoint['model']
+    if 'note_model' in state:
+        model.load_state_dict(state['note_model'])
+    else:
+        model.load_state_dict(state)
+    return model, checkpoint
 
 
 def save_checkpoint(path, step, model, optimizer, args):
@@ -105,7 +117,10 @@ def run_eval(model, val_loader, device, max_batches=20):
 def main():
     parser = argparse.ArgumentParser(description='Fine-tune Kong CRNN on guitar data')
     parser.add_argument('--checkpoint', default=DEFAULT_CHECKPOINT,
-                        help='Pretrained checkpoint path')
+                        help='Pretrained checkpoint path (nested format)')
+    parser.add_argument('--resume', default=None,
+                        help='Resume from a fine-tuned checkpoint, restoring '
+                             'model weights, optimizer state, and step count')
     parser.add_argument('--output-dir', default='runs/finetune_001',
                         help='Directory for checkpoints and logs')
     parser.add_argument('--lr', type=float, default=1e-5)
@@ -132,8 +147,9 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # --- Model ---
-    print(f'Loading pretrained note model from {args.checkpoint}')
-    model = load_note_model(args.checkpoint)
+    load_path = args.resume if args.resume else args.checkpoint
+    print(f'Loading note model from {load_path}')
+    model, loaded_checkpoint = load_note_model(load_path)
     model.to(device)
     model.train()
 
@@ -143,7 +159,6 @@ def main():
     val_dataset = build_dataset(GAPS_DIR, GUITARSET_DIR, split='validation')
     print(f'Train segments: {len(train_dataset)}, Val segments: {len(val_dataset)}')
 
-    # pin_memory is only supported for CUDA; MPS/CPU do not support it.
     pin_memory = device == 'cuda'
 
     train_loader = DataLoader(
@@ -175,16 +190,22 @@ def main():
         amsgrad=True,
     )
 
-    # --- Training loop ---
+    # --- Restore state when resuming ---
     step = 0
+    if args.resume:
+        step = loaded_checkpoint.get('iteration', 0)
+        if 'optimizer' in loaded_checkpoint:
+            optimizer.load_state_dict(loaded_checkpoint['optimizer'])
+        print(f'Resuming from step {step}')
+
+    # --- Training loop ---
     recent_losses = []
     step_times = []
     train_iter = iter(train_loader)
 
-    print(f'Starting training (max_steps={args.max_steps})')
+    print(f'Starting training (max_steps={args.max_steps}, starting_step={step})')
 
     while step < args.max_steps:
-        # Cycle through the dataset indefinitely
         try:
             batch = next(train_iter)
         except StopIteration:
@@ -193,7 +214,6 @@ def main():
 
         t_start = time.time()
 
-        # Trace shapes before moving to device (numpy conversion not safe on MPS/CUDA)
         trace('waveform', shape=tuple(batch['waveform'].shape))
         for k in TARGET_KEYS:
             if k in batch:
@@ -213,12 +233,14 @@ def main():
         loss.backward()
         optimizer.step()
 
+        step += 1
+
         step_time = time.time() - t_start
         recent_losses.append(loss.item())
         step_times.append(step_time)
 
         # LR decay
-        if step > 0 and step % args.lr_decay_steps == 0:
+        if step % args.lr_decay_steps == 0:
             for pg in optimizer.param_groups:
                 pg['lr'] *= 0.9
             current_lr = optimizer.param_groups[0]['lr']
@@ -240,18 +262,16 @@ def main():
             )
 
         # Validation eval
-        if step % args.eval_steps == 0:
+        if step > 0 and step % args.eval_steps == 0:
             train_loss = float(np.mean(recent_losses[-min(len(recent_losses), 50):]))
             val_loss = run_eval(model, val_loader, device)
             print(f'[eval @ step {step}] val_loss={val_loss:.4f} train_loss={train_loss:.4f}')
 
         # Save checkpoint
-        if step % args.save_steps == 0:
+        if step > 0 and step % args.save_steps == 0:
             ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
             save_checkpoint(ckpt_path, step, model, optimizer, args)
             print(f'[saved] {ckpt_path}')
-
-        step += 1
 
     # Final save
     final_path = os.path.join(args.output_dir, f'step_{step:07d}_final.pth')
