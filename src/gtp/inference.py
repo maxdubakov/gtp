@@ -4,7 +4,8 @@ import numpy as np
 import torch
 
 from gtp.model.kong import Note_pedal
-from gtp.model.utils import move_data_to_device, forward
+from gtp.model.utils import forward
+from gtp.postprocess import RegressionPostProcessor, write_events_to_midi
 
 # Constants matching the pretrained checkpoint configuration
 SAMPLE_RATE = 16000
@@ -39,6 +40,8 @@ class PianoTranscription:
                 device = torch.device('cuda')
             else:
                 device = torch.device('cpu')
+        elif isinstance(device, str):
+            device = torch.device(device)
 
         self.device = device
         self.segment_samples = segment_samples
@@ -57,8 +60,38 @@ class PianoTranscription:
         self.model.to(self.device)
         self.model.eval()
 
-    def transcribe(self, audio):
-        """Run model inference on a raw audio array.
+    def transcribe(self, audio, midi_path=None):
+        """Run model inference on a raw audio array and post-process to note events.
+
+        Args:
+          audio: np.ndarray, shape (audio_samples,), float32, 16 kHz mono
+          midi_path: str or None; if given, write predicted notes to this MIDI file
+
+        Returns:
+          dict with keys:
+            'output_dict':    raw model activations (frames x classes per output head)
+            'note_events':    list of {'onset_time', 'offset_time', 'midi_note', 'velocity'}
+            'pedal_events':   list of pedal event dicts, or None
+        """
+        output_dict = self._run_model(audio)
+
+        post_processor = RegressionPostProcessor(
+            frames_per_second=self.frames_per_second,
+            classes_num=self.classes_num,
+        )
+        note_events, pedal_events = post_processor.output_dict_to_note_events(output_dict)
+
+        if midi_path:
+            write_events_to_midi(note_events, midi_path, pedal_events=pedal_events)
+
+        return {
+            'output_dict': output_dict,
+            'note_events': note_events,
+            'pedal_events': pedal_events,
+        }
+
+    def _run_model(self, audio):
+        """Run the neural network forward pass and return raw activation arrays.
 
         Args:
           audio: np.ndarray, shape (audio_samples,), float32, 16 kHz mono
@@ -90,9 +123,7 @@ class PianoTranscription:
         output_dict = forward(self.model, segments, batch_size=1)
 
         # Reassemble segments back to original frame length.
-        # _deframe returns frames covering the full padded audio; crop to the
-        # frame count corresponding to the original (unpadded) audio.  The
-        # hop size used by the feature extractor is sample_rate // fps, and
+        # The hop size used by the feature extractor is sample_rate // fps, and
         # the model produces exactly audio_samples // hop_size valid frames.
         hop_size = SAMPLE_RATE // self.frames_per_second
         expected_frames = audio_len // hop_size
