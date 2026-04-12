@@ -23,6 +23,7 @@ import jams
 import mir_eval
 
 from gtp.inference import PianoTranscription
+from gtp.log import set_verbose, trace
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
@@ -46,18 +47,49 @@ def load_guitarset_notes(jams_path):
       ref_intervals: (N, 2) float64 array of [onset, offset] in seconds
       ref_pitches:   (N,) float64 array of MIDI pitch (rounded to nearest semitone)
     """
+    STRING_NAMES = ['E2', 'A2', 'D3', 'G3', 'B3', 'E4']
+
     score = jams.load(jams_path)
+
+    trace("JAMS file", path=jams_path, total_annotations=len(score.annotations))
+    trace("annotation layout:")
+    for i, ann in enumerate(score.annotations):
+        marker = " <-- note_midi" if i in NOTE_MIDI_ANNOTATION_INDICES else ""
+        trace(f"  [{i:2d}] {ann.namespace}", observations=len(ann.data), suffix=marker)
+
     onsets, offsets, pitches = [], [], []
 
-    for idx in NOTE_MIDI_ANNOTATION_INDICES:
-        ann = score.annotations[idx]
+    for string_idx, ann_idx in enumerate(NOTE_MIDI_ANNOTATION_INDICES):
+        ann = score.annotations[ann_idx]
+        string_name = STRING_NAMES[string_idx]
+
+        if ann.data:
+            raw_example = ann.data[0]
+            trace(f"string {string_name} (ann[{ann_idx}]) raw example:",
+                  time=float(raw_example.time),
+                  duration=float(raw_example.duration),
+                  value=float(raw_example.value),
+                  confidence=raw_example.confidence)
+
+        string_onsets, string_pitches_raw, string_pitches_rounded = [], [], []
         for obs in ann.data:
             onset = float(obs.time)
             duration = float(obs.duration)
-            pitch = round(float(obs.value))
+            raw_pitch = float(obs.value)
+            rounded_pitch = round(raw_pitch)
+
+            string_onsets.append(onset)
+            string_pitches_raw.append(raw_pitch)
+            string_pitches_rounded.append(rounded_pitch)
             onsets.append(onset)
             offsets.append(onset + duration)
-            pitches.append(float(pitch))
+            pitches.append(float(rounded_pitch))
+
+        if string_pitches_raw:
+            trace(f"string {string_name}: {len(ann.data)} notes",
+                  pitch_raw_range=f"{min(string_pitches_raw):.2f}-{max(string_pitches_raw):.2f}",
+                  pitch_rounded_range=f"{min(string_pitches_rounded)}-{max(string_pitches_rounded)}",
+                  time_span=f"{min(string_onsets):.2f}-{max(string_onsets):.2f}s")
 
     sort_order = np.argsort(onsets)
     ref_intervals = np.column_stack([
@@ -65,6 +97,17 @@ def load_guitarset_notes(jams_path):
         np.array(offsets)[sort_order],
     ])
     ref_pitches = np.array(pitches)[sort_order]
+
+    trace("flattened & sorted ground truth:")
+    trace("  ref_intervals", ref_intervals)
+    trace("  ref_pitches", ref_pitches)
+    if len(ref_intervals) > 0:
+        trace("  first 3 notes:")
+        for i in range(min(3, len(ref_intervals))):
+            trace(f"    note {i}", onset=f"{ref_intervals[i,0]:.3f}s",
+                  offset=f"{ref_intervals[i,1]:.3f}s", midi_pitch=int(ref_pitches[i]))
+        trace(f"  mir_eval expects: ref_intervals=(N,2) float64, ref_pitches=(N,) float64")
+
     return ref_intervals, ref_pitches
 
 
@@ -76,7 +119,10 @@ def note_events_to_arrays(note_events):
       est_pitches:   (N,) float64 array of MIDI pitch
     """
     if not note_events:
+        trace("no predicted notes")
         return np.zeros((0, 2)), np.zeros(0)
+
+    trace("raw note_events example:", note_events[0])
 
     onsets = np.array([e['onset_time'] for e in note_events])
     offsets = np.array([e['offset_time'] for e in note_events])
@@ -85,6 +131,16 @@ def note_events_to_arrays(note_events):
     sort_order = np.argsort(onsets)
     est_intervals = np.column_stack([onsets[sort_order], offsets[sort_order]])
     est_pitches = pitches[sort_order]
+
+    trace("sorted predictions:")
+    trace("  est_intervals", est_intervals)
+    trace("  est_pitches", est_pitches)
+    if len(est_intervals) > 0:
+        trace("  first 3 predicted notes:")
+        for i in range(min(3, len(est_intervals))):
+            trace(f"    note {i}", onset=f"{est_intervals[i,0]:.3f}s",
+                  offset=f"{est_intervals[i,1]:.3f}s", midi_pitch=int(est_pitches[i]))
+
     return est_intervals, est_pitches
 
 
@@ -93,14 +149,21 @@ def evaluate_file(transcriptor, audio_path, jams_path):
 
     The model requires 16 kHz mono audio; GuitarSet is 44.1 kHz so we resample.
     """
+    trace("loading audio", path=audio_path, target_sr=MODEL_SAMPLE_RATE)
     audio, _ = librosa.load(audio_path, sr=MODEL_SAMPLE_RATE, mono=True)
+    trace("resampled audio", audio)
+
     result = transcriptor.transcribe(audio)
     note_events = result['note_events']
 
     ref_intervals, ref_pitches = load_guitarset_notes(jams_path)
     est_intervals, est_pitches = note_events_to_arrays(note_events)
 
-    # onset-only evaluation: offset_ratio=None disables offset matching
+    trace("ground truth", ref_intervals, notes=len(ref_pitches),
+          pitch_range=f"{ref_pitches.min():.0f}-{ref_pitches.max():.0f}" if len(ref_pitches) > 0 else "empty")
+    trace("predictions", est_intervals, notes=len(est_pitches),
+          pitch_range=f"{est_pitches.min():.0f}-{est_pitches.max():.0f}" if len(est_pitches) > 0 else "empty")
+
     precision, recall, f1, _ = mir_eval.transcription.precision_recall_f1_overlap(
         ref_intervals,
         ref_pitches,
@@ -109,6 +172,7 @@ def evaluate_file(transcriptor, audio_path, jams_path):
         onset_tolerance=ONSET_TOLERANCE,
         offset_ratio=None,
     )
+    trace("mir_eval result", P=f"{precision:.3f}", R=f"{recall:.3f}", F1=f"{f1:.3f}")
     return precision, recall, f1
 
 
@@ -132,8 +196,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', type=int, default=None, help='Evaluate only first N files')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='Parallel workers (each loads own model on CPU)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Trace data shapes and values through pipeline')
     parser.add_argument('--device', default=None, help='Force device (cpu/mps/cuda). Default: auto')
     args = parser.parse_args()
+
+    if args.verbose:
+        set_verbose(True)
 
     os.makedirs(os.path.dirname(RESULTS_PATH), exist_ok=True)
 

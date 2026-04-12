@@ -3,6 +3,8 @@
 
 import numpy as np
 
+from gtp.log import trace
+
 # These constants mirror those in inference.py and the pretrained checkpoint config
 BEGIN_NOTE = 21       # A0, lowest piano MIDI note
 VELOCITY_SCALE = 128  # Map [0,1] normalized velocity to MIDI 0-127
@@ -155,13 +157,17 @@ class RegressionPostProcessor:
             [{'onset_time': 0.51, 'offset_time': 0.82, 'midi_note': 45, 'velocity': 72}, ...]
           pedal_events: list of dict or None
         """
-        # Binarize regression outputs and compute sub-frame shifts
         onset_binary, onset_shift = self._binarize_regression(
             output_dict['reg_onset_output'], self.onset_threshold, neighbour=2
         )
         offset_binary, offset_shift = self._binarize_regression(
             output_dict['reg_offset_output'], self.offset_threshold, neighbour=4
         )
+
+        trace("onset binarized", onset_binary, detections=int(onset_binary.sum()),
+              threshold=self.onset_threshold)
+        trace("offset binarized", offset_binary, detections=int(offset_binary.sum()),
+              threshold=self.offset_threshold)
 
         augmented = dict(output_dict)
         augmented['onset_output'] = onset_binary

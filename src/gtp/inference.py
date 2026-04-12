@@ -6,6 +6,7 @@ import torch
 from gtp.model.kong import Note_pedal
 from gtp.model.utils import forward
 from gtp.postprocess import RegressionPostProcessor, write_events_to_midi
+from gtp.log import trace
 
 # Constants matching the pretrained checkpoint configuration
 SAMPLE_RATE = 16000
@@ -73,16 +74,26 @@ class PianoTranscription:
             'note_events':    list of {'onset_time', 'offset_time', 'midi_note', 'velocity'}
             'pedal_events':   list of pedal event dicts, or None
         """
+        trace("input audio", audio, sr=SAMPLE_RATE, duration_s=f"{len(audio)/SAMPLE_RATE:.2f}")
         output_dict = self._run_model(audio)
+
+        trace("model outputs", output_dict)
+        for key, val in output_dict.items():
+            trace(f"  {key}", val)
 
         post_processor = RegressionPostProcessor(
             frames_per_second=self.frames_per_second,
             classes_num=self.classes_num,
         )
         note_events, pedal_events = post_processor.output_dict_to_note_events(output_dict)
+        trace("detected notes", note_events)
+        if note_events:
+            pitches = [e['midi_note'] for e in note_events]
+            trace("  pitch range", midi_lo=min(pitches), midi_hi=max(pitches), unique_pitches=len(set(pitches)))
 
         if midi_path:
             write_events_to_midi(note_events, midi_path, pedal_events=pedal_events)
+            trace("wrote MIDI", path=midi_path)
 
         return {
             'output_dict': output_dict,
@@ -109,26 +120,23 @@ class PianoTranscription:
         audio = audio[None, :]  # (1, audio_samples)
         audio_len = audio.shape[1]
 
-        # Pad to a multiple of segment_samples
         pad_len = (
             int(np.ceil(audio_len / self.segment_samples)) * self.segment_samples
             - audio_len
         )
         audio = np.concatenate((audio, np.zeros((1, pad_len), dtype=audio.dtype)), axis=1)
+        trace("padded audio", audio, pad_len=pad_len)
 
-        # Split into overlapping segments
-        segments = self._enframe(audio, self.segment_samples)  # (N, segment_samples)
+        segments = self._enframe(audio, self.segment_samples)
+        trace("segments", segments, segment_samples=self.segment_samples, overlap="50%")
 
-        # Run batched forward pass
         output_dict = forward(self.model, segments, batch_size=1)
 
-        # Reassemble segments back to original frame length.
-        # The hop size used by the feature extractor is sample_rate // fps, and
-        # the model produces exactly audio_samples // hop_size valid frames.
         hop_size = SAMPLE_RATE // self.frames_per_second
         expected_frames = audio_len // hop_size
         for key in output_dict.keys():
             output_dict[key] = self._deframe(output_dict[key])[:expected_frames]
+        trace("deframed & trimmed", expected_frames=expected_frames, hop_size=hop_size)
 
         return output_dict
 
