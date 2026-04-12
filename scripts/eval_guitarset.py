@@ -194,6 +194,8 @@ def process_one_file(args_tuple):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoint', default=CHECKPOINT_PATH,
+                        help='Model checkpoint (pretrained or fine-tuned)')
     parser.add_argument('-n', type=int, default=None, help='Evaluate only first N files')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='Parallel workers (each loads own model on CPU)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Trace data shapes and values through pipeline')
@@ -220,8 +222,11 @@ def main():
 
     rows = []
 
+    checkpoint_path = args.checkpoint
+    print(f'Checkpoint: {checkpoint_path}')
+
     if args.jobs <= 1:
-        transcriptor = PianoTranscription(checkpoint_path=CHECKPOINT_PATH, device=device_str)
+        transcriptor = PianoTranscription(checkpoint_path=checkpoint_path, device=device_str)
         print(f'Device: {transcriptor.device}\n')
 
         for i, wav_name in enumerate(audio_files):
@@ -244,7 +249,7 @@ def main():
     else:
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        work = [(f, CHECKPOINT_PATH, device_str) for f in audio_files]
+        work = [(f, checkpoint_path, device_str) for f in audio_files]
         done = 0
 
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:

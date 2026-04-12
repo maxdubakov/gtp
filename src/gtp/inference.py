@@ -3,7 +3,7 @@
 import numpy as np
 import torch
 
-from gtp.model.kong import Note_pedal
+from gtp.model.kong import Note_pedal, Regress_onset_offset_frame_velocity_CRNN
 from gtp.model.utils import forward
 from gtp.postprocess import RegressionPostProcessor, write_events_to_midi
 from gtp.log import trace
@@ -49,15 +49,25 @@ class PianoTranscription:
         self.frames_per_second = FRAMES_PER_SECOND
         self.classes_num = CLASSES_NUM
 
-        # Build model
-        self.model = Note_pedal(
-            frames_per_second=self.frames_per_second,
-            classes_num=self.classes_num,
-        )
-
-        # Load pretrained weights — checkpoint stores note/pedal sub-dicts
+        # Load checkpoint and detect format
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-        self.model.load_state_dict(checkpoint['model'])
+        state = checkpoint['model']
+
+        if 'note_model' in state:
+            # Pretrained checkpoint (nested): has note_model + pedal_model
+            self.model = Note_pedal(
+                frames_per_second=self.frames_per_second,
+                classes_num=self.classes_num,
+            )
+            self.model.load_state_dict(state)
+        else:
+            # Fine-tuned checkpoint (flat): note model only
+            self.model = Regress_onset_offset_frame_velocity_CRNN(
+                frames_per_second=self.frames_per_second,
+                classes_num=self.classes_num,
+            )
+            self.model.load_state_dict(state)
+
         self.model.to(self.device)
         self.model.eval()
 
