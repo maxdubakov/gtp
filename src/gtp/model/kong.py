@@ -87,8 +87,9 @@ class ConvBlock(nn.Module):
           output: (batch_size, out_channels, classes_num)
         """
 
-        x = F.relu_(self.bn1(self.conv1(input)))
-        x = F.relu_(self.bn2(self.conv2(x)))
+        # F.relu_ (in-place) breaks MPS autograd; use non-in-place relu
+        x = F.relu(self.bn1(self.conv1(input)))
+        x = F.relu(self.bn2(self.conv2(x)))
 
         if pool_type == 'avg':
             x = F.avg_pool2d(x, kernel_size=pool_size)
@@ -141,7 +142,7 @@ class AcousticModelCRnn8Dropout(nn.Module):
 
         x = x.transpose(1, 2).flatten(2)
         x = F.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2))
-        x = F.dropout(x, p=0.5, training=self.training, inplace=True)
+        x = F.dropout(x, p=0.5, training=self.training, inplace=False)
 
         (x, _) = self.gru(x)
         x = F.dropout(x, p=0.5, training=self.training, inplace=False)
