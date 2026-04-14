@@ -196,6 +196,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', default=CHECKPOINT_PATH,
                         help='Model checkpoint (pretrained or fine-tuned)')
+    parser.add_argument('-o', '--output', default=None,
+                        help='Output CSV path (default: results/baseline_guitarset.csv)')
+    parser.add_argument('--split', default=None,
+                        help='Evaluate only specific players. Comma-separated '
+                             'player IDs like "05" or "00,01". Matches filename '
+                             'prefix (e.g. "05_..."). Default: all 6 players.')
     parser.add_argument('-n', type=int, default=None, help='Evaluate only first N files')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='Parallel workers (each loads own model on CPU)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Trace data shapes and values through pipeline')
@@ -205,9 +211,16 @@ def main():
     if args.verbose:
         set_verbose(True)
 
-    os.makedirs(os.path.dirname(RESULTS_PATH), exist_ok=True)
+    results_path = args.output or RESULTS_PATH
+    os.makedirs(os.path.dirname(results_path), exist_ok=True)
 
     audio_files = sorted(f for f in os.listdir(AUDIO_DIR) if f.endswith('.wav'))
+
+    if args.split:
+        player_ids = {p.strip() for p in args.split.split(',')}
+        audio_files = [f for f in audio_files if f.split('_')[0] in player_ids]
+        print(f'Split filter: players {sorted(player_ids)} -> {len(audio_files)} files')
+
     if args.n:
         audio_files = audio_files[:args.n]
 
@@ -278,7 +291,7 @@ def main():
     print(f'Recall    : {recalls.mean():.4f}  (std {recalls.std():.4f})')
     print(f'F1        : {f1s.mean():.4f}  (std {f1s.std():.4f})')
 
-    with open(RESULTS_PATH, 'w', newline='') as f:
+    with open(results_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['file', 'precision', 'recall', 'f1'])
         writer.writeheader()
         writer.writerows(sorted(rows, key=lambda r: r['file']))
@@ -287,7 +300,7 @@ def main():
                          'recall': recalls.mean(),
                          'f1': f1s.mean()})
 
-    print(f'Results saved to {RESULTS_PATH}')
+    print(f'Results saved to {results_path}')
 
 
 if __name__ == '__main__':

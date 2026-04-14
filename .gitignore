@@ -8,3 +8,6 @@ __pycache__/
 piano_transcription-master/
 results/
 runs/
+gtp_code.tar.gz
+papers/
+.env
