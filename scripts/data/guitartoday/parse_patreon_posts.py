@@ -7,7 +7,7 @@ Usage:
     python scripts/data/guitartoday/parse_patreon_posts.py
     python scripts/data/guitartoday/parse_patreon_posts.py --info   # summary only
 
-Output: data/guitartoday/catalog.csv
+Output: data/guitartoday/posts.csv
 """
 
 import json
@@ -17,8 +17,8 @@ import argparse
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-BATCHES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'patreon-posts'
-OUTPUT_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'catalog.csv'
+BATCHES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'patreon_posts'
+OUTPUT_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 
 
 def load_all_posts():

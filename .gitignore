@@ -11,3 +11,4 @@ runs/
 gtp_code.tar.gz
 papers/
 .env
+node_modules/

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from soundslice_to_midi import parse_soundslice, notes_to_midi
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'catalog.csv'
+CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 SLICES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'slices'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'processed'
 
