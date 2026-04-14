@@ -13,7 +13,7 @@ import os
 import csv
 import argparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 import pretty_midi
@@ -22,7 +22,7 @@ import soundfile as sf
 
 from gtp.inference import PianoTranscription
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+REPO_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')
 ANNOTATION_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'annotation')
 OUTPUT_DIR = os.path.join(REPO_ROOT, 'results', 'listen')

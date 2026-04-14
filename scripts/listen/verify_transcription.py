@@ -11,7 +11,7 @@ Usage:
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import argparse
 import numpy as np
@@ -20,7 +20,7 @@ import soundfile as sf
 
 from gtp.inference import PianoTranscription
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+REPO_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
                                 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 MODEL_SAMPLE_RATE = 16000

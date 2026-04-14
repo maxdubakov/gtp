@@ -11,12 +11,12 @@ import os
 import argparse
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from gtp.log import set_verbose, trace
 from gtp.data import build_dataset, load_gaps_notes, load_guitarset_notes
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+REPO_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
 GUITARSET_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset')
 
