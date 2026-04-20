@@ -64,7 +64,11 @@ def parse_soundslice(data, syncpoints=None, tempo_bpm=120):
 
     Returns list of {'pitch': int, 'start': float, 'end': float, 'string': int, 'fret': int}
     """
-    track_info = data['tracks'][0]
+    # Find the guitar track (has 'pitches' for string tuning)
+    guitar_track_idx = next(
+        (i for i, t in enumerate(data['tracks']) if 'pitches' in t), 0
+    )
+    track_info = data['tracks'][guitar_track_idx]
     string_pitches = track_info['pitches']
     rhythms = {r['id']: r for r in data['rhythms']}
     bar_timing = build_bar_timing(data, syncpoints, tempo_bpm)
@@ -74,7 +78,7 @@ def parse_soundslice(data, syncpoints=None, tempo_bpm=120):
 
     for bar_idx, bar in enumerate(data['bars']):
         bar_start, bar_duration = bar_timing[bar_idx]
-        track = bar['tracks'][0]
+        track = bar['tracks'][guitar_track_idx]
 
         # Process all voices (voice 0 = treble/melody, voice 1 = bass, etc.)
         for voice in track['voices']:

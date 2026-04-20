@@ -73,7 +73,7 @@ def process_slice(slice_id):
     notes_to_midi(notes, str(midi_path))
 
     # Save tab annotations with string/fret info
-    track_info = data['tracks'][0]
+    track_info = next((t for t in data['tracks'] if 'pitches' in t), data['tracks'][0])
     tuning = track_info['pitches']
     tab_data = {
         'slice_id': slice_id,
