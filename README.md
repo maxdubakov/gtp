@@ -13,6 +13,7 @@ Implemented in 2 stages:
 |---|---|---|---|
 | Pretrained piano baseline | 74.9% | 42.3% | 51.8% |
 | Fine-tuned on GAPS + GuitarSet | 92.0% | 95.2% | **93.5%** |
+
 *Evaluated on GuitarSet player 5 (held out from training), onset-only F1 at 50ms tolerance.*
 
 ### Stage 2: MIDI → Tabs
