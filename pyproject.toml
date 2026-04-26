@@ -29,6 +29,8 @@ select = [
 ]
 ignore = [
     "E501",   # line length — handled by formatter
+    "SIM118", # allow explicit dict.keys()
+    "SIM108" # allow if-else as a larger block
 ]
 
 [tool.ruff.format]

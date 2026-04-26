@@ -1,6 +1,6 @@
 """Fine-tune the Kong CRNN note model on guitar data (GAPS + GuitarSet).
 
-Following Riley et al.'s recipe: lr=1e-5, batch=4, 10s segments, lr ×0.9
+Following Riley et al.'s recipe: lr=1e-5, batch=4, 10s segments, lr *0.9
 every 10K steps, ~100K steps total.
 """
 
@@ -20,16 +20,17 @@ from gtp.model.kong import Regress_onset_offset_frame_velocity_CRNN
 from gtp.model.losses import regress_onset_offset_frame_velocity_bce
 from gtp.model.utils import move_data_to_device
 
-DEFAULT_CHECKPOINT = os.path.join(
-    REPO_ROOT, 'models', 'pretrained',
-    'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth'
-)
+DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'pretrained', 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
 GUITARSET_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset')
 
 TARGET_KEYS = [
-    'reg_onset_roll', 'reg_offset_roll', 'frame_roll',
-    'velocity_roll', 'onset_roll', 'mask_roll',
+    'reg_onset_roll',
+    'reg_offset_roll',
+    'frame_roll',
+    'velocity_roll',
+    'onset_roll',
+    'mask_roll',
 ]
 
 
@@ -60,9 +61,7 @@ def load_note_model(checkpoint_path):
     Returns (model, checkpoint) where checkpoint is the full dict (may be used
     by the caller to restore optimizer state and step count).
     """
-    model = Regress_onset_offset_frame_velocity_CRNN(
-        frames_per_second=100, classes_num=88
-    )
+    model = Regress_onset_offset_frame_velocity_CRNN(frames_per_second=100, classes_num=88)
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     state = checkpoint['model']
     if 'note_model' in state:
@@ -73,20 +72,23 @@ def load_note_model(checkpoint_path):
 
 
 def save_checkpoint(path, step, model, optimizer, args):
-    torch.save({
-        'iteration': step,
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'config': vars(args),
-    }, path)
+    torch.save(
+        {
+            'iteration': step,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'config': vars(args),
+        },
+        path,
+    )
 
 
 def format_eta(seconds):
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     if h > 0:
-        return f"~{h}h{m:02d}m left"
-    return f"~{m}m left"
+        return f'~{h}h{m:02d}m left'
+    return f'~{m}m left'
 
 
 def run_eval(model, val_loader, device, max_batches=20):
@@ -108,24 +110,20 @@ def run_eval(model, val_loader, device, max_batches=20):
 
 def main():
     parser = argparse.ArgumentParser(description='Fine-tune Kong CRNN on guitar data')
-    parser.add_argument('--checkpoint', default=DEFAULT_CHECKPOINT,
-                        help='Pretrained checkpoint path (nested format)')
-    parser.add_argument('--resume', default=None,
-                        help='Resume from a fine-tuned checkpoint, restoring '
-                             'model weights, optimizer state, and step count')
-    parser.add_argument('--output-dir', default='runs/finetune_001',
-                        help='Directory for checkpoints and logs')
+    parser.add_argument('--checkpoint', default=DEFAULT_CHECKPOINT, help='Pretrained checkpoint path (nested format)')
+    parser.add_argument(
+        '--resume',
+        default=None,
+        help='Resume from a fine-tuned checkpoint, restoring model weights, optimizer state, and step count',
+    )
+    parser.add_argument('--output-dir', default='runs/finetune_001', help='Directory for checkpoints and logs')
     parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--max-steps', type=int, default=100000)
-    parser.add_argument('--lr-decay-steps', type=int, default=10000,
-                        help='Multiply lr by 0.9 every N steps')
-    parser.add_argument('--eval-steps', type=int, default=5000,
-                        help='Evaluate on validation set every N steps')
-    parser.add_argument('--save-steps', type=int, default=10000,
-                        help='Save checkpoint every N steps')
-    parser.add_argument('--device', default=None,
-                        help='cpu / mps / cuda (default: auto)')
+    parser.add_argument('--lr-decay-steps', type=int, default=10000, help='Multiply lr by 0.9 every N steps')
+    parser.add_argument('--eval-steps', type=int, default=5000, help='Evaluate on validation set every N steps')
+    parser.add_argument('--save-steps', type=int, default=10000, help='Save checkpoint every N steps')
+    parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
@@ -255,7 +253,7 @@ def main():
 
         # Validation eval
         if step > 0 and step % args.eval_steps == 0:
-            train_loss = float(np.mean(recent_losses[-min(len(recent_losses), 50):]))
+            train_loss = float(np.mean(recent_losses[-min(len(recent_losses), 50) :]))
             val_loss = run_eval(model, val_loader, device)
             print(f'[eval @ step {step}] val_loss={val_loss:.4f} train_loss={train_loss:.4f}')
 

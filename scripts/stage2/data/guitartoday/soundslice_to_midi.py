@@ -46,7 +46,9 @@ def build_bar_timing(data, syncpoints=None, tempo_bpm=120):
             prev_start, prev_dur = result[-1]
             bar_start = prev_start + prev_dur
             # Inherit tempo from previous bar if no syncpoint
-            bar_duration = bar_whole * (prev_dur / (bars[i-1].get('time', [4,4])[0] / bars[i-1].get('time', [4,4])[1]))
+            bar_duration = bar_whole * (
+                prev_dur / (bars[i - 1].get('time', [4, 4])[0] / bars[i - 1].get('time', [4, 4])[1])
+            )
         else:
             bar_start = 0.0
             bar_duration = bar_whole * 4 * 60.0 / tempo_bpm
@@ -62,9 +64,7 @@ def parse_soundslice(data, syncpoints=None, tempo_bpm=120):
     Returns list of {'pitch': int, 'start': float, 'end': float, 'string': int, 'fret': int}
     """
     # Find the guitar track (has 'pitches' for string tuning)
-    guitar_track_idx = next(
-        (i for i, t in enumerate(data['tracks']) if 'pitches' in t), 0
-    )
+    guitar_track_idx = next((i for i, t in enumerate(data['tracks']) if 'pitches' in t), 0)
     track_info = data['tracks'][guitar_track_idx]
     string_pitches = track_info['pitches']
     rhythms = {r['id']: r for r in data['rhythms']}
@@ -88,12 +88,12 @@ def parse_soundslice(data, syncpoints=None, tempo_bpm=120):
                 val = rhythm['val']
                 dots = rhythm.get('dots', 0)
                 if dots:
-                    val = val * (2 - 0.5 ** dots)
+                    val = val * (2 - 0.5**dots)
                 beat_values.append(val)
             total_bar_value = sum(beat_values)
 
             cumulative_value = 0.0
-            for beat, beat_val in zip(voice, beat_values):
+            for beat, beat_val in zip(voice, beat_values, strict=True):
                 if total_bar_value == 0:
                     break
                 if beat.get('grace'):
@@ -169,34 +169,36 @@ def main():
     if args.sync:
         with open(args.sync) as f:
             syncpoints = json.load(f)
-        print(f"Sync: {len(syncpoints)} bar markers loaded")
+        print(f'Sync: {len(syncpoints)} bar markers loaded')
 
     track = data['tracks'][0]
-    print(f"Track: {track['name']}")
-    print(f"Strings: {track['strings']}")
-    print(f"Tuning: {track['pitches']} ({', '.join(pretty_midi.note_number_to_name(p) for p in track['pitches'])})")
-    print(f"Bars: {len(data['bars'])}")
-    print(f"Tempo: {args.tempo} BPM")
+    print(f'Track: {track["name"]}')
+    print(f'Strings: {track["strings"]}')
+    print(f'Tuning: {track["pitches"]} ({", ".join(pretty_midi.note_number_to_name(p) for p in track["pitches"])})')
+    print(f'Bars: {len(data["bars"])}')
+    print(f'Tempo: {args.tempo} BPM')
 
     if 'chords' in track:
         chord_names = [c[1]['name'] for c in track['chords']]
-        print(f"Chords: {', '.join(chord_names)}")
+        print(f'Chords: {", ".join(chord_names)}')
 
-    notes, string_pitches = parse_soundslice(data, syncpoints=syncpoints, tempo_bpm=args.tempo)
-    print(f"Notes: {len(notes)}")
+    notes, _string_pitches = parse_soundslice(data, syncpoints=syncpoints, tempo_bpm=args.tempo)
+    print(f'Notes: {len(notes)}')
 
     if notes:
         pitches = [n['pitch'] for n in notes]
-        print(f"Pitch range: {min(pitches)}-{max(pitches)} "
-              f"({pretty_midi.note_number_to_name(min(pitches))}-{pretty_midi.note_number_to_name(max(pitches))})")
-        print(f"Duration: {notes[-1]['end']:.1f}s")
+        print(
+            f'Pitch range: {min(pitches)}-{max(pitches)} '
+            f'({pretty_midi.note_number_to_name(min(pitches))}-{pretty_midi.note_number_to_name(max(pitches))})'
+        )
+        print(f'Duration: {notes[-1]["end"]:.1f}s')
 
     if args.info:
         return
 
     output_path = args.output or args.input.replace('.json', '.mid')
     notes_to_midi(notes, output_path, tempo_bpm=args.tempo)
-    print(f"\nMIDI written: {output_path}")
+    print(f'\nMIDI written: {output_path}')
 
 
 if __name__ == '__main__':

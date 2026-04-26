@@ -18,17 +18,16 @@ from gtp import REPO_ROOT
 from gtp.inference import PianoTranscription
 from gtp.log import set_verbose, trace
 
-CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
-                                'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
+CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained', 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')
 ANNOTATION_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'annotation')
 RESULTS_PATH = os.path.join(REPO_ROOT, 'results', 'baseline_guitarset.csv')
 
 MODEL_SAMPLE_RATE = 16000
-ONSET_TOLERANCE = 0.05   # 50 ms, matching Riley et al.
+ONSET_TOLERANCE = 0.05  # 50 ms, matching Riley et al.
 
 # GuitarSet note_midi annotations are interleaved with pitch_contour annotations.
-# Indices 1, 3, 5, 7, 9, 11 are the note_midi annotations for strings 1–6.
+# Indices 1, 3, 5, 7, 9, 11 are the note_midi annotations for strings 1-6.
 NOTE_MIDI_ANNOTATION_INDICES = [1, 3, 5, 7, 9, 11]
 
 
@@ -43,11 +42,11 @@ def load_guitarset_notes(jams_path):
 
     score = jams.load(jams_path)
 
-    trace("JAMS file", path=jams_path, total_annotations=len(score.annotations))
-    trace("annotation layout:")
+    trace('JAMS file', path=jams_path, total_annotations=len(score.annotations))
+    trace('annotation layout:')
     for i, ann in enumerate(score.annotations):
-        marker = " <-- note_midi" if i in NOTE_MIDI_ANNOTATION_INDICES else ""
-        trace(f"  [{i:2d}] {ann.namespace}", observations=len(ann.data), suffix=marker)
+        marker = ' <-- note_midi' if i in NOTE_MIDI_ANNOTATION_INDICES else ''
+        trace(f'  [{i:2d}] {ann.namespace}', observations=len(ann.data), suffix=marker)
 
     onsets, offsets, pitches = [], [], []
 
@@ -57,11 +56,13 @@ def load_guitarset_notes(jams_path):
 
         if ann.data:
             raw_example = ann.data[0]
-            trace(f"string {string_name} (ann[{ann_idx}]) raw example:",
-                  time=float(raw_example.time),
-                  duration=float(raw_example.duration),
-                  value=float(raw_example.value),
-                  confidence=raw_example.confidence)
+            trace(
+                f'string {string_name} (ann[{ann_idx}]) raw example:',
+                time=float(raw_example.time),
+                duration=float(raw_example.duration),
+                value=float(raw_example.value),
+                confidence=raw_example.confidence,
+            )
 
         string_onsets, string_pitches_raw, string_pitches_rounded = [], [], []
         for obs in ann.data:
@@ -78,27 +79,35 @@ def load_guitarset_notes(jams_path):
             pitches.append(float(rounded_pitch))
 
         if string_pitches_raw:
-            trace(f"string {string_name}: {len(ann.data)} notes",
-                  pitch_raw_range=f"{min(string_pitches_raw):.2f}-{max(string_pitches_raw):.2f}",
-                  pitch_rounded_range=f"{min(string_pitches_rounded)}-{max(string_pitches_rounded)}",
-                  time_span=f"{min(string_onsets):.2f}-{max(string_onsets):.2f}s")
+            trace(
+                f'string {string_name}: {len(ann.data)} notes',
+                pitch_raw_range=f'{min(string_pitches_raw):.2f}-{max(string_pitches_raw):.2f}',
+                pitch_rounded_range=f'{min(string_pitches_rounded)}-{max(string_pitches_rounded)}',
+                time_span=f'{min(string_onsets):.2f}-{max(string_onsets):.2f}s',
+            )
 
     sort_order = np.argsort(onsets)
-    ref_intervals = np.column_stack([
-        np.array(onsets)[sort_order],
-        np.array(offsets)[sort_order],
-    ])
+    ref_intervals = np.column_stack(
+        [
+            np.array(onsets)[sort_order],
+            np.array(offsets)[sort_order],
+        ]
+    )
     ref_pitches = np.array(pitches)[sort_order]
 
-    trace("flattened & sorted ground truth:")
-    trace("  ref_intervals", ref_intervals)
-    trace("  ref_pitches", ref_pitches)
+    trace('flattened & sorted ground truth:')
+    trace('  ref_intervals', ref_intervals)
+    trace('  ref_pitches', ref_pitches)
     if len(ref_intervals) > 0:
-        trace("  first 3 notes:")
+        trace('  first 3 notes:')
         for i in range(min(3, len(ref_intervals))):
-            trace(f"    note {i}", onset=f"{ref_intervals[i,0]:.3f}s",
-                  offset=f"{ref_intervals[i,1]:.3f}s", midi_pitch=int(ref_pitches[i]))
-        trace("  mir_eval expects: ref_intervals=(N,2) float64, ref_pitches=(N,) float64")
+            trace(
+                f'    note {i}',
+                onset=f'{ref_intervals[i, 0]:.3f}s',
+                offset=f'{ref_intervals[i, 1]:.3f}s',
+                midi_pitch=int(ref_pitches[i]),
+            )
+        trace('  mir_eval expects: ref_intervals=(N,2) float64, ref_pitches=(N,) float64')
 
     return ref_intervals, ref_pitches
 
@@ -111,10 +120,10 @@ def note_events_to_arrays(note_events):
       est_pitches:   (N,) float64 array of MIDI pitch
     """
     if not note_events:
-        trace("no predicted notes")
+        trace('no predicted notes')
         return np.zeros((0, 2)), np.zeros(0)
 
-    trace("raw note_events example:", note_events[0])
+    trace('raw note_events example:', note_events[0])
 
     onsets = np.array([e['onset_time'] for e in note_events])
     offsets = np.array([e['offset_time'] for e in note_events])
@@ -124,14 +133,18 @@ def note_events_to_arrays(note_events):
     est_intervals = np.column_stack([onsets[sort_order], offsets[sort_order]])
     est_pitches = pitches[sort_order]
 
-    trace("sorted predictions:")
-    trace("  est_intervals", est_intervals)
-    trace("  est_pitches", est_pitches)
+    trace('sorted predictions:')
+    trace('  est_intervals', est_intervals)
+    trace('  est_pitches', est_pitches)
     if len(est_intervals) > 0:
-        trace("  first 3 predicted notes:")
+        trace('  first 3 predicted notes:')
         for i in range(min(3, len(est_intervals))):
-            trace(f"    note {i}", onset=f"{est_intervals[i,0]:.3f}s",
-                  offset=f"{est_intervals[i,1]:.3f}s", midi_pitch=int(est_pitches[i]))
+            trace(
+                f'    note {i}',
+                onset=f'{est_intervals[i, 0]:.3f}s',
+                offset=f'{est_intervals[i, 1]:.3f}s',
+                midi_pitch=int(est_pitches[i]),
+            )
 
     return est_intervals, est_pitches
 
@@ -141,9 +154,9 @@ def evaluate_file(transcriptor, audio_path, jams_path):
 
     The model requires 16 kHz mono audio; GuitarSet is 44.1 kHz so we resample.
     """
-    trace("loading audio", path=audio_path, target_sr=MODEL_SAMPLE_RATE)
+    trace('loading audio', path=audio_path, target_sr=MODEL_SAMPLE_RATE)
     audio, _ = librosa.load(audio_path, sr=MODEL_SAMPLE_RATE, mono=True)
-    trace("resampled audio", audio)
+    trace('resampled audio', audio)
 
     result = transcriptor.transcribe(audio)
     note_events = result['note_events']
@@ -151,10 +164,18 @@ def evaluate_file(transcriptor, audio_path, jams_path):
     ref_intervals, ref_pitches = load_guitarset_notes(jams_path)
     est_intervals, est_pitches = note_events_to_arrays(note_events)
 
-    trace("ground truth", ref_intervals, notes=len(ref_pitches),
-          pitch_range=f"{ref_pitches.min():.0f}-{ref_pitches.max():.0f}" if len(ref_pitches) > 0 else "empty")
-    trace("predictions", est_intervals, notes=len(est_pitches),
-          pitch_range=f"{est_pitches.min():.0f}-{est_pitches.max():.0f}" if len(est_pitches) > 0 else "empty")
+    trace(
+        'ground truth',
+        ref_intervals,
+        notes=len(ref_pitches),
+        pitch_range=f'{ref_pitches.min():.0f}-{ref_pitches.max():.0f}' if len(ref_pitches) > 0 else 'empty',
+    )
+    trace(
+        'predictions',
+        est_intervals,
+        notes=len(est_pitches),
+        pitch_range=f'{est_pitches.min():.0f}-{est_pitches.max():.0f}' if len(est_pitches) > 0 else 'empty',
+    )
 
     precision, recall, f1, _ = mir_eval.transcription.precision_recall_f1_overlap(
         ref_intervals,
@@ -164,7 +185,7 @@ def evaluate_file(transcriptor, audio_path, jams_path):
         onset_tolerance=ONSET_TOLERANCE,
         offset_ratio=None,
     )
-    trace("mir_eval result", P=f"{precision:.3f}", R=f"{recall:.3f}", F1=f"{f1:.3f}")
+    trace('mir_eval result', P=f'{precision:.3f}', R=f'{recall:.3f}', F1=f'{f1:.3f}')
     return precision, recall, f1
 
 
@@ -186,14 +207,17 @@ def process_one_file(args_tuple):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', default=CHECKPOINT_PATH,
-                        help='Model checkpoint (pretrained or fine-tuned)')
-    parser.add_argument('-o', '--output', default=None,
-                        help='Output CSV path (default: results/baseline_guitarset.csv)')
-    parser.add_argument('--split', default=None,
-                        help='Evaluate only specific players. Comma-separated '
-                             'player IDs like "05" or "00,01". Matches filename '
-                             'prefix (e.g. "05_..."). Default: all 6 players.')
+    parser.add_argument('--checkpoint', default=CHECKPOINT_PATH, help='Model checkpoint (pretrained or fine-tuned)')
+    parser.add_argument(
+        '-o', '--output', default=None, help='Output CSV path (default: results/baseline_guitarset.csv)'
+    )
+    parser.add_argument(
+        '--split',
+        default=None,
+        help='Evaluate only specific players. Comma-separated '
+        'player IDs like "05" or "00,01". Matches filename '
+        'prefix (e.g. "05_..."). Default: all 6 players.',
+    )
     parser.add_argument('-n', type=int, default=None, help='Evaluate only first N files')
     parser.add_argument('-j', '--jobs', type=int, default=1, help='Parallel workers (each loads own model on CPU)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Trace data shapes and values through pipeline')
@@ -214,7 +238,7 @@ def main():
         print(f'Split filter: players {sorted(player_ids)} -> {len(audio_files)} files')
 
     if args.n:
-        audio_files = audio_files[:args.n]
+        audio_files = audio_files[: args.n]
 
     # For parallel: force CPU since MPS/CUDA don't multiprocess well
     device_str = args.device or ('cpu' if args.jobs > 1 else None)
@@ -249,8 +273,10 @@ def main():
             per_file = elapsed / (i + 1)
             remaining = per_file * (len(audio_files) - i - 1)
             running_f1 = np.mean([r['f1'] for r in rows])
-            print(f'  [{i+1:3d}/{len(audio_files)}] F1={f1:.3f}  avg={running_f1:.3f}  '
-                  f'({per_file:.1f}s/file, ~{remaining:.0f}s left)')
+            print(
+                f'  [{i + 1:3d}/{len(audio_files)}] F1={f1:.3f}  avg={running_f1:.3f}  '
+                f'({per_file:.1f}s/file, ~{remaining:.0f}s left)'
+            )
     else:
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -270,9 +296,11 @@ def main():
                 per_file = elapsed / done
                 remaining = per_file * (len(audio_files) - done)
                 running_f1 = np.mean([r['f1'] for r in rows])
-                print(f'  [{done:3d}/{len(audio_files)}] {result["file"]}: '
-                      f'F1={result["f1"]:.3f}  avg={running_f1:.3f}  '
-                      f'({per_file:.1f}s/file, ~{remaining:.0f}s left)')
+                print(
+                    f'  [{done:3d}/{len(audio_files)}] {result["file"]}: '
+                    f'F1={result["f1"]:.3f}  avg={running_f1:.3f}  '
+                    f'({per_file:.1f}s/file, ~{remaining:.0f}s left)'
+                )
 
     precisions = np.array([row['precision'] for row in rows])
     recalls = np.array([row['recall'] for row in rows])
@@ -287,10 +315,9 @@ def main():
         writer = csv.DictWriter(f, fieldnames=['file', 'precision', 'recall', 'f1'])
         writer.writeheader()
         writer.writerows(sorted(rows, key=lambda r: r['file']))
-        writer.writerow({'file': 'AGGREGATE_MEAN',
-                         'precision': precisions.mean(),
-                         'recall': recalls.mean(),
-                         'f1': f1s.mean()})
+        writer.writerow(
+            {'file': 'AGGREGATE_MEAN', 'precision': precisions.mean(), 'recall': recalls.mean(), 'f1': f1s.mean()}
+        )
 
     print(f'Results saved to {results_path}')
 

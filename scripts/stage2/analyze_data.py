@@ -31,20 +31,21 @@ OUTPUT_DIR = REPO_ROOT / 'results' / 'analysis'
 STANDARD_TUNING = [64, 59, 55, 50, 45, 40]
 MIDI_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-# Seaborn palette – one colour per dataset, consistent across all charts
-PALETTE = dict(zip(DATASETS, sns.color_palette('tab10', n_colors=len(DATASETS))))
+# Seaborn palette - one colour per dataset, consistent across all charts
+PALETTE = dict(zip(DATASETS, sns.color_palette('tab10', n_colors=len(DATASETS)), strict=True))
 
 # Histogram bin edges used consistently
-PITCH_BINS = np.arange(30, 100, 1)           # MIDI pitch 30-99
-FRET_BINS = np.arange(-2, 30, 1)             # frets -2 to 29
-DUR_BINS = np.logspace(-2, 2, 80)            # 0.01 s – 100 s (log)
-ONSET_GAP_BINS = np.logspace(-3, 2, 80)     # 0.001 s – 100 s (log)
+PITCH_BINS = np.arange(30, 100, 1)  # MIDI pitch 30-99
+FRET_BINS = np.arange(-2, 30, 1)  # frets -2 to 29
+DUR_BINS = np.logspace(-2, 2, 80)  # 0.01 s - 100 s (log)
+ONSET_GAP_BINS = np.logspace(-3, 2, 80)  # 0.001 s - 100 s (log)
 NOTES_PER_PIECE_BINS = np.arange(0, 2000, 20)
 
 
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def midi_to_name(midi: int) -> str:
     octave = (midi // 12) - 1
@@ -64,6 +65,7 @@ def json_files(dataset: str) -> list[Path]:
 # Per-dataset accumulation
 # ---------------------------------------------------------------------------
 
+
 def analyse_dataset(dataset: str) -> dict:
     """Stream through every JSON file in *dataset* and accumulate statistics.
 
@@ -76,13 +78,13 @@ def analyse_dataset(dataset: str) -> dict:
     # Accumulators
     total_notes = 0
     total_inconsistent = 0
-    pitch_counts = Counter()          # MIDI pitch -> count
-    string_counts = Counter()         # string number -> count
-    fret_counts = Counter()           # fret -> count
-    notes_per_piece: list[int] = []   # one entry per file
-    piece_durations: list[float] = [] # last-note-end per file, seconds
-    tuning_counts = Counter()         # tuple(tuning) -> count
-    std_tuning_notes = 0              # notes from files with standard tuning
+    pitch_counts = Counter()  # MIDI pitch -> count
+    string_counts = Counter()  # string number -> count
+    fret_counts = Counter()  # fret -> count
+    notes_per_piece: list[int] = []  # one entry per file
+    piece_durations: list[float] = []  # last-note-end per file, seconds
+    tuning_counts = Counter()  # tuple(tuning) -> count
+    std_tuning_notes = 0  # notes from files with standard tuning
 
     # Pre-binned histograms (avoids storing millions of raw floats)
     dur_hist = np.zeros(len(DUR_BINS) - 1, dtype=np.int64)
@@ -92,16 +94,16 @@ def analyse_dataset(dataset: str) -> dict:
     onset_gap_large = 0  # count of onset gaps > 30 s
 
     # For consistency checking
-    capo_files: list[dict] = []       # {file, offset}
-    harmonic_files: list[dict] = []   # {file, n_inconsistent}
-    bug_files: list[dict] = []        # {file, n_inconsistent, diffs}
+    capo_files: list[dict] = []  # {file, offset}
+    harmonic_files: list[dict] = []  # {file, n_inconsistent}
+    bug_files: list[dict] = []  # {file, n_inconsistent, diffs}
 
     # Red-flag counters
-    neg_fret_notes: list[dict] = []   # {file, fret}
+    neg_fret_notes: list[dict] = []  # {file, fret}
     high_fret_notes: list[dict] = []  # {file, fret}
-    zero_dur_notes: list[dict] = []   # {file}
-    long_notes: list[dict] = []       # {file, duration}
-    short_pieces: list[str] = []      # filenames with < 10 notes
+    zero_dur_notes: list[dict] = []  # {file}
+    long_notes: list[dict] = []  # {file, duration}
+    short_pieces: list[str] = []  # filenames with < 10 notes
 
     for path in files:
         try:
@@ -176,15 +178,18 @@ def analyse_dataset(dataset: str) -> dict:
                 if n_incon == n:
                     capo_files.append({'file': path.name, 'offset': d, 'n_notes': n})
                 else:
-                    # constant diff but not all notes – could be partial capo or harmonics
-                    harmonic_files.append({'file': path.name, 'n_inconsistent': n_incon,
-                                           'n_notes': n, 'diffs': sorted(unique_diffs)})
+                    # constant diff but not all notes - could be partial capo or harmonics
+                    harmonic_files.append(
+                        {'file': path.name, 'n_inconsistent': n_incon, 'n_notes': n, 'diffs': sorted(unique_diffs)}
+                    )
             elif all(d in (12, 19, 24) for d in unique_diffs):
-                harmonic_files.append({'file': path.name, 'n_inconsistent': n_incon,
-                                       'n_notes': n, 'diffs': sorted(unique_diffs)})
+                harmonic_files.append(
+                    {'file': path.name, 'n_inconsistent': n_incon, 'n_notes': n, 'diffs': sorted(unique_diffs)}
+                )
             else:
-                bug_files.append({'file': path.name, 'n_inconsistent': n_incon,
-                                  'n_notes': n, 'diffs': sorted(unique_diffs)})
+                bug_files.append(
+                    {'file': path.name, 'n_inconsistent': n_incon, 'n_notes': n, 'diffs': sorted(unique_diffs)}
+                )
 
         # Accumulate duration histogram for this file's notes
         if notes:
@@ -240,6 +245,7 @@ def analyse_dataset(dataset: str) -> dict:
 # Plotting helpers
 # ---------------------------------------------------------------------------
 
+
 def apply_style():
     sns.set_theme(style='whitegrid', palette='tab10', font_scale=1.1)
 
@@ -255,11 +261,12 @@ def save(fig: plt.Figure, name: str):
 # Individual charts
 # ---------------------------------------------------------------------------
 
+
 def plot_pitch_distribution(stats_list: list[dict]):
     fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharey=False)
     fig.suptitle('Pitch Distribution (MIDI)', fontsize=14, fontweight='bold')
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         counts = stats['pitch_counts']
         pitches = np.array(sorted(counts.keys()))
@@ -286,7 +293,7 @@ def plot_string_usage(stats_list: list[dict]):
     fig, axes = plt.subplots(1, 4, figsize=(16, 5), sharey=False)
     fig.suptitle('String Usage (1 = high E, 6 = low E)', fontsize=14, fontweight='bold')
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         counts = stats['string_counts']
         strings = sorted(counts.keys())
@@ -310,7 +317,7 @@ def plot_fret_distribution(stats_list: list[dict]):
     fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharey=False)
     fig.suptitle('Fret Distribution', fontsize=14, fontweight='bold')
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         counts = stats['fret_counts']
         frets = np.array(sorted(counts.keys()))
@@ -335,11 +342,10 @@ def plot_duration_distribution(stats_list: list[dict]):
     bin_centers = np.sqrt(DUR_BINS[:-1] * DUR_BINS[1:])  # geometric midpoints
     bin_widths = DUR_BINS[1:] - DUR_BINS[:-1]
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         counts = stats['dur_hist']
-        ax.bar(bin_centers, counts, width=bin_widths, color=PALETTE[ds], alpha=0.8,
-               align='center')
+        ax.bar(bin_centers, counts, width=bin_widths, color=PALETTE[ds], alpha=0.8, align='center')
         ax.set_xscale('log')
         ax.set_title(ds, fontweight='bold')
         ax.set_xlabel('Duration (s)')
@@ -347,9 +353,16 @@ def plot_duration_distribution(stats_list: list[dict]):
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
         n_zero = len(stats['zero_dur_notes'])
         if n_zero:
-            ax.text(0.97, 0.95, f'zero/neg dur: {n_zero:,}',
-                    transform=ax.transAxes, ha='right', va='top', fontsize=9,
-                    color='red')
+            ax.text(
+                0.97,
+                0.95,
+                f'zero/neg dur: {n_zero:,}',
+                transform=ax.transAxes,
+                ha='right',
+                va='top',
+                fontsize=9,
+                color='red',
+            )
 
     fig.tight_layout()
     save(fig, '4_note_duration.png')
@@ -359,7 +372,7 @@ def plot_notes_per_piece(stats_list: list[dict]):
     fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharey=False)
     fig.suptitle('Notes per Piece', fontsize=14, fontweight='bold')
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         npp = np.array(stats['notes_per_piece'])
         ax.hist(npp, bins=NOTES_PER_PIECE_BINS, color=PALETTE[ds], alpha=0.85)
@@ -367,8 +380,7 @@ def plot_notes_per_piece(stats_list: list[dict]):
         ax.set_xlabel('Notes per piece')
         ax.set_ylabel('Number of pieces')
         med = float(np.median(npp))
-        ax.axvline(med, color='black', linestyle='--', linewidth=1.2,
-                   label=f'Median {med:.0f}')
+        ax.axvline(med, color='black', linestyle='--', linewidth=1.2, label=f'Median {med:.0f}')
         ax.legend(fontsize=9)
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
 
@@ -383,15 +395,14 @@ def plot_onset_gaps(stats_list: list[dict]):
     bin_centers = np.sqrt(ONSET_GAP_BINS[:-1] * ONSET_GAP_BINS[1:])  # geometric midpoints
     bin_widths = ONSET_GAP_BINS[1:] - ONSET_GAP_BINS[:-1]
 
-    for ax, stats in zip(axes.flat, stats_list):
+    for ax, stats in zip(axes.flat, stats_list, strict=True):
         ds = stats['dataset']
         counts = stats['onset_gap_hist']
         if counts.sum() == 0:
             ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center')
             ax.set_title(ds, fontweight='bold')
             continue
-        ax.bar(bin_centers, counts, width=bin_widths, color=PALETTE[ds], alpha=0.8,
-               align='center')
+        ax.bar(bin_centers, counts, width=bin_widths, color=PALETTE[ds], alpha=0.8, align='center')
         ax.set_xscale('log')
         ax.axvline(30, color='red', linestyle='--', linewidth=1.2, label='30 s threshold')
         ax.set_title(ds, fontweight='bold')
@@ -399,9 +410,16 @@ def plot_onset_gaps(stats_list: list[dict]):
         ax.set_ylabel('Count')
         n_large = stats['onset_gap_large']
         if n_large:
-            ax.text(0.97, 0.95, f'gaps > 30 s: {n_large:,}',
-                    transform=ax.transAxes, ha='right', va='top', fontsize=9,
-                    color='red')
+            ax.text(
+                0.97,
+                0.95,
+                f'gaps > 30 s: {n_large:,}',
+                transform=ax.transAxes,
+                ha='right',
+                va='top',
+                fontsize=9,
+                color='red',
+            )
         ax.legend(fontsize=9)
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
 
@@ -437,8 +455,9 @@ def plot_tuning_distribution(stats_list: list[dict]):
         if t == std_tup:
             bars[i].set_edgecolor('black')
             bars[i].set_linewidth(2.0)
-            ax.text(i, counts[i] + counts[0] * 0.01, 'Standard',
-                    ha='center', va='bottom', fontsize=9, fontweight='bold')
+            ax.text(
+                i, counts[i] + counts[0] * 0.01, 'Standard', ha='center', va='bottom', fontsize=9, fontweight='bold'
+            )
 
     fig.tight_layout()
     save(fig, '7_tuning_distribution.png')
@@ -457,8 +476,7 @@ def plot_summary_overview(stats_list: list[dict]):
         counts = stats['pitch_counts']
         pitches = sorted(counts.keys())
         vals = [counts[p] for p in pitches]
-        ax_pitch.bar(pitches, vals, color=PALETTE[ds], alpha=0.55, width=1.0,
-                     label=ds)
+        ax_pitch.bar(pitches, vals, color=PALETTE[ds], alpha=0.55, width=1.0, label=ds)
     ax_pitch.axvspan(40, 84, alpha=0.08, color='green')
     ax_pitch.set_xlabel('MIDI pitch')
     ax_pitch.set_ylabel('Note count')
@@ -488,8 +506,15 @@ def plot_summary_overview(stats_list: list[dict]):
     dur_bin_widths = DUR_BINS[1:] - DUR_BINS[:-1]
     for stats in stats_list:
         ds = stats['dataset']
-        ax_dur.bar(dur_bin_centers, stats['dur_hist'], width=dur_bin_widths,
-                   color=PALETTE[ds], alpha=0.55, label=ds, align='center')
+        ax_dur.bar(
+            dur_bin_centers,
+            stats['dur_hist'],
+            width=dur_bin_widths,
+            color=PALETTE[ds],
+            alpha=0.55,
+            label=ds,
+            align='center',
+        )
     ax_dur.set_xscale('log')
     ax_dur.set_xlabel('Duration (s)')
     ax_dur.set_ylabel('Note count')
@@ -516,12 +541,11 @@ def plot_summary_overview(stats_list: list[dict]):
 # Text report
 # ---------------------------------------------------------------------------
 
-def print_summary_table(stats_list: list[dict]):
-    std_tup = tuple(STANDARD_TUNING)
 
+def print_summary_table(stats_list: list[dict]):
     header = (
-        f"{'Dataset':<14} {'Files':>6} {'Notes':>9} {'Pitch':>10} {'Fret':>8} "
-        f"{'Dur (s)':>14} {'Piece (s)':>14} {'% Std':>7} {'% Incon':>8}"
+        f'{"Dataset":<14} {"Files":>6} {"Notes":>9} {"Pitch":>10} {"Fret":>8} '
+        f'{"Dur (s)":>14} {"Piece (s)":>14} {"% Std":>7} {"% Incon":>8}'
     )
     sep = '-' * len(header)
     print('\n' + '=' * len(header))
@@ -561,10 +585,10 @@ def print_summary_table(stats_list: list[dict]):
         pct_incon = 100.0 * ni / nt if nt else 0.0
 
         print(
-            f"{ds:<14} {nf:>6,} {nt:>9,} "
-            f"{f'{pmin}-{pmax}':>10} {f'{fmin}-{fmax}':>8} "
-            f"{f'{dmin:.2f}-{dmax:.1f}':>14} {f'{pdmin:.0f}-{pdmax:.0f}':>14} "
-            f"{pct_std:>6.1f}% {pct_incon:>7.2f}%"
+            f'{ds:<14} {nf:>6,} {nt:>9,} '
+            f'{f"{pmin}-{pmax}":>10} {f"{fmin}-{fmax}":>8} '
+            f'{f"{dmin:.2f}-{dmax:.1f}":>14} {f"{pdmin:.0f}-{pdmax:.0f}":>14} '
+            f'{pct_std:>6.1f}% {pct_incon:>7.2f}%'
         )
 
         agg['n_files'] += nf
@@ -585,11 +609,11 @@ def print_summary_table(stats_list: list[dict]):
     pct_std_all = 100.0 * agg_std_notes / agg_notes if agg_notes else 0
     pct_incon_all = 100.0 * agg['n_incon'] / agg['n_notes'] if agg['n_notes'] else 0
     print(
-        f"{'Combined':<14} {agg['n_files']:>6,} {agg['n_notes']:>9,} "
-        f"{f'{agg_pitch_min}-{agg_pitch_max}':>10} {f'{agg_fret_min}-{agg_fret_max}':>8} "
-        f"{f'{agg_dur_min:.2f}-{agg_dur_max:.1f}':>14} "
-        f"{f'{agg_piece_min:.0f}-{agg_piece_max:.0f}':>14} "
-        f"{pct_std_all:>6.1f}% {pct_incon_all:>7.2f}%"
+        f'{"Combined":<14} {agg["n_files"]:>6,} {agg["n_notes"]:>9,} '
+        f'{f"{agg_pitch_min}-{agg_pitch_max}":>10} {f"{agg_fret_min}-{agg_fret_max}":>8} '
+        f'{f"{agg_dur_min:.2f}-{agg_dur_max:.1f}":>14} '
+        f'{f"{agg_piece_min:.0f}-{agg_piece_max:.0f}":>14} '
+        f'{pct_std_all:>6.1f}% {pct_incon_all:>7.2f}%'
     )
     print('=' * len(header))
     print('  Note: "% Std" = notes from files using standard tuning [E2/A2/D3/G3/B3/E4]')
@@ -610,29 +634,28 @@ def print_consistency_report(stats_list: list[dict]):
         bugs = stats['bug_files']
 
         print(f'\n[{ds}]')
-        print(f'  Inconsistent notes: {ni:,} / {nt:,} ({100*ni/nt:.2f}%)' if nt else
-              '  No notes.')
+        print(f'  Inconsistent notes: {ni:,} / {nt:,} ({100 * ni / nt:.2f}%)' if nt else '  No notes.')
 
         if capo:
             print(f'  Capo files ({len(capo)} total — 100% inconsistent, constant diff):')
             for c in capo[:20]:
                 print(f'    offset={c["offset"]:+d}  {c["file"]}')
             if len(capo) > 20:
-                print(f'    ... and {len(capo)-20} more')
+                print(f'    ... and {len(capo) - 20} more')
 
         if harm:
             print(f'  Likely-harmonic files ({len(harm)} total — partial inconsistency):')
             for h in harm[:10]:
                 print(f'    n_incon={h["n_inconsistent"]}  diffs={h["diffs"]}  {h["file"]}')
             if len(harm) > 10:
-                print(f'    ... and {len(harm)-10} more')
+                print(f'    ... and {len(harm) - 10} more')
 
         if bugs:
             print(f'  Unclear/possible-bug files ({len(bugs)} total):')
             for b in bugs[:10]:
                 print(f'    n_incon={b["n_inconsistent"]}  diffs={b["diffs"]}  {b["file"]}')
             if len(bugs) > 10:
-                print(f'    ... and {len(bugs)-10} more')
+                print(f'    ... and {len(bugs) - 10} more')
 
         if not capo and not harm and not bugs:
             print('  All notes consistent.')
@@ -648,35 +671,31 @@ def print_consistency_report(stats_list: list[dict]):
             continue
         print(f'\n{ds}:')
         if capo:
-            print(f'  FIXABLE (capo): {len(capo)} files — add track.offset to tuning '
-                  'or re-parse with offset correction.')
+            print(
+                f'  FIXABLE (capo): {len(capo)} files — add track.offset to tuning or re-parse with offset correction.'
+            )
         if harm:
-            print(f'  FIXABLE (harmonics): {len(harm)} files — harmonic notes (diff=12/19/24)'
-                  ' are a known GP feature; strip or keep with a flag.')
+            print(
+                f'  FIXABLE (harmonics): {len(harm)} files — harmonic notes (diff=12/19/24)'
+                ' are a known GP feature; strip or keep with a flag.'
+            )
         if bugs:
             print(f'  INVESTIGATE: {len(bugs)} files have variable diffs — check source data.')
 
     # Per-file compact listing of all inconsistent files
-    any_inconsistent = any(
-        stats['capo_files'] or stats['harmonic_files'] or stats['bug_files']
-        for stats in stats_list
-    )
+    any_inconsistent = any(stats['capo_files'] or stats['harmonic_files'] or stats['bug_files'] for stats in stats_list)
     if any_inconsistent:
         print('\n--- Per-file listing ---')
-        print(f"{'Dataset':<12} {'File':<50} {'Offset':>7} {'Notes':>7} "
-              f"{'Incon':>7} {'Class':<10}")
+        print(f'{"Dataset":<12} {"File":<50} {"Offset":>7} {"Notes":>7} {"Incon":>7} {"Class":<10}')
         print('-' * 100)
         for stats in stats_list:
             ds = stats['dataset']
             for c in stats['capo_files']:
-                print(f"{ds:<12} {c['file']:<50} {c['offset']:>+7} "
-                      f"{c['n_notes']:>7,} {c['n_notes']:>7,} {'capo':<10}")
+                print(f'{ds:<12} {c["file"]:<50} {c["offset"]:>+7} {c["n_notes"]:>7,} {c["n_notes"]:>7,} {"capo":<10}')
             for h in stats['harmonic_files']:
-                print(f"{ds:<12} {h['file']:<50} {'':>7} "
-                      f"{h['n_notes']:>7,} {h['n_inconsistent']:>7,} {'harmonic':<10}")
+                print(f'{ds:<12} {h["file"]:<50} {"":>7} {h["n_notes"]:>7,} {h["n_inconsistent"]:>7,} {"harmonic":<10}')
             for b in stats['bug_files']:
-                print(f"{ds:<12} {b['file']:<50} {'':>7} "
-                      f"{b['n_notes']:>7,} {b['n_inconsistent']:>7,} {'mixed':<10}")
+                print(f'{ds:<12} {b["file"]:<50} {"":>7} {b["n_notes"]:>7,} {b["n_inconsistent"]:>7,} {"mixed":<10}')
 
 
 def print_red_flags(stats_list: list[dict]):
@@ -690,7 +709,7 @@ def print_red_flags(stats_list: list[dict]):
     for ds, c in all_capo[:15]:
         print(f'    [{ds}] offset={c["offset"]:+d}  {c["file"]}')
     if len(all_capo) > 15:
-        print(f'    ... and {len(all_capo)-15} more')
+        print(f'    ... and {len(all_capo) - 15} more')
 
     # Negative frets
     all_neg = [(stats['dataset'], n) for stats in stats_list for n in stats['neg_fret_notes']]
@@ -718,8 +737,7 @@ def print_red_flags(stats_list: list[dict]):
     all_zero = [(stats['dataset'], n) for stats in stats_list for n in stats['zero_dur_notes']]
     # Group by file
     file_counts: Counter = Counter((ds, n['file']) for ds, n in all_zero)
-    print(f'\n[4] Notes with zero or negative duration: {len(all_zero)} in '
-          f'{len(file_counts)} files')
+    print(f'\n[4] Notes with zero or negative duration: {len(all_zero)} in {len(file_counts)} files')
     for (ds, fname), cnt in sorted(file_counts.most_common(15)):
         print(f'    [{ds}] {cnt} notes  {fname}')
     if len(file_counts) > 15:
@@ -741,6 +759,7 @@ def print_red_flags(stats_list: list[dict]):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     apply_style()

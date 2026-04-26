@@ -59,7 +59,7 @@ def process_slice(slice_id):
             syncpoints = json.load(f)
 
     try:
-        notes, string_pitches = parse_soundslice(data, syncpoints=syncpoints)
+        notes, _string_pitches = parse_soundslice(data, syncpoints=syncpoints)
     except Exception as e:
         return f'parse error: {e}', 0
 
@@ -110,7 +110,7 @@ def main():
     if args.info:
         return
 
-    entries = catalog[:args.limit] if args.limit else catalog
+    entries = catalog[: args.limit] if args.limit else catalog
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     done = 0
@@ -135,7 +135,7 @@ def main():
 
         if status not in ('skip', 'not fetched') or (i + 1) % 50 == 0:
             title = row.get('title', '')[:40]
-            print(f'[{i+1:3d}/{len(entries)}] {slice_id}: {status:<20} {title}')
+            print(f'[{i + 1:3d}/{len(entries)}] {slice_id}: {status:<20} {title}')
 
     print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes} total notes)')

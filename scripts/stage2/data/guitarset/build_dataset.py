@@ -31,18 +31,20 @@ def process_one(jams_path):
     score = jams.load(str(jams_path))
     notes = []
 
-    for string_num, ann_idx, open_pitch in zip(STRING_NUMBERS, NOTE_MIDI_INDICES, OPEN_PITCHES):
+    for string_num, ann_idx, open_pitch in zip(STRING_NUMBERS, NOTE_MIDI_INDICES, OPEN_PITCHES, strict=True):
         ann = score.annotations[ann_idx]
         for obs in ann.data:
             pitch = round(float(obs.value))
             fret = pitch - open_pitch
-            notes.append({
-                'pitch': pitch,
-                'string': string_num,
-                'fret': fret,
-                'start': round(float(obs.time), 4),
-                'end': round(float(obs.time) + float(obs.duration), 4),
-            })
+            notes.append(
+                {
+                    'pitch': pitch,
+                    'string': string_num,
+                    'fret': fret,
+                    'start': round(float(obs.time), 4),
+                    'end': round(float(obs.time) + float(obs.duration), 4),
+                }
+            )
 
     notes.sort(key=lambda n: (n['start'], n['pitch']))
     return notes
@@ -60,7 +62,7 @@ def main():
     if args.info:
         return
 
-    entries = jams_files[:args.limit] if args.limit else jams_files
+    entries = jams_files[: args.limit] if args.limit else jams_files
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     done = 0
@@ -81,7 +83,7 @@ def main():
             notes = process_one(jams_path)
         except Exception as e:
             failed += 1
-            print(f'[{i+1:3d}/{len(entries)}] FAIL {name}: {e}')
+            print(f'[{i + 1:3d}/{len(entries)}] FAIL {name}: {e}')
             continue
 
         if len(notes) < 5:
@@ -99,9 +101,9 @@ def main():
         midi = pretty_midi.PrettyMIDI()
         guitar = pretty_midi.Instrument(program=25)
         for n in notes:
-            guitar.notes.append(pretty_midi.Note(
-                velocity=80, pitch=n['pitch'],
-                start=n['start'], end=max(n['start'] + 0.01, n['end'])))
+            guitar.notes.append(
+                pretty_midi.Note(velocity=80, pitch=n['pitch'], start=n['start'], end=max(n['start'] + 0.01, n['end']))
+            )
         midi.instruments.append(guitar)
         midi.write(str(mid_path))
 
@@ -109,7 +111,7 @@ def main():
         total_notes += len(notes)
 
         if (i + 1) % 50 == 0:
-            print(f'  [{i+1:3d}/{len(entries)}] done={done}')
+            print(f'  [{i + 1:3d}/{len(entries)}] done={done}')
 
     print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes:,} total notes)')

@@ -24,13 +24,13 @@ OUTPUT_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
 # 29 = Overdriven Guitar
 # 30 = Distortion Guitar
 # 31 = Guitar Harmonics
-DEFAULT_INSTRUMENTS = "25,26"
+DEFAULT_INSTRUMENTS = '25,26'
 
 
 def find_gp_files():
     """Find all original GP files (skip pyguitarpro re-exports and token round-trips)."""
     gp_files = []
-    for root, dirs, files in os.walk(DADAGP_DIR):
+    for root, _dirs, files in os.walk(DADAGP_DIR):
         for f in files:
             if not f.endswith(('.gp3', '.gp4', '.gp5')):
                 continue
@@ -72,22 +72,27 @@ def scan_file(gp_path, instruments):
         if n_notes < 10:
             continue
 
-        results.append({
-            'track_idx': i,
-            'track_name': track.name,
-            'instrument': instrument,
-            'n_strings': n_strings,
-            'tuning': ','.join(str(t) for t in tuning),
-            'n_notes': n_notes,
-        })
+        results.append(
+            {
+                'track_idx': i,
+                'track_name': track.name,
+                'instrument': instrument,
+                'n_strings': n_strings,
+                'tuning': ','.join(str(t) for t in tuning),
+                'n_notes': n_notes,
+            }
+        )
 
     return results
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--instruments', default=DEFAULT_INSTRUMENTS,
-                        help=f'Comma-separated MIDI instrument IDs to filter for (default: {DEFAULT_INSTRUMENTS})')
+    parser.add_argument(
+        '--instruments',
+        default=DEFAULT_INSTRUMENTS,
+        help=f'Comma-separated MIDI instrument IDs to filter for (default: {DEFAULT_INSTRUMENTS})',
+    )
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--info', action='store_true')
     args = parser.parse_args()
@@ -102,7 +107,7 @@ def main():
         return
 
     if args.limit:
-        gp_files = gp_files[:args.limit]
+        gp_files = gp_files[: args.limit]
         print(f'Limited to {args.limit}')
 
     OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
@@ -122,13 +127,15 @@ def main():
             continue
 
         for t in tracks:
-            rows.append({
-                'file': rel_path,
-                **t,
-            })
+            rows.append(
+                {
+                    'file': rel_path,
+                    **t,
+                }
+            )
 
         if (i + 1) % 500 == 0:
-            print(f'  [{i+1:5d}/{len(gp_files)}] scanned={scanned} acoustic_tracks={len(rows)} errors={errors}')
+            print(f'  [{i + 1:5d}/{len(gp_files)}] scanned={scanned} acoustic_tracks={len(rows)} errors={errors}')
 
     # Write catalog
     fields = ['file', 'track_idx', 'track_name', 'instrument', 'n_strings', 'tuning', 'n_notes']
@@ -145,6 +152,7 @@ def main():
 
     # Instrument breakdown
     from collections import Counter
+
     inst_counts = Counter(r['instrument'] for r in rows)
     print('\nBy instrument:')
     inst_names = {24: 'Nylon Guitar', 25: 'Steel Guitar', 26: 'Jazz Guitar'}

@@ -28,6 +28,7 @@ _GUITARSET_NOTE_MIDI_INDICES = [1, 3, 5, 7, 9, 11]
 # TargetProcessor (adapted from Kong et al., pedal handling removed)
 # ---------------------------------------------------------------------------
 
+
 class TargetProcessor:
     """Convert note events into target rolls for training.
 
@@ -39,8 +40,7 @@ class TargetProcessor:
         {'onset_time': float, 'offset_time': float, 'midi_note': int, 'velocity': int}
     """
 
-    def __init__(self, segment_seconds=10.0, frames_per_second=100,
-                 begin_note=BEGIN_NOTE, classes_num=CLASSES_NUM):
+    def __init__(self, segment_seconds=10.0, frames_per_second=100, begin_note=BEGIN_NOTE, classes_num=CLASSES_NUM):
         self.segment_seconds = segment_seconds
         self.frames_per_second = frames_per_second
         self.begin_note = begin_note
@@ -62,7 +62,7 @@ class TargetProcessor:
             reg_offset_roll, frame_roll, velocity_roll, mask_roll
             each of shape (frames_num, classes_num)
         """
-        frames_num = int(round(self.segment_seconds * self.frames_per_second)) + 1
+        frames_num = round(self.segment_seconds * self.frames_per_second) + 1
         end_time = start_time + self.segment_seconds
 
         onset_roll = np.zeros((frames_num, self.classes_num))
@@ -75,62 +75,44 @@ class TargetProcessor:
         mask_roll = np.ones((frames_num, self.classes_num))
 
         # Filter to notes that overlap this segment
-        segment_notes = [
-            n for n in notes
-            if n['offset_time'] > start_time and n['onset_time'] < end_time
-        ]
+        segment_notes = [n for n in notes if n['offset_time'] > start_time and n['onset_time'] < end_time]
 
-        trace("process_notes", notes=len(segment_notes),
-              start_time=start_time, end_time=end_time)
+        trace('process_notes', notes=len(segment_notes), start_time=start_time, end_time=end_time)
 
         for note in segment_notes:
-            piano_note = np.clip(
-                note['midi_note'] - self.begin_note, 0, self.max_piano_note
-            )
+            piano_note = np.clip(note['midi_note'] - self.begin_note, 0, self.max_piano_note)
 
-            bgn_frame = int(round(
-                (note['onset_time'] - start_time) * self.frames_per_second
-            ))
-            fin_frame = int(round(
-                (note['offset_time'] - start_time) * self.frames_per_second
-            ))
+            bgn_frame = round((note['onset_time'] - start_time) * self.frames_per_second)
+            fin_frame = round((note['offset_time'] - start_time) * self.frames_per_second)
             fin_frame = min(fin_frame, frames_num - 1)
 
             note_extends_past_end = note['offset_time'] > end_time
 
             if fin_frame >= 0:
-                frame_roll[max(bgn_frame, 0):fin_frame + 1, piano_note] = 1
-                velocity_roll[max(bgn_frame, 0):fin_frame + 1, piano_note] = (
-                    note['velocity']
-                )
+                frame_roll[max(bgn_frame, 0) : fin_frame + 1, piano_note] = 1
+                velocity_roll[max(bgn_frame, 0) : fin_frame + 1, piano_note] = note['velocity']
 
                 if not note_extends_past_end:
                     offset_roll[fin_frame, piano_note] = 1
-                    reg_offset_roll[fin_frame, piano_note] = (
-                        (note['offset_time'] - start_time)
-                        - (fin_frame / self.frames_per_second)
+                    reg_offset_roll[fin_frame, piano_note] = (note['offset_time'] - start_time) - (
+                        fin_frame / self.frames_per_second
                     )
 
                 if bgn_frame >= 0:
                     onset_roll[bgn_frame, piano_note] = 1
-                    reg_onset_roll[bgn_frame, piano_note] = (
-                        (note['onset_time'] - start_time)
-                        - (bgn_frame / self.frames_per_second)
+                    reg_onset_roll[bgn_frame, piano_note] = (note['onset_time'] - start_time) - (
+                        bgn_frame / self.frames_per_second
                     )
                 else:
                     # Note started before segment: mask those frames out
-                    mask_roll[:fin_frame + 1, piano_note] = 0
+                    mask_roll[: fin_frame + 1, piano_note] = 0
 
         # Mask notes whose offset extends past the segment end: the model
         # should not be penalised for a missing offset it cannot observe.
         for note in segment_notes:
             if note['offset_time'] > end_time:
-                piano_note = np.clip(
-                    note['midi_note'] - self.begin_note, 0, self.max_piano_note
-                )
-                bgn_frame = int(round(
-                    (note['onset_time'] - start_time) * self.frames_per_second
-                ))
+                piano_note = np.clip(note['midi_note'] - self.begin_note, 0, self.max_piano_note)
+                bgn_frame = round((note['onset_time'] - start_time) * self.frames_per_second)
                 if bgn_frame >= 0:
                     mask_roll[bgn_frame:, piano_note] = 0
 
@@ -189,6 +171,7 @@ class TargetProcessor:
 # Annotation loaders
 # ---------------------------------------------------------------------------
 
+
 def load_gaps_notes(midi_path):
     """Parse a GAPS MIDI file into a flat list of note dicts.
 
@@ -202,13 +185,15 @@ def load_gaps_notes(midi_path):
     notes = []
     for instrument in pm.instruments:
         for note in instrument.notes:
-            notes.append({
-                'onset_time': float(note.start),
-                'offset_time': float(note.end),
-                'midi_note': int(note.pitch),
-                'velocity': int(note.velocity),
-            })
-    trace("load_gaps_notes", notes=len(notes), path=midi_path)
+            notes.append(
+                {
+                    'onset_time': float(note.start),
+                    'offset_time': float(note.end),
+                    'midi_note': int(note.pitch),
+                    'velocity': int(note.velocity),
+                }
+            )
+    trace('load_gaps_notes', notes=len(notes), path=midi_path)
     return notes
 
 
@@ -230,24 +215,27 @@ def load_guitarset_notes(jams_path):
         for obs in ann.data:
             onset = float(obs.time)
             duration = float(obs.duration)
-            midi_note = int(round(float(obs.value)))
+            midi_note = round(float(obs.value))
             # confidence is typically None in GuitarSet; fall back to 64
             velocity = int(obs.confidence) if obs.confidence is not None else 64
-            notes.append({
-                'onset_time': onset,
-                'offset_time': onset + duration,
-                'midi_note': midi_note,
-                'velocity': velocity,
-            })
+            notes.append(
+                {
+                    'onset_time': onset,
+                    'offset_time': onset + duration,
+                    'midi_note': midi_note,
+                    'velocity': velocity,
+                }
+            )
 
     notes.sort(key=lambda n: n['onset_time'])
-    trace("load_guitarset_notes", notes=len(notes), path=jams_path)
+    trace('load_guitarset_notes', notes=len(notes), path=jams_path)
     return notes
 
 
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
+
 
 class GuitarDataset(Dataset):
     """PyTorch Dataset for guitar transcription training.
@@ -263,8 +251,7 @@ class GuitarDataset(Dataset):
         sample_rate: target audio sample rate in Hz (default 16000)
     """
 
-    def __init__(self, items, segment_seconds=10.0, frames_per_second=100,
-                 sample_rate=16000):
+    def __init__(self, items, segment_seconds=10.0, frames_per_second=100, sample_rate=16000):
         self.items = items
         self.segment_seconds = segment_seconds
         self.frames_per_second = frames_per_second
@@ -286,8 +273,7 @@ class GuitarDataset(Dataset):
                 self.segments.append((audio_path, notes, start))
                 start += hop_seconds
 
-        trace("GuitarDataset init",
-              files=len(items), segments=len(self.segments))
+        trace('GuitarDataset init', files=len(items), segments=len(self.segments))
 
     def _audio_duration(self, audio_path):
         """Return audio duration in seconds without loading the full file."""
@@ -300,8 +286,7 @@ class GuitarDataset(Dataset):
     def __getitem__(self, idx):
         audio_path, notes, start_time = self.segments[idx]
 
-        trace("__getitem__", idx=idx, audio_path=audio_path,
-              start_time=start_time)
+        trace('__getitem__', idx=idx, audio_path=audio_path, start_time=start_time)
 
         # Load the 10-second window, resampling to 16 kHz
         offset = start_time
@@ -315,11 +300,9 @@ class GuitarDataset(Dataset):
 
         # Pad if the last segment is slightly short (edge of file)
         if len(waveform) < self.segment_samples:
-            waveform = np.pad(
-                waveform, (0, self.segment_samples - len(waveform))
-            )
+            waveform = np.pad(waveform, (0, self.segment_samples - len(waveform)))
 
-        trace("waveform", waveform)
+        trace('waveform', waveform)
 
         targets = self.target_processor.process_notes(start_time, notes)
 
@@ -336,14 +319,15 @@ class GuitarDataset(Dataset):
 # Dataset builder
 # ---------------------------------------------------------------------------
 
-def build_dataset(gaps_dir, guitarset_dir, split='train',
-                  segment_seconds=10.0, frames_per_second=100,
-                  sample_rate=16000):
+
+def build_dataset(
+    gaps_dir, guitarset_dir, split='train', segment_seconds=10.0, frames_per_second=100, sample_rate=16000
+):
     """Build a GuitarDataset from GAPS and GuitarSet for the given split.
 
     GAPS split: determined by `split` column in gaps_metadata_with_splits.csv.
     GuitarSet split: player-based.
-      train      → players 00–04
+      train      → players 00-04
       validation → player 05
       test       → player 05  (same as validation; GuitarSet has no held-out test set)
 
@@ -358,8 +342,7 @@ def build_dataset(gaps_dir, guitarset_dir, split='train',
     Returns:
         GuitarDataset
     """
-    assert split in ('train', 'validation', 'test'), \
-        f"split must be 'train', 'validation', or 'test'; got {split!r}"
+    assert split in ('train', 'validation', 'test'), f"split must be 'train', 'validation', or 'test'; got {split!r}"
 
     items = []
 
@@ -382,11 +365,11 @@ def build_dataset(gaps_dir, guitarset_dir, split='train',
             notes = load_gaps_notes(midi_path)
             items.append((audio_path, notes))
 
-    trace("GAPS split distribution", **split_counts)
-    trace("GAPS items loaded", items=len(items), split=gaps_split_label)
+    trace('GAPS split distribution', **split_counts)
+    trace('GAPS items loaded', items=len(items), split=gaps_split_label)
 
     # ------ GuitarSet ------
-    # Player IDs 00–04 → train; 05 → validation/test
+    # Player IDs 00-04 → train; 05 → validation/test
     if split == 'train':
         player_ids = {'00', '01', '02', '03', '04'}
     else:
@@ -409,7 +392,7 @@ def build_dataset(gaps_dir, guitarset_dir, split='train',
         notes = load_guitarset_notes(jams_path)
         items.append((audio_path, notes))
 
-    trace("total items after GuitarSet", items=len(items))
+    trace('total items after GuitarSet', items=len(items))
 
     return GuitarDataset(
         items,

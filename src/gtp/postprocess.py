@@ -86,9 +86,8 @@ def pedal_detection_with_onset_offset_regress(
     offset_occur = None
 
     for i in range(1, frame_output.shape[0]):
-        if frame_output[i] >= frame_threshold and frame_output[i] > frame_output[i - 1]:
-            if not bgn:
-                bgn = i
+        if frame_output[i] >= frame_threshold and frame_output[i] > frame_output[i - 1] and not bgn:
+            bgn = i
 
         if bgn and i > bgn:
             if frame_output[i] <= frame_threshold and not frame_disappear:

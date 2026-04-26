@@ -36,11 +36,11 @@ class PianoTranscription:
         """
         if device is None:
             if torch.backends.mps.is_available():
-                device = torch.device("mps")
+                device = torch.device('mps')
             elif torch.cuda.is_available():
-                device = torch.device("cuda")
+                device = torch.device('cuda')
             else:
-                device = torch.device("cpu")
+                device = torch.device('cpu')
         elif isinstance(device, str):
             device = torch.device(device)
 
@@ -50,10 +50,10 @@ class PianoTranscription:
         self.classes_num = CLASSES_NUM
 
         # Load checkpoint and detect format
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        state = checkpoint["model"]
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        state = checkpoint['model']
 
-        if "note_model" in state:
+        if 'note_model' in state:
             # Pretrained checkpoint (nested): has note_model + pedal_model
             self.model = Note_pedal(
                 frames_per_second=self.frames_per_second,
@@ -84,23 +84,23 @@ class PianoTranscription:
             'note_events':    list of {'onset_time', 'offset_time', 'midi_note', 'velocity'}
             'pedal_events':   list of pedal event dicts, or None
         """
-        trace("input audio", audio, sr=SAMPLE_RATE, duration_s=f"{len(audio) / SAMPLE_RATE:.2f}")
+        trace('input audio', audio, sr=SAMPLE_RATE, duration_s=f'{len(audio) / SAMPLE_RATE:.2f}')
         output_dict = self._run_model(audio)
 
-        trace("model outputs", output_dict)
+        trace('model outputs', output_dict)
         for key, val in output_dict.items():
-            trace(f"  {key}", val)
+            trace(f'  {key}', val)
 
         post_processor = RegressionPostProcessor(
             frames_per_second=self.frames_per_second,
             classes_num=self.classes_num,
         )
         note_events, pedal_events = post_processor.output_dict_to_note_events(output_dict)
-        trace("detected notes", note_events)
+        trace('detected notes', note_events)
         if note_events:
-            pitches = [e["midi_note"] for e in note_events]
+            pitches = [e['midi_note'] for e in note_events]
             trace(
-                "  pitch range",
+                '  pitch range',
                 midi_lo=min(pitches),
                 midi_hi=max(pitches),
                 unique_pitches=len(set(pitches)),
@@ -108,12 +108,12 @@ class PianoTranscription:
 
         if midi_path:
             write_events_to_midi(note_events, midi_path, pedal_events=pedal_events)
-            trace("wrote MIDI", path=midi_path)
+            trace('wrote MIDI', path=midi_path)
 
         return {
-            "output_dict": output_dict,
-            "note_events": note_events,
-            "pedal_events": pedal_events,
+            'output_dict': output_dict,
+            'note_events': note_events,
+            'pedal_events': pedal_events,
         }
 
     def _run_model(self, audio):
@@ -137,10 +137,10 @@ class PianoTranscription:
 
         pad_len = int(np.ceil(audio_len / self.segment_samples)) * self.segment_samples - audio_len
         audio = np.concatenate((audio, np.zeros((1, pad_len), dtype=audio.dtype)), axis=1)
-        trace("padded audio", audio, pad_len=pad_len)
+        trace('padded audio', audio, pad_len=pad_len)
 
         segments = self._enframe(audio, self.segment_samples)
-        trace("segments", segments, segment_samples=self.segment_samples, overlap="50%")
+        trace('segments', segments, segment_samples=self.segment_samples, overlap='50%')
 
         output_dict = forward(self.model, segments, batch_size=1)
 
@@ -148,7 +148,7 @@ class PianoTranscription:
         expected_frames = audio_len // hop_size
         for key in output_dict.keys():
             output_dict[key] = self._deframe(output_dict[key])[:expected_frames]
-        trace("deframed & trimmed", expected_frames=expected_frames, hop_size=hop_size)
+        trace('deframed & trimmed', expected_frames=expected_frames, hop_size=hop_size)
 
         return output_dict
 
@@ -168,7 +168,7 @@ class PianoTranscription:
             return x[0]
 
         x = x[:, :-1, :]  # remove the extra frame at each segment end
-        (N, segment_frames, classes_num) = x.shape
+        (N, segment_frames, _classes_num) = x.shape
         assert segment_frames % 4 == 0
 
         y = [x[0, : int(segment_frames * 0.75)]]

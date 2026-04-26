@@ -31,13 +31,13 @@ from gtp import REPO_ROOT
 # Paths
 # ---------------------------------------------------------------------------
 GUITARSET_ANNOTATION_DIR = REPO_ROOT / 'data' / 'guitarset' / 'annotation'
-GUITARSET_PROCESSED_DIR  = REPO_ROOT / 'data' / 'guitarset' / 'processed'
+GUITARSET_PROCESSED_DIR = REPO_ROOT / 'data' / 'guitarset' / 'processed'
 
-LEDUC_GP_DIR        = REPO_ROOT / 'data' / 'leduc' / 'gp_files'
+LEDUC_GP_DIR = REPO_ROOT / 'data' / 'leduc' / 'gp_files'
 LEDUC_PROCESSED_DIR = REPO_ROOT / 'data' / 'leduc' / 'processed'
 
-DADAGP_DIR           = REPO_ROOT / 'data' / 'DadaGP-v1.1'
-DADAGP_CATALOG_CSV   = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
+DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
+DADAGP_CATALOG_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
 DADAGP_PROCESSED_DIR = REPO_ROOT / 'data' / 'dadagp' / 'processed'
 
 MSCORE = '/opt/homebrew/bin/mscore'
@@ -50,26 +50,28 @@ GUITAR_PROGRAMS = {24, 25, 26, 27, 28}
 # GuitarSet
 # ---------------------------------------------------------------------------
 NOTE_MIDI_INDICES = [1, 3, 5, 7, 9, 11]
-STRING_NUMBERS    = [6, 5, 4, 3, 2, 1]
-OPEN_PITCHES      = [40, 45, 50, 55, 59, 64]
+STRING_NUMBERS = [6, 5, 4, 3, 2, 1]
+OPEN_PITCHES = [40, 45, 50, 55, 59, 64]
 
 
 def parse_guitarset_jams(jams_path):
     """Re-parse a GuitarSet JAMS file; returns sorted list of note dicts."""
     score = jams.load(str(jams_path))
     notes = []
-    for string_num, ann_idx, open_pitch in zip(STRING_NUMBERS, NOTE_MIDI_INDICES, OPEN_PITCHES):
+    for string_num, ann_idx, open_pitch in zip(STRING_NUMBERS, NOTE_MIDI_INDICES, OPEN_PITCHES, strict=True):
         ann = score.annotations[ann_idx]
         for obs in ann.data:
             pitch = round(float(obs.value))
-            fret  = pitch - open_pitch
-            notes.append({
-                'pitch':  pitch,
-                'string': string_num,
-                'fret':   fret,
-                'start':  round(float(obs.time), 4),
-                'end':    round(float(obs.time) + float(obs.duration), 4),
-            })
+            fret = pitch - open_pitch
+            notes.append(
+                {
+                    'pitch': pitch,
+                    'string': string_num,
+                    'fret': fret,
+                    'start': round(float(obs.time), 4),
+                    'end': round(float(obs.time) + float(obs.duration), 4),
+                }
+            )
     notes.sort(key=lambda n: (n['start'], n['pitch']))
     return notes
 
@@ -81,12 +83,12 @@ def verify_guitarset(limit=None):
     if limit:
         jams_files = jams_files[:limit]
 
-    checked   = 0
-    perfect   = 0
+    checked = 0
+    perfect = 0
     mismatches = []
 
     for jams_path in jams_files:
-        name      = jams_path.stem
+        name = jams_path.stem
         json_path = GUITARSET_PROCESSED_DIR / f'{name}.json'
 
         if not json_path.exists():
@@ -103,35 +105,23 @@ def verify_guitarset(limit=None):
             continue
 
         if len(fresh) != len(proc):
-            mismatches.append(
-                f'  {name}: note count mismatch (expected {len(proc)}, got {len(fresh)})'
-            )
+            mismatches.append(f'  {name}: note count mismatch (expected {len(proc)}, got {len(fresh)})')
             continue
 
         mismatch_detail = None
-        for i, (f, p) in enumerate(zip(fresh, proc)):
+        for i, (f, p) in enumerate(zip(fresh, proc, strict=True)):
             if f['pitch'] != p['pitch']:
-                mismatch_detail = (
-                    f'  {name}: pitch mismatch at note {i} '
-                    f'(expected {p["pitch"]}, got {f["pitch"]})'
-                )
+                mismatch_detail = f'  {name}: pitch mismatch at note {i} (expected {p["pitch"]}, got {f["pitch"]})'
                 break
             if f['string'] != p['string']:
-                mismatch_detail = (
-                    f'  {name}: string mismatch at note {i} '
-                    f'(expected {p["string"]}, got {f["string"]})'
-                )
+                mismatch_detail = f'  {name}: string mismatch at note {i} (expected {p["string"]}, got {f["string"]})'
                 break
             if f['fret'] != p['fret']:
-                mismatch_detail = (
-                    f'  {name}: fret mismatch at note {i} '
-                    f'(expected {p["fret"]}, got {f["fret"]})'
-                )
+                mismatch_detail = f'  {name}: fret mismatch at note {i} (expected {p["fret"]}, got {f["fret"]})'
                 break
             if f['start'] != p['start'] or f['end'] != p['end']:
                 mismatch_detail = (
-                    f'  {name}: timing mismatch at note {i} '
-                    f'(expected start={p["start"]}, got {f["start"]})'
+                    f'  {name}: timing mismatch at note {i} (expected start={p["start"]}, got {f["start"]})'
                 )
                 break
 
@@ -153,6 +143,7 @@ def verify_guitarset(limit=None):
 # Leduc
 # ---------------------------------------------------------------------------
 
+
 def mscore_notes(gp_path):
     """Convert a GP file with MuseScore and return (notes, error_string|None).
 
@@ -163,7 +154,9 @@ def mscore_notes(gp_path):
     try:
         result = subprocess.run(
             [MSCORE, str(gp_path), '-o', mid_path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             return None, f'mscore exit {result.returncode}'
@@ -197,7 +190,7 @@ def verify_leduc(limit=None):
     checked = 0
 
     count_within_5pct = 0
-    count_major_discrepancy = 0   # >20% difference
+    count_major_discrepancy = 0  # >20% difference
     pitch_set_matches = 0
     timing_matches = 0
 
@@ -205,7 +198,7 @@ def verify_leduc(limit=None):
     pitch_details = []
 
     for gp_path in gp_files:
-        name      = gp_path.stem
+        name = gp_path.stem
         json_path = LEDUC_PROCESSED_DIR / f'{name}.json'
         if not json_path.exists():
             continue
@@ -213,7 +206,7 @@ def verify_leduc(limit=None):
         with open(json_path) as f:
             proc = json.load(f)
 
-        ms_notes, err = mscore_notes(gp_path)
+        ms_notes, _err = mscore_notes(gp_path)
         if ms_notes is None:
             mscore_failures += 1
             continue
@@ -223,7 +216,7 @@ def verify_leduc(limit=None):
 
         # --- note count comparison ---
         proc_count = len(proc_notes)
-        ms_count   = len(ms_notes)
+        ms_count = len(ms_notes)
         if proc_count > 0:
             pct_diff = abs(ms_count - proc_count) / proc_count
         else:
@@ -233,30 +226,26 @@ def verify_leduc(limit=None):
             count_within_5pct += 1
         elif pct_diff > 0.20:
             count_major_discrepancy += 1
-            count_details.append(
-                f'  {name}: proc={proc_count} mscore={ms_count} ({pct_diff:.0%} diff)'
-            )
+            count_details.append(f'  {name}: proc={proc_count} mscore={ms_count} ({pct_diff:.0%} diff)')
 
         # --- pitch set comparison ---
         proc_pitches = set(n['pitch'] for n in proc_notes)
-        ms_pitches   = set(n.pitch for n in ms_notes)
+        ms_pitches = set(n.pitch for n in ms_notes)
         if proc_pitches == ms_pitches:
             pitch_set_matches += 1
         else:
             only_proc = proc_pitches - ms_pitches
-            only_ms   = ms_pitches - proc_pitches
-            pitch_details.append(
-                f'  {name}: only_in_proc={sorted(only_proc)[:5]} '
-                f'only_in_mscore={sorted(only_ms)[:5]}'
-            )
+            only_ms = ms_pitches - proc_pitches
+            pitch_details.append(f'  {name}: only_in_proc={sorted(only_proc)[:5]} only_in_mscore={sorted(only_ms)[:5]}')
 
         # --- timing comparison (best-effort: align by onset order) ---
         proc_starts = sorted(n['start'] for n in proc_notes)
-        ms_starts   = sorted(n.start for n in ms_notes)
-        n_compare   = min(len(proc_starts), len(ms_starts))
+        ms_starts = sorted(n.start for n in ms_notes)
+        n_compare = min(len(proc_starts), len(ms_starts))
         if n_compare > 0:
             within_100ms = sum(
-                1 for ps, ms in zip(proc_starts[:n_compare], ms_starts[:n_compare])
+                1
+                for ps, ms in zip(proc_starts[:n_compare], ms_starts[:n_compare], strict=True)
                 if abs(ps - ms) <= 0.100
             )
             timing_matches += within_100ms / n_compare >= 0.80  # file passes if 80% of notes within 100ms
@@ -281,6 +270,7 @@ def verify_leduc(limit=None):
 # DadaGP
 # ---------------------------------------------------------------------------
 
+
 def load_dadagp_catalog():
     """Return (unique_rows, file_to_track_idx_map)."""
     with open(DADAGP_CATALOG_CSV) as f:
@@ -303,11 +293,11 @@ def dadagp_json_path(gp_rel_path):
 
 def parse_dadagp_track(gp_path, track_idx):
     """Re-parse a DadaGP GP file; returns list of note dicts."""
-    song  = gp.parse(str(gp_path))
+    song = gp.parse(str(gp_path))
     track = song.tracks[track_idx]
     tuning = [s.value for s in track.strings]
-    tempo  = song.tempo
-    notes  = []
+    tempo = song.tempo
+    notes = []
     current_tick = 0
 
     for measure in track.measures:
@@ -319,21 +309,23 @@ def parse_dadagp_track(gp_path, track_idx):
         for voice in measure.voices:
             beat_tick = current_tick
             for beat in voice.beats:
-                dur_ticks  = beat.duration.time
-                start_sec  = beat_tick / tps
-                end_sec    = (beat_tick + dur_ticks) / tps
+                dur_ticks = beat.duration.time
+                start_sec = beat_tick / tps
+                end_sec = (beat_tick + dur_ticks) / tps
                 for note in beat.notes:
                     pitch = tuning[note.string - 1] + note.value + track.offset
-                    notes.append({
-                        'pitch':  pitch,
-                        'string': note.string,
-                        'fret':   note.value,
-                        'start':  round(start_sec, 4),
-                        'end':    round(end_sec, 4),
-                    })
+                    notes.append(
+                        {
+                            'pitch': pitch,
+                            'string': note.string,
+                            'fret': note.value,
+                            'start': round(start_sec, 4),
+                            'end': round(end_sec, 4),
+                        }
+                    )
                 beat_tick += dur_ticks
 
-        time_sig  = header.timeSignature
+        time_sig = header.timeSignature
         bar_ticks = int(TICKS_PER_QUARTER * 4 * time_sig.numerator / time_sig.denominator.value)
         current_tick += bar_ticks
 
@@ -352,7 +344,7 @@ def compare_dadagp(fresh, proc):
     if len(fresh) != len(proc):
         return False, f'note count: expected {len(proc)}, got {len(fresh)}'
 
-    for i, (f, p) in enumerate(zip(fresh, proc)):
+    for i, (f, p) in enumerate(zip(fresh, proc, strict=True)):
         if f['pitch'] != p['pitch']:
             return False, f'note {i}: pitch expected {p["pitch"]}, got {f["pitch"]}'
         if f['string'] != p['string']:
@@ -360,19 +352,13 @@ def compare_dadagp(fresh, proc):
         if f['fret'] != p['fret']:
             return False, f'note {i}: fret expected {p["fret"]}, got {f["fret"]}'
         start_mismatch = abs(f['start'] - p['start']) > 0.050
-        end_mismatch   = abs(f['end']   - p['end'])   > 0.050
+        end_mismatch = abs(f['end'] - p['end']) > 0.050
         if start_mismatch or end_mismatch:
             parts = []
             if start_mismatch:
-                parts.append(
-                    f'start expected={p["start"]} got={f["start"]} '
-                    f'(diff={abs(f["start"]-p["start"]):.4f}s)'
-                )
+                parts.append(f'start expected={p["start"]} got={f["start"]} (diff={abs(f["start"] - p["start"]):.4f}s)')
             if end_mismatch:
-                parts.append(
-                    f'end expected={p["end"]} got={f["end"]} '
-                    f'(diff={abs(f["end"]-p["end"]):.4f}s)'
-                )
+                parts.append(f'end expected={p["end"]} got={f["end"]} (diff={abs(f["end"] - p["end"]):.4f}s)')
             return False, f'note {i}: timing ' + '; '.join(parts)
 
     return True, None
@@ -390,7 +376,7 @@ def detect_capo_stems():
         try:
             with open(jpath) as f:
                 d = json.load(f)
-            notes  = d.get('notes', [])
+            notes = d.get('notes', [])
             tuning = d.get('tuning', [])
             if not notes or not tuning:
                 continue
@@ -422,28 +408,28 @@ def verify_dadagp(limit=None):
         return Path(dadagp_json_path(r['file'])).stem
 
     capo_rows = [r for r in unique if row_stem(r) in capo_stems]
-    non_capo  = [r for r in unique if row_stem(r) not in capo_stems]
+    non_capo = [r for r in unique if row_stem(r) not in capo_stems]
 
     random.seed(42)
     random_sample = random.sample(non_capo, min(200, len(non_capo)))
 
     # Combine: random sample + all capo files detected from processed JSONs
     target_files = set(r['file'] for r in random_sample) | set(r['file'] for r in capo_rows)
-    target_rows  = [r for r in unique if r['file'] in target_files]
+    target_rows = [r for r in unique if r['file'] in target_files]
 
     if limit:
         target_rows = target_rows[:limit]
 
     parse_errors = 0
-    checked      = 0
-    perfect      = 0
-    mismatches   = []
+    checked = 0
+    perfect = 0
+    mismatches = []
 
     capo_offset_count = 0  # how many had nonzero GP track.offset
 
     for row in target_rows:
         gp_rel = row['file']
-        jpath  = dadagp_json_path(gp_rel)
+        jpath = dadagp_json_path(gp_rel)
 
         if not jpath.exists():
             continue
@@ -456,8 +442,8 @@ def verify_dadagp(limit=None):
         # during build) rather than the catalog row's file — they can differ when
         # multiple GP versions of the same song exist (e.g. .gp3 and .gp4).
         actual_gp_rel = proc_data.get('file', gp_rel)
-        track_idx     = file_to_track.get(actual_gp_rel, int(row['track_idx']))
-        gp_path       = DADAGP_DIR / actual_gp_rel
+        track_idx = file_to_track.get(actual_gp_rel, int(row['track_idx']))
+        gp_path = DADAGP_DIR / actual_gp_rel
 
         try:
             fresh, offset = parse_dadagp_track(gp_path, track_idx)
@@ -475,20 +461,20 @@ def verify_dadagp(limit=None):
             perfect += 1
         else:
             mismatches.append(
-                f'  {Path(gp_rel).stem[:60]}'
-                f'{" [capo offset=" + str(offset) + "]" if offset != 0 else ""}'
-                f': {detail}'
+                f'  {Path(gp_rel).stem[:60]}{" [capo offset=" + str(offset) + "]" if offset != 0 else ""}: {detail}'
             )
 
     pct = 100 * perfect / checked if checked else 0.0
-    print(f'Files checked: {checked} ({len(random_sample)} random + {len(capo_rows)} capo-detected, '
-          f'{capo_offset_count} had nonzero GP offset, {parse_errors} parse errors skipped)')
+    print(
+        f'Files checked: {checked} ({len(random_sample)} random + {len(capo_rows)} capo-detected, '
+        f'{capo_offset_count} had nonzero GP offset, {parse_errors} parse errors skipped)'
+    )
     print(f'Perfect matches: {perfect} ({pct:.1f}%)')
     print(f'Mismatches: {len(mismatches)}')
 
     if mismatches:
         # Look for patterns
-        capo_mismatches     = [m for m in mismatches if '[capo' in m]
+        capo_mismatches = [m for m in mismatches if '[capo' in m]
         non_capo_mismatches = [m for m in mismatches if '[capo' not in m]
         if capo_mismatches:
             print(f'  Capo-related mismatches ({len(capo_mismatches)}):')
@@ -506,10 +492,9 @@ def verify_dadagp(limit=None):
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description='Verify preprocessing pipeline by re-parsing original sources.'
-    )
+    parser = argparse.ArgumentParser(description='Verify preprocessing pipeline by re-parsing original sources.')
     parser.add_argument(
         '--dataset',
         choices=['guitarset', 'leduc', 'dadagp', 'all'],
@@ -524,10 +509,10 @@ def main():
     )
     args = parser.parse_args()
 
-    run_all      = args.dataset == 'all'
+    run_all = args.dataset == 'all'
     run_guitarset = run_all or args.dataset == 'guitarset'
-    run_leduc     = run_all or args.dataset == 'leduc'
-    run_dadagp    = run_all or args.dataset == 'dadagp'
+    run_leduc = run_all or args.dataset == 'leduc'
+    run_dadagp = run_all or args.dataset == 'dadagp'
 
     if run_guitarset:
         verify_guitarset(limit=args.limit)
