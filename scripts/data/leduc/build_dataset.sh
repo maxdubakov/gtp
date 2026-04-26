@@ -44,11 +44,15 @@ for gp_file in "$GP_DIR"/*.gp "$GP_DIR"/*.gpx; do
 
     echo "$output" > "$json_file"
 
-    # Generate MIDI from JSON via Python (pass paths as sys.argv to handle special characters)
+    # Generate MIDI + normalize JSON (add top-level tuning from tracks)
     "$PYTHON" -c "
 import sys, json, pretty_midi
 with open(sys.argv[1]) as f:
     data = json.load(f)
+if 'tuning' not in data and 'tracks' in data and data['tracks']:
+    data['tuning'] = data['tracks'][0].get('tuning', [64,59,55,50,45,40])
+with open(sys.argv[1], 'w') as f:
+    json.dump(data, f, indent=2)
 midi = pretty_midi.PrettyMIDI(initial_tempo=data.get('tempo', 120))
 guitar = pretty_midi.Instrument(program=24)
 for n in data['notes']:

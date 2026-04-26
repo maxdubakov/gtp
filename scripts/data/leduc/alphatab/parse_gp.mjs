@@ -126,9 +126,11 @@ for (const bar of mainStaff.bars) {
           tiedNote = tiedNote.tieDestination;
         }
 
+        // alphaTab counts strings from bottom (1=low E), flip to guitar convention (1=high E)
+        const nStrings = mainStaff.tuning.length;
         notes.push({
           pitch: note.realValue,
-          string: note.string,
+          string: nStrings - note.string + 1,
           fret: note.fret,
           start: Math.round(tickToSeconds(absTick) * 10000) / 10000,
           end:
