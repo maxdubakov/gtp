@@ -4,10 +4,10 @@
 #
 # Usage: bash scripts/data/leduc/build_dataset.sh
 
-REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 GP_DIR="$REPO_ROOT/data/leduc/gp_files"
 OUTPUT_DIR="$REPO_ROOT/data/leduc/processed"
-PARSER_DIR="$REPO_ROOT/scripts/data/leduc/alphatab"
+PARSER_DIR="$REPO_ROOT/scripts/stage2/data/leduc/alphatab"
 PYTHON="$REPO_ROOT/venv/bin/python"
 
 mkdir -p "$OUTPUT_DIR"

@@ -5,15 +5,12 @@ For each picked file, produces two outputs:
   - guitar WAV: MIDI synthesized with guitar voice (MuseScore soundfont)
 
 Usage:
-    python scripts/listen_to_predictions.py --checkpoint models/finetuned/step_0070000_final.pth
+    python scripts/stage1/listen/listen_to_predictions.py --checkpoint models/finetuned/step_0070000_final.pth
 """
 
-import sys
 import os
 import csv
 import argparse
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 import pretty_midi
@@ -21,8 +18,8 @@ import librosa
 import soundfile as sf
 
 from gtp.inference import PianoTranscription
+from gtp import REPO_ROOT
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')
 ANNOTATION_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'annotation')
 OUTPUT_DIR = os.path.join(REPO_ROOT, 'results', 'listen')

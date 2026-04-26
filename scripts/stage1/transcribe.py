@@ -10,11 +10,9 @@ Usage:
     python scripts/transcribe.py path/to/recording.m4a --checkpoint models/finetuned/step_0070000_final.pth
 """
 
-import sys
 import os
 import argparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import numpy as np
 import pretty_midi
@@ -23,7 +21,7 @@ import soundfile as sf
 
 from gtp.inference import PianoTranscription
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+from gtp import REPO_ROOT
 DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'finetuned', 'step_0070000_final.pth')
 SOUNDFONT_PATH = os.path.join(REPO_ROOT, 'models', 'soundfonts', 'ms_basic.sf3')
 GUITAR_PROGRAM = 24  # General MIDI: Acoustic Guitar (nylon)

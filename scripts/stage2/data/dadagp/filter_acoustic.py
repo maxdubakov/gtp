@@ -15,7 +15,7 @@ import argparse
 import guitarpro as gp
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from gtp import REPO_ROOT
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
 OUTPUT_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
 

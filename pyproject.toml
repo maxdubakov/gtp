@@ -1,0 +1,12 @@
+[project]
+name = "gtp"
+version = "0.1.0"
+description = "Guitar Tab Predictor — Audio → MIDI → Tablature"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

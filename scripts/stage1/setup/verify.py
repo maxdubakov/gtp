@@ -18,13 +18,12 @@ import os
 import time
 import argparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 import torch
 import librosa
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+from gtp import REPO_ROOT
 CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'pretrained',
                           'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')

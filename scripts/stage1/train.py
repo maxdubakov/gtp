@@ -9,12 +9,10 @@ Usage:
     python scripts/train.py --resume runs/finetune/step_0000005_final.pth
 """
 
-import sys
 import os
 import argparse
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import numpy as np
 import torch
@@ -27,7 +25,7 @@ from gtp.model.utils import move_data_to_device
 from gtp.data import build_dataset
 from gtp.log import set_verbose, trace
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+from gtp import REPO_ROOT
 DEFAULT_CHECKPOINT = os.path.join(
     REPO_ROOT, 'models', 'pretrained',
     'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth'

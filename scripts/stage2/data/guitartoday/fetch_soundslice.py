@@ -17,7 +17,7 @@ import argparse
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from gtp import REPO_ROOT
 CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'slices'
 COOKIES_PATH = REPO_ROOT / 'data' / 'guitartoday' / 'soundslice_cookies.json'

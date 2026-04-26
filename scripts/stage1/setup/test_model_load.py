@@ -5,24 +5,13 @@ Usage:
     python scripts/test_model_load.py
 """
 
-import sys
-import os
-
-# Ensure src/ is on the path when running as a standalone script
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
-
 import numpy as np
 import torch
 
+from gtp import REPO_ROOT
 from gtp.model.kong import Note_pedal
 
-CHECKPOINT_PATH = os.path.join(
-    os.path.dirname(__file__),
-    '..',
-    'models',
-    'pretrained',
-    'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth',
-)
+CHECKPOINT_PATH = str(REPO_ROOT / 'models' / 'pretrained' / 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 
 FRAMES_PER_SECOND = 100
 CLASSES_NUM = 88

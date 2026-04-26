@@ -18,7 +18,7 @@ import jams
 import pretty_midi
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from gtp import REPO_ROOT
 ANNOTATION_DIR = REPO_ROOT / 'data' / 'guitarset' / 'annotation'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitarset' / 'processed'
 

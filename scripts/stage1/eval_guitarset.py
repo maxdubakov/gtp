@@ -9,12 +9,10 @@ Usage:
     python scripts/eval_guitarset.py -j 4         # 4 parallel workers
 """
 
-import sys
 import os
 import argparse
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import csv
 import numpy as np
@@ -24,8 +22,8 @@ import mir_eval
 
 from gtp.inference import PianoTranscription
 from gtp.log import set_verbose, trace
+from gtp import REPO_ROOT
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
                                 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')

@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: gtp
+Version: 0.1.0
+Summary: Guitar Tab Predictor — Audio → MIDI → Tablature
+Requires-Python: >=3.12
