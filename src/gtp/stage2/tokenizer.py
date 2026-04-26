@@ -16,7 +16,7 @@ Vocabulary:
   NOTE_ON<0..127>        — 128 tokens (MIDI pitch)
   NOTE_OFF<0..127>       — 128 tokens (MIDI pitch)
   TIME_SHIFT<tick>       — quantized tick values
-  TAB<string,fret>       — string (1-7) × fret (-2..24) combinations
+  TAB<string,fret>       — string (1-7) * fret (-2..24) combinations
   TEMPO<bpm>             — quantized to nearest 5 BPM (40-240)
   <tuning_start>         — marks beginning of tuning block
   <tuning_end>           — marks end of tuning block
@@ -27,22 +27,26 @@ from dataclasses import dataclass
 
 PPQ = 480
 
-TIME_SHIFT_BINS = sorted(set([
-    60,     # 32nd
-    120,    # 16th
-    240,    # 8th
-    480,    # quarter
-    960,    # half
-    1920,   # whole
-    180,    # dotted 16th
-    360,    # dotted 8th
-    720,    # dotted quarter
-    1440,   # dotted half
-    80,     # 8th triplet
-    160,    # quarter triplet
-    320,    # half triplet
-    640,    # whole triplet
-]))
+TIME_SHIFT_BINS = sorted(
+    set(
+        [
+            60,  # 32nd
+            120,  # 16th
+            240,  # 8th
+            480,  # quarter
+            960,  # half
+            1920,  # whole
+            180,  # dotted 16th
+            360,  # dotted 8th
+            720,  # dotted quarter
+            1440,  # dotted half
+            80,  # 8th triplet
+            160,  # quarter triplet
+            320,  # half triplet
+            640,  # whole triplet
+        ]
+    )
+)
 
 MAX_TIME_SHIFT = 1920
 
@@ -67,7 +71,7 @@ def quantize_tempo(bpm):
 @dataclass
 class Token:
     type: str
-    value: str
+    value: str | None
 
     def __str__(self):
         if self.value is None:
@@ -76,7 +80,6 @@ class Token:
 
 
 class Vocabulary:
-
     def __init__(self):
         self.token_to_id = {}
         self.id_to_token = {}
@@ -263,8 +266,6 @@ def tokenize_piece(data, max_seq_len=512):
     prefix_tokens = enc_tokens[:prefix_end]
     prefix_ids = [vocab.encode(t) for t in prefix_tokens]
 
-    usable_len = max_seq_len - 2 - len(prefix_ids)  # SOS + prefix + ... + EOS
-
     sequences = []
     note_idx = 0
     n_notes = len(note_boundaries_enc)
@@ -281,7 +282,9 @@ def tokenize_piece(data, max_seq_len=512):
             next_note = note_idx + notes_in_seq + 1
             if next_note < n_notes:
                 trial_enc_end = note_boundaries_enc[next_note]
-                trial_dec_end = note_boundaries_dec[next_note] if next_note < len(note_boundaries_dec) else len(dec_tokens)
+                trial_dec_end = (
+                    note_boundaries_dec[next_note] if next_note < len(note_boundaries_dec) else len(dec_tokens)
+                )
             else:
                 trial_enc_end = len(enc_tokens)
                 trial_dec_end = len(dec_tokens)
@@ -301,7 +304,7 @@ def tokenize_piece(data, max_seq_len=512):
             enc_end = note_boundaries_enc[note_idx + 1] if note_idx + 1 < n_notes else len(enc_tokens)
             dec_end = note_boundaries_dec[note_idx + 1] if note_idx + 1 < len(note_boundaries_dec) else len(dec_tokens)
 
-        enc_ids = [vocab.sos_id] + prefix_ids
+        enc_ids = [vocab.sos_id, *prefix_ids]
         for t in enc_tokens[enc_start:enc_end]:
             enc_ids.append(vocab.encode(t))
         enc_ids.append(vocab.eos_id)

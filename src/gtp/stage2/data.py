@@ -1,13 +1,13 @@
 """Stage 2 dataset: loads processed tab JSONs, tokenizes, and serves padded batches.
 
 Handles all four data sources (DadaGP, GuitarToday, GuitarSet, Leduc) uniformly.
-Filters bad notes at load time. Splits into train/val by file.
+Filters bad notes at load time. Stratified train/val/test split by source, tuning, and capo.
 """
 
 import json
 import os
 import random
-from pathlib import Path
+from collections import defaultdict
 
 import torch
 from torch.utils.data import Dataset
@@ -44,11 +44,18 @@ def filter_notes(notes, tuning):
     return clean
 
 
-def load_all_pieces(datasets=None):
-    """Load all processed JSON files and return a list of clean piece dicts.
+def _tuning_key(tuning):
+    """Normalize tuning to a hashable key for stratification."""
+    return tuple(tuning)
 
-    Each piece: {source, tuning, tempo, capo, notes}
-    """
+
+def _capo_key(capo):
+    """Bucket capo values: 0 vs non-zero."""
+    return 'capo' if capo > 0 else 'no_capo'
+
+
+def load_all_pieces(datasets=None):
+    """Load all processed JSON files and return a list of clean piece dicts."""
     if datasets is None:
         datasets = list(PROCESSED_DIRS.keys())
 
@@ -69,41 +76,74 @@ def load_all_pieces(datasets=None):
             if len(notes) < MIN_NOTES_PER_PIECE:
                 continue
 
-            pieces.append({
-                'source': name,
-                'filename': f,
-                'tuning': tuning,
-                'tempo': data.get('tempo', 120),
-                'capo': data.get('capo', 0),
-                'notes': notes,
-            })
+            pieces.append(
+                {
+                    'source': name,
+                    'filename': f,
+                    'tuning': tuning,
+                    'tempo': data.get('tempo', 120),
+                    'capo': data.get('capo', 0),
+                    'notes': notes,
+                }
+            )
 
     return pieces
 
 
-def split_pieces(pieces, val_ratio=0.1, seed=42):
-    """Split pieces into train/val by file (not by sequence)."""
+def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
+    """Split pieces into train/val/test, stratified by source + tuning + capo.
+
+    Returns (train_pieces, val_pieces, test_pieces).
+    """
     rng = random.Random(seed)
-    shuffled = list(pieces)
-    rng.shuffle(shuffled)
-    split_idx = int(len(shuffled) * (1 - val_ratio))
-    return shuffled[:split_idx], shuffled[split_idx:]
+
+    # Group pieces by stratification key
+    groups = defaultdict(list)
+    for piece in pieces:
+        key = (piece['source'], _tuning_key(piece['tuning']), _capo_key(piece['capo']))
+        groups[key].append(piece)
+
+    train, val, test = [], [], []
+
+    for _key, group in groups.items():
+        rng.shuffle(group)
+        n = len(group)
+        n_train = max(1, round(n * train_ratio))
+        n_val = max(0, round(n * val_ratio))
+
+        # For very small groups, put everything in train
+        if n <= 2:
+            train.extend(group)
+            continue
+
+        train.extend(group[:n_train])
+        val.extend(group[n_train : n_train + n_val])
+        test.extend(group[n_train + n_val :])
+
+    rng.shuffle(train)
+    rng.shuffle(val)
+    rng.shuffle(test)
+
+    return train, val, test
 
 
 class TabDataset(Dataset):
     """PyTorch Dataset for Stage 2 (MIDI → Tab) training.
 
     Each item is a (encoder_ids, decoder_ids) pair, padded to max_seq_len.
+    Tracks source dataset per sequence for per-dataset evaluation.
     """
 
     def __init__(self, pieces, max_seq_len=512):
         self.max_seq_len = max_seq_len
         self.vocab = VOCAB
         self.sequences = []
+        self.sources = []
 
         for piece in pieces:
             seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
             self.sequences.extend(seqs)
+            self.sources.extend([piece['source']] * len(seqs))
 
     def __len__(self):
         return len(self.sequences)
@@ -114,34 +154,43 @@ class TabDataset(Dataset):
 
     def _pad(self, ids):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))
-        return torch.tensor(padded[:self.max_seq_len], dtype=torch.long)
+        return torch.tensor(padded[: self.max_seq_len], dtype=torch.long)
 
 
-def build_datasets(datasets=None, val_ratio=0.1, max_seq_len=512, seed=42):
-    """Build train and validation TabDatasets from all processed data.
+def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=512, seed=42):
+    """Build train, validation, and test TabDatasets from all processed data.
 
-    Returns (train_dataset, val_dataset, stats_dict)
+    Returns (train_dataset, val_dataset, test_dataset, stats_dict)
     """
     pieces = load_all_pieces(datasets)
-    train_pieces, val_pieces = split_pieces(pieces, val_ratio=val_ratio, seed=seed)
+    train_pieces, val_pieces, test_pieces = stratified_split(
+        pieces, train_ratio=train_ratio, val_ratio=val_ratio, seed=seed
+    )
 
     train_ds = TabDataset(train_pieces, max_seq_len=max_seq_len)
     val_ds = TabDataset(val_pieces, max_seq_len=max_seq_len)
+    test_ds = TabDataset(test_pieces, max_seq_len=max_seq_len)
 
-    # Count pieces per source
-    source_counts = {}
-    for p in pieces:
-        source_counts[p['source']] = source_counts.get(p['source'], 0) + 1
+    def count_by_source(piece_list):
+        counts = defaultdict(int)
+        for p in piece_list:
+            counts[p['source']] += 1
+        return dict(counts)
 
     stats = {
         'total_pieces': len(pieces),
         'train_pieces': len(train_pieces),
         'val_pieces': len(val_pieces),
+        'test_pieces': len(test_pieces),
         'train_sequences': len(train_ds),
         'val_sequences': len(val_ds),
+        'test_sequences': len(test_ds),
         'vocab_size': len(VOCAB),
         'max_seq_len': max_seq_len,
-        'sources': source_counts,
+        'sources_total': count_by_source(pieces),
+        'sources_train': count_by_source(train_pieces),
+        'sources_val': count_by_source(val_pieces),
+        'sources_test': count_by_source(test_pieces),
     }
 
-    return train_ds, val_ds, stats
+    return train_ds, val_ds, test_ds, stats
