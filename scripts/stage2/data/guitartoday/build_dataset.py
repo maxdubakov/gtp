@@ -6,11 +6,6 @@ For each slice, produces:
 
 The tab JSON format per note:
   {"pitch": 43, "string": 6, "fret": 3, "start": 0.232, "end": 0.812}
-
-Usage:
-    python scripts/data/guitartoday/build_dataset.py
-    python scripts/data/guitartoday/build_dataset.py --limit 10
-    python scripts/data/guitartoday/build_dataset.py --info       # just count available slices
 """
 
 import json

@@ -1,9 +1,4 @@
 """Verify the guitar data pipeline end-to-end.
-
-Usage:
-    python scripts/test_data_pipeline.py          # shapes and value ranges
-    python scripts/test_data_pipeline.py -v       # full trace including intermediate values
-    python scripts/test_data_pipeline.py -n 4     # load N samples (default 4)
 """
 
 import os

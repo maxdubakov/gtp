@@ -2,12 +2,6 @@
 
 Extracts: post title, Soundslice slice ID, YouTube video ID, and post URL
 from the raw Patreon API responses.
-
-Usage:
-    python scripts/data/guitartoday/parse_patreon_posts.py
-    python scripts/data/guitartoday/parse_patreon_posts.py --info   # summary only
-
-Output: data/guitartoday/posts.csv
 """
 
 import json

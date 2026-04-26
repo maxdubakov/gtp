@@ -2,11 +2,6 @@
 
 Reads acoustic_tracks.csv catalog (from filter_acoustic.py), parses each
 GP file to extract pitch, string, fret, and timing from the beat durations.
-
-Usage:
-    python scripts/data/dadagp/build_dataset.py
-    python scripts/data/dadagp/build_dataset.py --limit 50
-    python scripts/data/dadagp/build_dataset.py --info
 """
 
 import csv

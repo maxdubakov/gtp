@@ -3,10 +3,6 @@
 Soundslice JSON contains bars → beats → notes with string/fret info.
 If a sync file is provided (bar → real timestamp mapping), note timing
 follows the actual performance. Otherwise, a fixed tempo is used.
-
-Usage:
-    python scripts/soundslice_to_midi.py data.json --sync sync.json -o output.mid
-    python scripts/soundslice_to_midi.py data.json --tempo 70
 """
 
 import json

@@ -2,7 +2,7 @@
 # Parse all Leduc GP files using alphaTab → JSON, then generate MIDI via Python.
 # Output: data/leduc/processed/{name}.json + {name}.mid
 #
-# Usage: bash scripts/data/leduc/build_dataset.sh
+
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 GP_DIR="$REPO_ROOT/data/leduc/gp_files"

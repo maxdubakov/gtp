@@ -2,11 +2,6 @@
 
 Scans all GP3/4/5 files, finds tracks with acoustic guitar MIDI instruments
 (nylon=24/25, steel=26), and outputs a catalog CSV.
-
-Usage:
-    python scripts/data/dadagp/filter_acoustic.py
-    python scripts/data/dadagp/filter_acoustic.py --limit 100
-    python scripts/data/dadagp/filter_acoustic.py --info
 """
 
 import os

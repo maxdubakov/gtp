@@ -3,11 +3,6 @@
  *   1. JSON with note data (pitch, string, fret, timing) from the score model
  *   2. MIDI file via alphaTab's built-in MidiFileGenerator (handles repeats, tempo, ties, etc.)
  *
- * Usage:
- *   node parse_gp.mjs input.gp                          # JSON to stdout
- *   node parse_gp.mjs input.gp --pretty                 # pretty-printed JSON
- *   node parse_gp.mjs input.gp --midi output.mid        # also write MIDI file
- *   node parse_gp.mjs input.gp --info                   # print score info only
  */
 
 import * as alphaTab from "@coderline/alphatab";

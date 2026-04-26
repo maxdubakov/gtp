@@ -3,9 +3,6 @@
 For each picked file, produces two outputs:
   - stereo WAV: LEFT = original audio, RIGHT = onset blips at predicted onsets
   - guitar WAV: MIDI synthesized with guitar voice (MuseScore soundfont)
-
-Usage:
-    python scripts/stage1/listen/listen_to_predictions.py --checkpoint models/finetuned/step_0070000_final.pth
 """
 
 import os

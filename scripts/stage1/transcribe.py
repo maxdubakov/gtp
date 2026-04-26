@@ -4,10 +4,6 @@ Outputs:
   - <stem>_predicted.mid     -- MIDI file of the transcription
   - <stem>_overlay.wav       -- stereo: left=original, right=onset blips
   - <stem>_guitar.wav        -- MIDI synthesized as acoustic guitar
-
-Usage:
-    python scripts/transcribe.py path/to/recording.m4a
-    python scripts/transcribe.py path/to/recording.m4a --checkpoint models/finetuned/step_0070000_final.pth
 """
 
 import os

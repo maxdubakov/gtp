@@ -3,11 +3,6 @@
 GuitarSet has per-string note_midi annotations from hexaphonic pickups,
 giving us ground-truth string assignment. Fret is computed from
 round(pitch) - open_string_midi.
-
-Usage:
-    python scripts/data/guitarset/build_dataset.py
-    python scripts/data/guitarset/build_dataset.py --limit 10
-    python scripts/data/guitarset/build_dataset.py --info
 """
 
 import os

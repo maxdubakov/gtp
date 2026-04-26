@@ -2,11 +2,6 @@
 
 Metrics: onset-only precision / recall / F1 using mir_eval with 50 ms tolerance,
 matching the protocol from Riley et al.
-
-Usage:
-    python scripts/eval_guitarset.py              # all 360 files
-    python scripts/eval_guitarset.py -n 10        # first 10 files (quick test)
-    python scripts/eval_guitarset.py -j 4         # 4 parallel workers
 """
 
 import os

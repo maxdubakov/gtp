@@ -7,10 +7,6 @@ Checks:
   4. Inference produces note events on a GuitarSet file
   5. GuitarSet evaluation (2 files) produces valid P/R/F1
   6. Training loop runs 2 steps without crashing
-
-Usage:
-    python scripts/verify_setup.py           # run all checks
-    python scripts/verify_setup.py --device cuda   # force device
 """
 
 import sys

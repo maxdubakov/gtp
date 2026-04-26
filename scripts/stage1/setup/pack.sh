@@ -3,7 +3,7 @@
 # Excludes data, venv, and other large/unnecessary files.
 # Archive is saved to the repo root as gtp_code.tar.gz.
 #
-# Usage: bash scripts/setup/pack.sh
+
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 ARCHIVE="$REPO_ROOT/gtp_code.tar.gz"

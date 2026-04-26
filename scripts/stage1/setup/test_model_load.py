@@ -1,8 +1,5 @@
 """Verify that the Kong CRNN model loads from the pretrained checkpoint and
 produces a valid forward pass on a synthetic 10-second audio clip.
-
-Usage:
-    python scripts/test_model_load.py
 """
 
 import numpy as np

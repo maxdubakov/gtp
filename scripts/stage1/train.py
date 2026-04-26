@@ -2,11 +2,6 @@
 
 Following Riley et al.'s recipe: lr=1e-5, batch=4, 10s segments, lr ×0.9
 every 10K steps, ~100K steps total.
-
-Usage:
-    python scripts/train.py                          # full run on auto device
-    python scripts/train.py --max-steps 5 --eval-steps 5 --save-steps 5 -v
-    python scripts/train.py --resume runs/finetune/step_0000005_final.pth
 """
 
 import os

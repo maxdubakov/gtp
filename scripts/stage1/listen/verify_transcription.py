@@ -2,10 +2,6 @@
 
 Output: stereo WAV where left channel = original audio, right channel = synthesized
 onset blips at predicted note onsets. Also saves the predicted MIDI file.
-
-Usage:
-    python scripts/verify_transcription.py --audio path/to/file.wav --out results/
-    python scripts/verify_transcription.py  # runs on default GuitarSet + GAPS files
 """
 
 import os
