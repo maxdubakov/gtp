@@ -35,7 +35,7 @@ def parse_gp_track(gp_path, track_idx):
     song = gp.parse(str(gp_path))
     track = song.tracks[track_idx]
     tuning = [s.value for s in track.strings]
-    n_strings = len(tuning)
+    capo = track.offset if hasattr(track, 'offset') else 0
     tempo = song.tempo
 
     notes = []
@@ -57,9 +57,7 @@ def parse_gp_track(gp_path, track_idx):
                 end_sec = (beat_tick + dur_ticks) / tps
 
                 for note in beat.notes:
-                    # pyguitarpro: note.string is 1-indexed from highest string
-                    # note.value is the fret number
-                    pitch = tuning[note.string - 1] + note.value + track.offset
+                    pitch = tuning[note.string - 1] + note.value
 
                     notes.append({
                         'pitch': pitch,
@@ -78,6 +76,7 @@ def parse_gp_track(gp_path, track_idx):
     return {
         'tempo': tempo,
         'tuning': tuning,
+        'capo': capo,
         'notes': notes,
     }
 
@@ -108,6 +107,7 @@ def process_one(gp_rel_path, track_idx):
         'file': gp_rel_path,
         'tempo': result['tempo'],
         'tuning': result['tuning'],
+        'capo': result['capo'],
         'notes': notes,
     }
 

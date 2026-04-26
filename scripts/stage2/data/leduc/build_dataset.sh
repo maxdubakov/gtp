@@ -44,13 +44,18 @@ for gp_file in "$GP_DIR"/*.gp "$GP_DIR"/*.gpx; do
 
     echo "$output" > "$json_file"
 
-    # Generate MIDI + normalize JSON (add top-level tuning from tracks)
+    # Validate, normalize JSON, generate MIDI
     "$PYTHON" -c "
-import sys, json, pretty_midi
+import sys, json, pretty_midi, os
 with open(sys.argv[1]) as f:
     data = json.load(f)
 if 'tuning' not in data and 'tracks' in data and data['tracks']:
     data['tuning'] = data['tracks'][0].get('tuning', [64,59,55,50,45,40])
+tuning = data['tuning']
+bad = sum(1 for n in data['notes'] if n['string'] < 1 or n['string'] > len(tuning) or tuning[n['string']-1] + n['fret'] != n['pitch'])
+if bad == len(data['notes']) and len(data['notes']) > 0:
+    os.remove(sys.argv[1])
+    sys.exit(1)
 with open(sys.argv[1], 'w') as f:
     json.dump(data, f, indent=2)
 midi = pretty_midi.PrettyMIDI(initial_tempo=data.get('tempo', 120))
@@ -68,7 +73,7 @@ midi.write(sys.argv[2])
         printf "[%3d/%d] OK  %-50s %s notes\n" "$count" "$total" "$name" "$n_notes"
         done_count=$((done_count + 1))
     else
-        printf "[%3d/%d] FAIL (midi) %-50s\n" "$count" "$total" "$name"
+        printf "[%3d/%d] SKIP (corrupt) %-50s\n" "$count" "$total" "$name"
         failed=$((failed + 1))
     fi
 done
