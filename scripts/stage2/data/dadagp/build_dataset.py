@@ -4,14 +4,16 @@ Reads acoustic_tracks.csv catalog (from filter_acoustic.py), parses each
 GP file to extract pitch, string, fret, and timing from the beat durations.
 """
 
+import argparse
 import csv
 import json
-import argparse
-import pretty_midi
-import guitarpro as gp
 from pathlib import Path
 
+import guitarpro as gp
+import pretty_midi
+
 from gtp import REPO_ROOT
+
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
 CATALOG_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'dadagp' / 'processed'
@@ -175,7 +177,7 @@ def main():
             print(f'  [{i+1:5d}/{len(entries)}] done={done} skip={skipped} '
                   f'too_few={too_few} fail={failed}')
 
-    print(f'\n=== Summary ===')
+    print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes:,} total notes)')
     print(f'Skipped (already exists): {skipped}')
     print(f'Too few notes: {too_few}')

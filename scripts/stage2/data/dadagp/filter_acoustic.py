@@ -4,13 +4,14 @@ Scans all GP3/4/5 files, finds tracks with acoustic guitar MIDI instruments
 (nylon=24/25, steel=26), and outputs a catalog CSV.
 """
 
-import os
-import csv
 import argparse
+import csv
+import os
+
 import guitarpro as gp
-from pathlib import Path
 
 from gtp import REPO_ROOT
+
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
 OUTPUT_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
 
@@ -136,7 +137,7 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f'\n=== Summary ===')
+    print('\n=== Summary ===')
     print(f'Scanned: {scanned}')
     print(f'Errors: {errors}')
     print(f'Acoustic guitar tracks found: {len(rows)}')
@@ -145,7 +146,7 @@ def main():
     # Instrument breakdown
     from collections import Counter
     inst_counts = Counter(r['instrument'] for r in rows)
-    print(f'\nBy instrument:')
+    print('\nBy instrument:')
     inst_names = {24: 'Nylon Guitar', 25: 'Steel Guitar', 26: 'Jazz Guitar'}
     for inst, count in inst_counts.most_common():
         print(f'  {inst_names.get(inst, inst)}: {count}')

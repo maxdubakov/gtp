@@ -5,8 +5,9 @@ If a sync file is provided (bar → real timestamp mapping), note timing
 follows the actual performance. Otherwise, a fixed tempo is used.
 """
 
-import json
 import argparse
+import json
+
 import pretty_midi
 
 

@@ -3,16 +3,16 @@
 import numpy as np
 import torch
 
+from gtp.log import trace
 from gtp.model.kong import Note_pedal, Regress_onset_offset_frame_velocity_CRNN
 from gtp.model.utils import forward
 from gtp.postprocess import RegressionPostProcessor, write_events_to_midi
-from gtp.log import trace
 
 # Constants matching the pretrained checkpoint configuration
 SAMPLE_RATE = 16000
-CLASSES_NUM = 88        # Number of piano notes
+CLASSES_NUM = 88  # Number of piano notes
 FRAMES_PER_SECOND = 100
-BEGIN_NOTE = 21         # MIDI note of A0, the lowest piano note
+BEGIN_NOTE = 21  # MIDI note of A0, the lowest piano note
 
 
 class PianoTranscription:
@@ -36,11 +36,11 @@ class PianoTranscription:
         """
         if device is None:
             if torch.backends.mps.is_available():
-                device = torch.device('mps')
+                device = torch.device("mps")
             elif torch.cuda.is_available():
-                device = torch.device('cuda')
+                device = torch.device("cuda")
             else:
-                device = torch.device('cpu')
+                device = torch.device("cpu")
         elif isinstance(device, str):
             device = torch.device(device)
 
@@ -50,10 +50,10 @@ class PianoTranscription:
         self.classes_num = CLASSES_NUM
 
         # Load checkpoint and detect format
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-        state = checkpoint['model']
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        state = checkpoint["model"]
 
-        if 'note_model' in state:
+        if "note_model" in state:
             # Pretrained checkpoint (nested): has note_model + pedal_model
             self.model = Note_pedal(
                 frames_per_second=self.frames_per_second,
@@ -84,7 +84,7 @@ class PianoTranscription:
             'note_events':    list of {'onset_time', 'offset_time', 'midi_note', 'velocity'}
             'pedal_events':   list of pedal event dicts, or None
         """
-        trace("input audio", audio, sr=SAMPLE_RATE, duration_s=f"{len(audio)/SAMPLE_RATE:.2f}")
+        trace("input audio", audio, sr=SAMPLE_RATE, duration_s=f"{len(audio) / SAMPLE_RATE:.2f}")
         output_dict = self._run_model(audio)
 
         trace("model outputs", output_dict)
@@ -98,17 +98,22 @@ class PianoTranscription:
         note_events, pedal_events = post_processor.output_dict_to_note_events(output_dict)
         trace("detected notes", note_events)
         if note_events:
-            pitches = [e['midi_note'] for e in note_events]
-            trace("  pitch range", midi_lo=min(pitches), midi_hi=max(pitches), unique_pitches=len(set(pitches)))
+            pitches = [e["midi_note"] for e in note_events]
+            trace(
+                "  pitch range",
+                midi_lo=min(pitches),
+                midi_hi=max(pitches),
+                unique_pitches=len(set(pitches)),
+            )
 
         if midi_path:
             write_events_to_midi(note_events, midi_path, pedal_events=pedal_events)
             trace("wrote MIDI", path=midi_path)
 
         return {
-            'output_dict': output_dict,
-            'note_events': note_events,
-            'pedal_events': pedal_events,
+            "output_dict": output_dict,
+            "note_events": note_events,
+            "pedal_events": pedal_events,
         }
 
     def _run_model(self, audio):
@@ -130,10 +135,7 @@ class PianoTranscription:
         audio = audio[None, :]  # (1, audio_samples)
         audio_len = audio.shape[1]
 
-        pad_len = (
-            int(np.ceil(audio_len / self.segment_samples)) * self.segment_samples
-            - audio_len
-        )
+        pad_len = int(np.ceil(audio_len / self.segment_samples)) * self.segment_samples - audio_len
         audio = np.concatenate((audio, np.zeros((1, pad_len), dtype=audio.dtype)), axis=1)
         trace("padded audio", audio, pad_len=pad_len)
 
@@ -156,7 +158,7 @@ class PianoTranscription:
         batch = []
         pointer = 0
         while pointer + segment_samples <= x.shape[1]:
-            batch.append(x[:, pointer: pointer + segment_samples])
+            batch.append(x[:, pointer : pointer + segment_samples])
             pointer += segment_samples // 2
         return np.concatenate(batch, axis=0)
 
@@ -171,6 +173,6 @@ class PianoTranscription:
 
         y = [x[0, : int(segment_frames * 0.75)]]
         for i in range(1, N - 1):
-            y.append(x[i, int(segment_frames * 0.25): int(segment_frames * 0.75)])
-        y.append(x[-1, int(segment_frames * 0.25):])
+            y.append(x[i, int(segment_frames * 0.25) : int(segment_frames * 0.75)])
+        y.append(x[-1, int(segment_frames * 0.25) :])
         return np.concatenate(y, axis=0)

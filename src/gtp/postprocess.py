@@ -317,7 +317,7 @@ def write_events_to_midi(note_events, midi_path, pedal_events=None, start_time=0
       pedal_events: list of dict with onset_time, offset_time, or None
       start_time: float, subtract this offset from all event times
     """
-    from mido import Message, MidiFile, MidiTrack, MetaMessage
+    from mido import Message, MetaMessage, MidiFile, MidiTrack
 
     ticks_per_beat = 384
     beats_per_second = 2  # 120 BPM

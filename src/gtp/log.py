@@ -28,7 +28,9 @@ def trace(label: str, data=None, **kwargs):
 
     if data is not None:
         if isinstance(data, np.ndarray):
-            parts.append(f"shape={data.shape} dtype={data.dtype} min={data.min():.4f} max={data.max():.4f} mean={data.mean():.4f}")
+            parts.append(
+                f"shape={data.shape} dtype={data.dtype} min={data.min():.4f} max={data.max():.4f} mean={data.mean():.4f}"
+            )
         elif isinstance(data, list):
             parts.append(f"len={len(data)}")
         elif isinstance(data, dict):

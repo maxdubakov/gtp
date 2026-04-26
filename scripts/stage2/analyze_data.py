@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -722,7 +723,7 @@ def print_red_flags(stats_list: list[dict]):
     for (ds, fname), cnt in sorted(file_counts.most_common(15)):
         print(f'    [{ds}] {cnt} notes  {fname}')
     if len(file_counts) > 15:
-        print(f'    ... and more files')
+        print('    ... and more files')
 
     # Short pieces (< 10 notes)
     all_short = [(stats['dataset'], f) for stats in stats_list for f in stats['short_pieces']]

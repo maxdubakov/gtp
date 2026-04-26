@@ -6,18 +6,17 @@ Outputs:
   - <stem>_guitar.wav        -- MIDI synthesized as acoustic guitar
 """
 
-import os
 import argparse
+import os
 
-
+import librosa
 import numpy as np
 import pretty_midi
-import librosa
 import soundfile as sf
 
+from gtp import REPO_ROOT
 from gtp.inference import PianoTranscription
 
-from gtp import REPO_ROOT
 DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'finetuned', 'step_0070000_final.pth')
 SOUNDFONT_PATH = os.path.join(REPO_ROOT, 'models', 'soundfonts', 'ms_basic.sf3')
 GUITAR_PROGRAM = 24  # General MIDI: Acoustic Guitar (nylon)

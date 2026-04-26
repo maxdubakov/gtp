@@ -4,13 +4,13 @@ Extracts: post title, Soundslice slice ID, YouTube video ID, and post URL
 from the raw Patreon API responses.
 """
 
-import json
-import csv
-import re
 import argparse
-from pathlib import Path
+import csv
+import json
+import re
 
 from gtp import REPO_ROOT
+
 BATCHES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'patreon_posts'
 OUTPUT_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 

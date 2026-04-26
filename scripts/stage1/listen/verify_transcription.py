@@ -4,17 +4,16 @@ Output: stereo WAV where left channel = original audio, right channel = synthesi
 onset blips at predicted note onsets. Also saves the predicted MIDI file.
 """
 
+import argparse
 import os
 
-
-import argparse
-import numpy as np
 import librosa
+import numpy as np
 import soundfile as sf
 
+from gtp import REPO_ROOT
 from gtp.inference import PianoTranscription
 
-from gtp import REPO_ROOT
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
                                 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 MODEL_SAMPLE_RATE = 16000

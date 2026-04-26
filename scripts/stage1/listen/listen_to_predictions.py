@@ -5,17 +5,17 @@ For each picked file, produces two outputs:
   - guitar WAV: MIDI synthesized with guitar voice (MuseScore soundfont)
 """
 
-import os
-import csv
 import argparse
+import csv
+import os
 
+import librosa
 import numpy as np
 import pretty_midi
-import librosa
 import soundfile as sf
 
-from gtp.inference import PianoTranscription
 from gtp import REPO_ROOT
+from gtp.inference import PianoTranscription
 
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')
 ANNOTATION_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'annotation')
@@ -84,7 +84,7 @@ def write_guitar_synth(note_events, output_path, sr=LISTEN_SR):
 def pick_files(csv_path, player_filter=None):
     """Read eval CSV, return sorted list of (filename, p, r, f1). Skip aggregate row."""
     rows = []
-    with open(csv_path, 'r') as f:
+    with open(csv_path) as f:
         for row in csv.DictReader(f):
             if row['file'].startswith('AGGREGATE'):
                 continue
@@ -157,8 +157,8 @@ def main():
 
         print(f"  {category:<8} {stem:<40} F1={row['f1']:.3f} -> {base_name}__(overlay|guitar).wav")
 
-    print(f"\nDone. Listen with headphones:")
-    print(f"  LEFT = guitar audio, RIGHT = MIDI blips at predicted onsets")
+    print("\nDone. Listen with headphones:")
+    print("  LEFT = guitar audio, RIGHT = MIDI blips at predicted onsets")
     print(f"  Output: {OUTPUT_DIR}")
 
 

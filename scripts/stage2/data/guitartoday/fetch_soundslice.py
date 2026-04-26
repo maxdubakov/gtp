@@ -5,15 +5,16 @@ then uses Playwright to load each slice page, intercept the data1.json and
 sync JSON network requests, and save them locally.
 """
 
+import argparse
 import csv
 import json
 import random
 import time
-import argparse
-from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 from gtp import REPO_ROOT
+
 CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'slices'
 COOKIES_PATH = REPO_ROOT / 'data' / 'guitartoday' / 'soundslice_cookies.json'
@@ -138,7 +139,7 @@ def main():
         page.close()
         browser.close()
 
-    print(f'\n=== Summary ===')
+    print('\n=== Summary ===')
     print(f'Downloaded: {done}')
     print(f'Skipped (already exists): {skipped}')
     print(f'Failed: {failed}')

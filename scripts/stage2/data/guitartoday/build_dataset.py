@@ -8,17 +8,19 @@ The tab JSON format per note:
   {"pitch": 43, "string": 6, "fret": 3, "start": 0.232, "end": 0.812}
 """
 
-import json
-import csv
 import argparse
-from pathlib import Path
+import csv
+import json
 
 # Import the converter — it lives in the same directory
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
-from soundslice_to_midi import parse_soundslice, notes_to_midi
+from soundslice_to_midi import notes_to_midi, parse_soundslice
 
 from gtp import REPO_ROOT
+
 CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 SLICES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'slices'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'processed'
@@ -135,7 +137,7 @@ def main():
             title = row.get('title', '')[:40]
             print(f'[{i+1:3d}/{len(entries)}] {slice_id}: {status:<20} {title}')
 
-    print(f'\n=== Summary ===')
+    print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes} total notes)')
     print(f'Skipped (already exists): {skipped}')
     print(f'Not fetched yet: {not_fetched}')

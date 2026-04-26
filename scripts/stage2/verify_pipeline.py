@@ -21,9 +21,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import guitarpro as gp
 import jams
 import pretty_midi
-import guitarpro as gp
 
 from gtp import REPO_ROOT
 
@@ -461,7 +461,7 @@ def verify_dadagp(limit=None):
 
         try:
             fresh, offset = parse_dadagp_track(gp_path, track_idx)
-        except Exception as e:
+        except Exception:
             parse_errors += 1
             continue
 

@@ -4,20 +4,19 @@ Metrics: onset-only precision / recall / F1 using mir_eval with 50 ms tolerance,
 matching the protocol from Riley et al.
 """
 
-import os
 import argparse
+import csv
+import os
 import time
 
-
-import csv
-import numpy as np
-import librosa
 import jams
+import librosa
 import mir_eval
+import numpy as np
 
+from gtp import REPO_ROOT
 from gtp.inference import PianoTranscription
 from gtp.log import set_verbose, trace
-from gtp import REPO_ROOT
 
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
                                 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
@@ -99,7 +98,7 @@ def load_guitarset_notes(jams_path):
         for i in range(min(3, len(ref_intervals))):
             trace(f"    note {i}", onset=f"{ref_intervals[i,0]:.3f}s",
                   offset=f"{ref_intervals[i,1]:.3f}s", midi_pitch=int(ref_pitches[i]))
-        trace(f"  mir_eval expects: ref_intervals=(N,2) float64, ref_pitches=(N,) float64")
+        trace("  mir_eval expects: ref_intervals=(N,2) float64, ref_pitches=(N,) float64")
 
     return ref_intervals, ref_pitches
 
@@ -220,7 +219,7 @@ def main():
     # For parallel: force CPU since MPS/CUDA don't multiprocess well
     device_str = args.device or ('cpu' if args.jobs > 1 else None)
     if args.jobs > 1 and device_str != 'cpu':
-        print(f'Warning: parallel mode forces CPU (MPS/CUDA cannot share across processes)')
+        print('Warning: parallel mode forces CPU (MPS/CUDA cannot share across processes)')
         device_str = 'cpu'
 
     print(f'Files: {len(audio_files)}, Workers: {args.jobs}, Device: {device_str or "auto"}')

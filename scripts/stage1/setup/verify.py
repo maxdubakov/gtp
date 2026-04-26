@@ -9,17 +9,17 @@ Checks:
   6. Training loop runs 2 steps without crashing
 """
 
-import sys
-import os
-import time
 import argparse
+import os
+import sys
+import time
 
-
+import librosa
 import numpy as np
 import torch
-import librosa
 
 from gtp import REPO_ROOT
+
 CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'pretrained',
                           'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
@@ -120,7 +120,7 @@ def main():
     if n_notes > 0:
         pitches = [e['midi_note'] for e in result['note_events']]
         times = [e['onset_time'] for e in result['note_events']]
-        check(f"  Pitch range: {min(pitches)}-{max(pitches)} (MIDI)", 20 < min(pitches) and max(pitches) < 110)
+        check(f"  Pitch range: {min(pitches)}-{max(pitches)} (MIDI)", min(pitches) > 20 and max(pitches) < 110)
         check(f"  Time range: {min(times):.1f}-{max(times):.1f}s", max(times) <= duration + 1)
 
     # --- 4. Inference on GuitarSet file ---
@@ -141,7 +141,7 @@ def main():
 
     if n_notes > 0:
         pitches = [e['midi_note'] for e in result['note_events']]
-        check(f"  Pitch range: {min(pitches)}-{max(pitches)} (MIDI)", 20 < min(pitches) and max(pitches) < 110)
+        check(f"  Pitch range: {min(pitches)}-{max(pitches)} (MIDI)", min(pitches) > 20 and max(pitches) < 110)
 
     # --- 5. GuitarSet evaluation (2 files) ---
     print("\n[5/6] Running mir_eval on 2 GuitarSet files...")
@@ -193,17 +193,18 @@ def main():
 
     avg_f1 = np.mean(f1_scores)
     check(f"Average F1: {avg_f1:.3f}", avg_f1 > 0.1, "F1 suspiciously low")
-    check(f"F1 in expected baseline range", 0.2 < avg_f1 < 0.8,
+    check("F1 in expected baseline range", 0.2 < avg_f1 < 0.8,
           f"expected 0.2-0.8 for pretrained piano on guitar, got {avg_f1:.3f}")
 
     # --- 6. Training loop (2 steps) ---
     print("\n[6/6] Running 2 training steps...")
 
+    from torch.utils.data import DataLoader
+
+    from gtp.data import build_dataset
     from gtp.model.kong import Regress_onset_offset_frame_velocity_CRNN
     from gtp.model.losses import regress_onset_offset_frame_velocity_bce
     from gtp.model.utils import move_data_to_device
-    from gtp.data import build_dataset
-    from torch.utils.data import DataLoader
 
     def collate_fn(batch):
         keys = batch[0].keys()
@@ -240,7 +241,7 @@ def main():
 
     train_time = time.time() - t0
     check(f"2 training steps completed in {train_time:.1f}s", len(losses) == 2)
-    check(f"Loss is finite", all(np.isfinite(l) for l in losses), f"losses={losses}")
+    check("Loss is finite", all(np.isfinite(l) for l in losses), f"losses={losses}")
 
     # --- Summary ---
     print("\n" + "=" * 60)

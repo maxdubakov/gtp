@@ -2,7 +2,6 @@
 produces a valid forward pass on a synthetic 10-second audio clip.
 """
 
-import numpy as np
 import torch
 
 from gtp import REPO_ROOT

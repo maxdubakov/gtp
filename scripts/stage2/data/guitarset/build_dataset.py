@@ -5,15 +5,14 @@ giving us ground-truth string assignment. Fret is computed from
 round(pitch) - open_string_midi.
 """
 
-import os
-import json
 import argparse
-import numpy as np
+import json
+
 import jams
 import pretty_midi
-from pathlib import Path
 
 from gtp import REPO_ROOT
+
 ANNOTATION_DIR = REPO_ROOT / 'data' / 'guitarset' / 'annotation'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitarset' / 'processed'
 
@@ -112,7 +111,7 @@ def main():
         if (i + 1) % 50 == 0:
             print(f'  [{i+1:3d}/{len(entries)}] done={done}')
 
-    print(f'\n=== Summary ===')
+    print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes:,} total notes)')
     print(f'Skipped: {skipped}')
     print(f'Failed: {failed}')

@@ -1,15 +1,15 @@
 """Verify the guitar data pipeline end-to-end.
 """
 
-import os
 import argparse
+import os
+
 import numpy as np
 
-
-from gtp.log import set_verbose, trace
-from gtp.data import build_dataset, load_gaps_notes, load_guitarset_notes
-
 from gtp import REPO_ROOT
+from gtp.data import build_dataset, load_gaps_notes, load_guitarset_notes
+from gtp.log import set_verbose
+
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
 GUITARSET_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset')
 
@@ -80,7 +80,7 @@ def show_verbose_trace(gaps_dir, guitarset_dir):
         print(f"--- GAPS: {os.path.basename(first_midi)} ---")
         notes = load_gaps_notes(first_midi)
         print(f"  Total notes: {len(notes)}")
-        print(f"  First 3 note events:")
+        print("  First 3 note events:")
         for n in sorted(notes, key=lambda x: x['onset_time'])[:3]:
             print(f"    {n}")
 
@@ -99,13 +99,13 @@ def show_verbose_trace(gaps_dir, guitarset_dir):
         print(f"\n--- GuitarSet: {os.path.basename(first_jams)} ---")
         notes = load_guitarset_notes(first_jams)
         print(f"  Total notes: {len(notes)}")
-        print(f"  First 3 note events:")
+        print("  First 3 note events:")
         for n in sorted(notes, key=lambda x: x['onset_time'])[:3]:
             print(f"    {n}")
 
     # Show one sample's rolls
     print("\n--- Target rolls for one segment (verbose trace enabled) ---")
-    from gtp.data import GuitarDataset, TargetProcessor
+    from gtp.data import TargetProcessor
 
     tp = TargetProcessor()
     start_time = 0.0

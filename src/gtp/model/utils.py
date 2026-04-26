@@ -2,7 +2,6 @@
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 
 def move_data_to_device(x, device):
@@ -56,7 +55,7 @@ def forward(model, x, batch_size):
         for key in batch_output_dict.keys():
             append_to_dict(output_dict, key, batch_output_dict[key].data.cpu().numpy())
 
-    for key in output_dict.keys():
+    for key in output_dict:
         output_dict[key] = np.concatenate(output_dict[key], axis=0)
 
     return output_dict

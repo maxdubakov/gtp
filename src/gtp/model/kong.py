@@ -5,8 +5,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from torchlibrosa.stft import Spectrogram, LogmelFilterBank
+from torchlibrosa.stft import LogmelFilterBank, Spectrogram
 
 
 def init_layer(layer):
@@ -40,22 +39,22 @@ def init_gru(rnn):
 
     for i in range(rnn.num_layers):
         _concat_init(
-            getattr(rnn, 'weight_ih_l{}'.format(i)),
+            getattr(rnn, f'weight_ih_l{i}'),
             [_inner_uniform, _inner_uniform, _inner_uniform]
         )
-        torch.nn.init.constant_(getattr(rnn, 'bias_ih_l{}'.format(i)), 0)
+        torch.nn.init.constant_(getattr(rnn, f'bias_ih_l{i}'), 0)
 
         _concat_init(
-            getattr(rnn, 'weight_hh_l{}'.format(i)),
+            getattr(rnn, f'weight_hh_l{i}'),
             [_inner_uniform, _inner_uniform, nn.init.orthogonal_]
         )
-        torch.nn.init.constant_(getattr(rnn, 'bias_hh_l{}'.format(i)), 0)
+        torch.nn.init.constant_(getattr(rnn, f'bias_hh_l{i}'), 0)
 
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, momentum):
 
-        super(ConvBlock, self).__init__()
+        super().__init__()
 
         self.conv1 = nn.Conv2d(in_channels=in_channels,
                                out_channels=out_channels,
@@ -99,7 +98,7 @@ class ConvBlock(nn.Module):
 
 class AcousticModelCRnn8Dropout(nn.Module):
     def __init__(self, classes_num, midfeat, momentum):
-        super(AcousticModelCRnn8Dropout, self).__init__()
+        super().__init__()
 
         self.conv_block1 = ConvBlock(in_channels=1, out_channels=48, momentum=momentum)
         self.conv_block2 = ConvBlock(in_channels=48, out_channels=64, momentum=momentum)
@@ -152,7 +151,7 @@ class AcousticModelCRnn8Dropout(nn.Module):
 
 class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
     def __init__(self, frames_per_second, classes_num):
-        super(Regress_onset_offset_frame_velocity_CRNN, self).__init__()
+        super().__init__()
 
         # spectrogram
         sample_rate = 16000
@@ -262,7 +261,7 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
 
 class Regress_pedal_CRNN(nn.Module):
     def __init__(self, frames_per_second, classes_num):
-        super(Regress_pedal_CRNN, self).__init__()
+        super().__init__()
 
         sample_rate = 16000
         window_size = 2048
@@ -340,7 +339,7 @@ class Note_pedal(nn.Module):
     note_model and pedal_model sub-dicts in the checkpoint."""
 
     def __init__(self, frames_per_second, classes_num):
-        super(Note_pedal, self).__init__()
+        super().__init__()
 
         self.note_model = Regress_onset_offset_frame_velocity_CRNN(frames_per_second, classes_num)
         self.pedal_model = Regress_pedal_CRNN(frames_per_second, classes_num)

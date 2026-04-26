@@ -5,11 +5,12 @@ returns 10-second segments with the target roll format expected by Kong's
 training loop.
 """
 
-import os
 import csv
-import numpy as np
-import librosa
+import os
+
 import jams
+import librosa
+import numpy as np
 import pretty_midi
 from torch.utils.data import Dataset
 
