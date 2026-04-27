@@ -7,7 +7,7 @@ Filters bad notes at load time. Stratified train/val/test split by source, tunin
 import json
 import os
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import torch
 from torch.utils.data import Dataset
@@ -28,20 +28,25 @@ MIN_NOTE_DURATION = 0.001  # seconds
 
 
 def filter_notes(notes, tuning):
-    """Remove invalid notes: negative frets, fret>24, zero duration, pitch mismatch."""
+    """Drop invalid notes; return (clean_notes, reason_counts)."""
     clean = []
+    reasons = Counter()
     for n in notes:
         if n['fret'] < 0 or n['fret'] > MAX_FRET:
+            reasons['bad_fret'] += 1
             continue
         if n['end'] - n['start'] < MIN_NOTE_DURATION:
+            reasons['zero_dur'] += 1
             continue
         if n['string'] < 1 or n['string'] > len(tuning):
+            reasons['bad_string'] += 1
             continue
         expected_pitch = tuning[n['string'] - 1] + n['fret']
         if expected_pitch != n['pitch']:
+            reasons['pitch_mismatch'] += 1
             continue
         clean.append(n)
-    return clean
+    return clean, reasons
 
 
 def _tuning_key(tuning):
@@ -54,16 +59,40 @@ def _capo_key(capo):
     return 'capo' if capo > 0 else 'no_capo'
 
 
+def _print_summary(summary):
+    """Print a compact per-source data quality table."""
+    if not summary:
+        return
+    print('\n[data load] per-source summary:')
+    print(f'  {"source":<12} {"seen":>6} {"kept":>6} {"skip<10":>8} {"notes":>10}  filtered')
+    for name, s in summary.items():
+        reason_str = ', '.join(f'{k}={v}' for k, v in s['filter_reasons'].items()) or '-'
+        print(
+            f'  {name:<12} {s["pieces_seen"]:>6} {s["pieces_kept"]:>6} '
+            f'{s["pieces_skipped_few_notes"]:>8} {s["notes_kept"]:>10}  {reason_str}'
+        )
+
+
 def load_all_pieces(datasets=None):
-    """Load all processed JSON files and return a list of clean piece dicts."""
+    """Load processed JSON files. Returns (pieces, summary) and prints per-source stats."""
     if datasets is None:
         datasets = list(PROCESSED_DIRS.keys())
 
     pieces = []
+    summary = {}
     for name in datasets:
         path = PROCESSED_DIRS[name]
         if not path.exists():
             continue
+
+        s = {
+            'pieces_seen': 0,
+            'pieces_kept': 0,
+            'pieces_skipped_few_notes': 0,
+            'notes_kept': 0,
+            'filter_reasons': Counter(),
+        }
+
         for f in sorted(os.listdir(path)):
             if not f.endswith('.json'):
                 continue
@@ -71,11 +100,16 @@ def load_all_pieces(datasets=None):
                 data = json.load(fh)
 
             tuning = data.get('tuning', [64, 59, 55, 50, 45, 40])
-            notes = filter_notes(data.get('notes', []), tuning)
+            notes, reasons = filter_notes(data.get('notes', []), tuning)
+            s['pieces_seen'] += 1
+            s['filter_reasons'] += reasons
 
             if len(notes) < MIN_NOTES_PER_PIECE:
+                s['pieces_skipped_few_notes'] += 1
                 continue
 
+            s['pieces_kept'] += 1
+            s['notes_kept'] += len(notes)
             pieces.append(
                 {
                     'source': name,
@@ -87,7 +121,10 @@ def load_all_pieces(datasets=None):
                 }
             )
 
-    return pieces
+        summary[name] = s
+
+    _print_summary(summary)
+    return pieces, summary
 
 
 def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
@@ -130,27 +167,27 @@ def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
 class TabDataset(Dataset):
     """PyTorch Dataset for Stage 2 (MIDI → Tab) training.
 
-    Each item is a (encoder_ids, decoder_ids) pair, padded to max_seq_len.
-    Tracks source dataset per sequence for per-dataset evaluation.
+    Each item is (encoder_ids, decoder_ids, source), padded to max_seq_len.
+    Source travels with the sample so per-source eval works regardless of shuffling.
     """
 
     def __init__(self, pieces, max_seq_len=512):
         self.max_seq_len = max_seq_len
         self.vocab = VOCAB
         self.sequences = []
-        self.sources = []
+        self._sources = []
 
         for piece in pieces:
             seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
             self.sequences.extend(seqs)
-            self.sources.extend([piece['source']] * len(seqs))
+            self._sources.extend([piece['source']] * len(seqs))
 
     def __len__(self):
         return len(self.sequences)
 
     def __getitem__(self, idx):
         enc_ids, dec_ids = self.sequences[idx]
-        return self._pad(enc_ids), self._pad(dec_ids)
+        return self._pad(enc_ids), self._pad(dec_ids), self._sources[idx]
 
     def _pad(self, ids):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))
@@ -162,7 +199,7 @@ def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=
 
     Returns (train_dataset, val_dataset, test_dataset, stats_dict)
     """
-    pieces = load_all_pieces(datasets)
+    pieces, data_quality = load_all_pieces(datasets)
     train_pieces, val_pieces, test_pieces = stratified_split(
         pieces, train_ratio=train_ratio, val_ratio=val_ratio, seed=seed
     )
@@ -191,6 +228,7 @@ def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=
         'sources_train': count_by_source(train_pieces),
         'sources_val': count_by_source(val_pieces),
         'sources_test': count_by_source(test_pieces),
+        'data_quality': data_quality,
     }
 
     return train_ds, val_ds, test_ds, stats
