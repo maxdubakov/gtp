@@ -13,6 +13,7 @@ TIME_SHIFT values are in MIDI ticks at PPQ=480.
 Simultaneous notes (chords) have no TIME_SHIFT between them.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 # Token type names — used as Token.type and as the bare identifier in vocab strings.
@@ -55,11 +56,17 @@ TEMPO_STEP = 5
 
 
 def quantize_ticks(ticks):
+    """Snap a tick delta to the nearest bin, or to 0 (suppresses TIME_SHIFT emission).
+
+    0 is a sentinel — it's not a vocab token. Any delta closer to 0 than to the
+    smallest bin (60 ticks ≈ 31ms at 120bpm) collapses to 'simultaneous'.
+    """
     if ticks <= 0:
         return 0
     if ticks > MAX_TIME_SHIFT:
         return MAX_TIME_SHIFT
-    return min(TIME_SHIFT_BINS, key=lambda b: abs(b - ticks))
+    candidates = [0, *TIME_SHIFT_BINS]
+    return min(candidates, key=lambda b: abs(b - ticks))
 
 
 def quantize_tempo(bpm):
@@ -324,3 +331,105 @@ def tokenize_piece(data, max_seq_len=512):
 
 
 VOCAB = Vocabulary()
+
+
+def parse_token_str(s):
+    """Parse a token string back to (type, value). '<SOS>' → ('SOS', None); 'NOTE_ON<55>' → ('NOTE_ON', '55')."""
+    if s.startswith('<'):
+        return s[1:-1], None
+    open_idx = s.index('<')
+    return s[:open_idx], s[open_idx + 1 : -1]
+
+
+def encoder_tokens_to_notes(token_strs):
+    """Reverse of notes_to_encoder_tokens.
+
+    Returns (notes, tempo, capo, tuning). Notes is a list of {pitch, start, end} in seconds.
+    Same-pitch overlapping notes are paired in FIFO order (the encoder representation
+    doesn't distinguish them, but pairs survive the round-trip).
+    """
+    tempo = 120
+    capo = 0
+    tuning = None
+    in_tuning = False
+    body_start = len(token_strs)
+
+    for i, s in enumerate(token_strs):
+        t, v = parse_token_str(s)
+        if t in ('SOS', 'PAD'):
+            continue
+        if t == 'TEMPO':
+            tempo = int(v)
+        elif t == 'CAPO':
+            capo = int(v)
+        elif t == 'TUNING_START':
+            tuning = []
+            in_tuning = True
+        elif t == 'TUNING_END':
+            in_tuning = False
+            body_start = i + 1
+            break
+        elif t == 'NOTE_ON' and in_tuning:
+            tuning.append(int(v))
+        elif t in ('NOTE_ON', 'NOTE_OFF', 'TIME_SHIFT'):
+            body_start = i
+            break
+
+    ticks_per_sec = (tempo / 60) * PPQ
+    notes = []
+    active = defaultdict(list)
+    current_tick = 0
+
+    for s in token_strs[body_start:]:
+        t, v = parse_token_str(s)
+        if t in ('SOS', 'PAD'):
+            continue
+        if t == 'EOS':
+            break
+        if t == 'TIME_SHIFT':
+            current_tick += int(v)
+        elif t == 'NOTE_ON':
+            active[int(v)].append(current_tick)
+        elif t == 'NOTE_OFF':
+            pitch = int(v)
+            if active[pitch]:
+                start = active[pitch].pop(0)
+                notes.append({'pitch': pitch, 'start': start / ticks_per_sec, 'end': current_tick / ticks_per_sec})
+
+    for pitch, starts in active.items():
+        for start in starts:
+            notes.append({'pitch': pitch, 'start': start / ticks_per_sec, 'end': current_tick / ticks_per_sec})
+
+    notes.sort(key=lambda n: (n['start'], n['pitch']))
+    return notes, tempo, capo, tuning
+
+
+def decoder_tokens_to_notes(token_strs, tempo, tuning, default_dur=0.3):
+    """Reverse of notes_to_decoder_tokens.
+
+    Decoder has no NOTE_OFF; each TAB gets default_dur seconds of sustain.
+    Returns list of {pitch, string, fret, start, end}.
+    """
+    ticks_per_sec = (tempo / 60) * PPQ
+    notes = []
+    current_tick = 0
+
+    for s in token_strs:
+        t, v = parse_token_str(s)
+        if t in ('SOS', 'PAD'):
+            continue
+        if t == 'EOS':
+            break
+        if t == 'TIME_SHIFT':
+            current_tick += int(v)
+        elif t == 'TAB':
+            string_str, fret_str = v.split(',')
+            string = int(string_str)
+            fret = int(fret_str)
+            pitch = tuning[string - 1] + fret
+            start_sec = current_tick / ticks_per_sec
+            notes.append(
+                {'pitch': pitch, 'string': string, 'fret': fret, 'start': start_sec, 'end': start_sec + default_dur}
+            )
+
+    return notes
