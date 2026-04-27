@@ -3,7 +3,7 @@
 Converts note JSON → token sequences for encoder (MIDI) and decoder (TAB).
 
 Encoder input (conditioned):
-  TEMPO<120> <TUNING_START> NOTE_ON<64> ... NOTE_ON<40> <TUNING_END>
+  TEMPO<120> CAPO<5> <TUNING_START> NOTE_ON<64> ... NOTE_ON<40> <TUNING_END>
   NOTE_ON<55> TIME_SHIFT<120> NOTE_OFF<55> ...
 
 Decoder target:
@@ -11,45 +11,44 @@ Decoder target:
 
 TIME_SHIFT values are in MIDI ticks at PPQ=480.
 Simultaneous notes (chords) have no TIME_SHIFT between them.
-
-Vocabulary:
-  NOTE_ON<0..127>        — 128 tokens (MIDI pitch)
-  NOTE_OFF<0..127>       — 128 tokens (MIDI pitch)
-  TIME_SHIFT<tick>       — quantized tick values
-  TAB<string,fret>       — string (1-7) * fret (-2..24) combinations
-  TEMPO<bpm>             — quantized to nearest 5 BPM (40-240)
-  <tuning_start>         — marks beginning of tuning block
-  <tuning_end>           — marks end of tuning block
-  <pad>, <sos>, <eos>    — special tokens
 """
 
 from dataclasses import dataclass
 
+# Token type names — used as Token.type and as the bare identifier in vocab strings.
+# Standalone tokens (no value) are emitted as <TYPE>; parametric ones as TYPE<value>.
+PAD = 'PAD'
+SOS = 'SOS'
+EOS = 'EOS'
+TUNING_START = 'TUNING_START'
+TUNING_END = 'TUNING_END'
+TEMPO = 'TEMPO'
+CAPO = 'CAPO'
+NOTE_ON = 'NOTE_ON'
+NOTE_OFF = 'NOTE_OFF'
+TIME_SHIFT = 'TIME_SHIFT'
+TAB = 'TAB'
+
 PPQ = 480
-
 TIME_SHIFT_BINS = sorted(
-    set(
-        [
-            60,  # 32nd
-            120,  # 16th
-            240,  # 8th
-            480,  # quarter
-            960,  # half
-            1920,  # whole
-            180,  # dotted 16th
-            360,  # dotted 8th
-            720,  # dotted quarter
-            1440,  # dotted half
-            80,  # 8th triplet
-            160,  # quarter triplet
-            320,  # half triplet
-            640,  # whole triplet
-        ]
-    )
+    {
+        60,  # 32nd
+        120,  # 16th
+        240,  # 8th
+        480,  # quarter
+        960,  # half
+        1920,  # whole
+        180,  # dotted 16th
+        360,  # dotted 8th
+        720,  # dotted quarter
+        1440,  # dotted half
+        80,  # 8th triplet
+        160,  # quarter triplet
+        320,  # half triplet
+        640,  # whole triplet
+    }
 )
-
 MAX_TIME_SHIFT = 1920
-
 TEMPO_MIN = 40
 TEMPO_MAX = 240
 TEMPO_STEP = 5
@@ -79,6 +78,10 @@ class Token:
         return f'{self.type}<{self.value}>'
 
 
+def _bare(token_type):
+    return str(Token(token_type, None))
+
+
 class Vocabulary:
     def __init__(self):
         self.token_to_id = {}
@@ -92,28 +95,25 @@ class Vocabulary:
             self.id_to_token[idx] = token_str
 
     def _build(self):
-        self._add('<pad>')
-        self._add('<sos>')
-        self._add('<eos>')
-        self._add('<tuning_start>')
-        self._add('<tuning_end>')
+        for t in (PAD, SOS, EOS, TUNING_START, TUNING_END):
+            self._add(_bare(t))
 
         for bpm in range(TEMPO_MIN, TEMPO_MAX + 1, TEMPO_STEP):
-            self._add(f'TEMPO<{bpm}>')
+            self._add(str(Token(TEMPO, str(bpm))))
 
         for capo in range(0, 13):
-            self._add(f'CAPO<{capo}>')
+            self._add(str(Token(CAPO, str(capo))))
 
         for pitch in range(128):
-            self._add(f'NOTE_ON<{pitch}>')
-            self._add(f'NOTE_OFF<{pitch}>')
+            self._add(str(Token(NOTE_ON, str(pitch))))
+            self._add(str(Token(NOTE_OFF, str(pitch))))
 
         for ticks in TIME_SHIFT_BINS:
-            self._add(f'TIME_SHIFT<{ticks}>')
+            self._add(str(Token(TIME_SHIFT, str(ticks))))
 
         for string in range(1, 8):
             for fret in range(0, 25):
-                self._add(f'TAB<{string},{fret}>')
+                self._add(str(Token(TAB, f'{string},{fret}')))
 
     def encode(self, token):
         return self.token_to_id[str(token)]
@@ -123,15 +123,15 @@ class Vocabulary:
 
     @property
     def pad_id(self):
-        return self.token_to_id['<pad>']
+        return self.token_to_id[_bare(PAD)]
 
     @property
     def sos_id(self):
-        return self.token_to_id['<sos>']
+        return self.token_to_id[_bare(SOS)]
 
     @property
     def eos_id(self):
-        return self.token_to_id['<eos>']
+        return self.token_to_id[_bare(EOS)]
 
     def __len__(self):
         return len(self.token_to_id)
@@ -145,7 +145,7 @@ def _emit_time_shifts(delta_ticks):
         chunk = min(remaining, MAX_TIME_SHIFT)
         q = quantize_ticks(chunk)
         if q > 0:
-            tokens.append(Token('TIME_SHIFT', str(q)))
+            tokens.append(Token(TIME_SHIFT, str(q)))
         remaining -= chunk
     return tokens
 
@@ -157,28 +157,24 @@ def notes_to_encoder_tokens(notes, tempo, tuning=None, capo=0):
     """
     ticks_per_sec = (tempo / 60) * PPQ
 
-    tokens = []
-
     # Conditioning prefix: TEMPO → CAPO → TUNING → notes
-    tokens.append(Token('TEMPO', str(quantize_tempo(tempo))))
-    tokens.append(Token('CAPO', str(min(12, max(0, capo)))))
+    tokens = [Token(TEMPO, str(quantize_tempo(tempo))), Token(CAPO, str(min(12, max(0, capo))))]
     if tuning:
-        tokens.append(Token('tuning_start', None))
+        tokens.append(Token(TUNING_START, None))
         for pitch in tuning:
-            tokens.append(Token('NOTE_ON', str(pitch)))
-        tokens.append(Token('tuning_end', None))
+            tokens.append(Token(NOTE_ON, str(pitch)))
+        tokens.append(Token(TUNING_END, None))
 
-    # Build note events
+    # Build note events. Notes with end <= start are filtered upstream in data.py.
     events = []
     for note in notes:
         on_tick = round(note['start'] * ticks_per_sec)
         off_tick = round(note['end'] * ticks_per_sec)
-        if off_tick <= on_tick:
-            off_tick = on_tick + 60
-        events.append((on_tick, 'NOTE_ON', note['pitch']))
-        events.append((off_tick, 'NOTE_OFF', note['pitch']))
+        events.append((on_tick, NOTE_ON, note['pitch']))
+        events.append((off_tick, NOTE_OFF, note['pitch']))
 
-    events.sort(key=lambda e: (e[0], 0 if e[1] == 'NOTE_OFF' else 1, e[2]))
+    # NOTE_OFF before NOTE_ON at the same tick so previous notes release before new ones start.
+    events.sort(key=lambda e: (e[0], 0 if e[1] == NOTE_OFF else 1, e[2]))
 
     current_tick = 0
     for tick, event_type, pitch in events:
@@ -195,14 +191,14 @@ def notes_to_decoder_tokens(notes, tempo):
     """Convert note list to decoder token sequence (TAB + TIME_SHIFT)."""
     ticks_per_sec = (tempo / 60) * PPQ
 
+    # Defensive sort — caller should sort but we don't rely on it.
+    notes = sorted(notes, key=lambda n: (n['start'], n['pitch']))
+
     tokens = []
     current_tick = 0
 
     for note in notes:
         on_tick = round(note['start'] * ticks_per_sec)
-        dur_tick = round((note['end'] - note['start']) * ticks_per_sec)
-        if dur_tick <= 0:
-            dur_tick = 60
 
         delta = on_tick - current_tick
         if delta > 0:
@@ -210,7 +206,7 @@ def notes_to_decoder_tokens(notes, tempo):
             current_tick = on_tick
 
         fret = max(0, min(24, note['fret']))
-        tokens.append(Token('TAB', f'{note["string"]},{fret}'))
+        tokens.append(Token(TAB, f'{note["string"]},{fret}'))
 
     return tokens
 
@@ -235,29 +231,36 @@ def tokenize_piece(data, max_seq_len=512):
     in_tuning = False
     note_boundaries_enc = []
     for i, t in enumerate(enc_tokens):
-        if t.type == 'tuning_start':
+        if t.type == TUNING_START:
             in_tuning = True
-        elif t.type == 'tuning_end':
+        elif t.type == TUNING_END:
             in_tuning = False
-        elif t.type == 'NOTE_ON' and not in_tuning:
+        elif t.type == NOTE_ON and not in_tuning:
             note_boundaries_enc.append(i)
 
     note_boundaries_dec = []
     for i, t in enumerate(dec_tokens):
-        if t.type == 'TAB':
+        if t.type == TAB:
             note_boundaries_dec.append(i)
 
-    # The conditioning prefix (TEMPO + TUNING) is repeated at the start of each sequence
+    # Encoder must produce one NOTE_ON-outside-tuning per input note, and decoder must
+    # produce one TAB per input note. A mismatch is a tokenizer bug, not a data issue.
+    assert len(note_boundaries_enc) == len(note_boundaries_dec), (
+        f'Note count mismatch: encoder={len(note_boundaries_enc)} decoder={len(note_boundaries_dec)} '
+        f'for piece with {len(notes)} notes'
+    )
+
+    # The conditioning prefix (TEMPO + CAPO + TUNING) is repeated at the start of each sequence
     prefix_end = 0
     for i, t in enumerate(enc_tokens):
-        if t.type == 'tuning_end':
+        if t.type == TUNING_END:
             prefix_end = i + 1
             break
-        if t.type == 'NOTE_ON':
-            # No tuning block — prefix is just TEMPO
+        if t.type == NOTE_ON:
+            # No tuning block — prefix is just TEMPO/CAPO
             in_tuning_block = False
             for j in range(i):
-                if enc_tokens[j].type == 'tuning_start':
+                if enc_tokens[j].type == TUNING_START:
                     in_tuning_block = True
             if not in_tuning_block:
                 prefix_end = i
@@ -270,21 +273,21 @@ def tokenize_piece(data, max_seq_len=512):
     note_idx = 0
     n_notes = len(note_boundaries_enc)
 
+    # loop building multiple sequences out of a single track
     while note_idx < n_notes:
         enc_start = note_boundaries_enc[note_idx]
-        dec_start = note_boundaries_dec[note_idx] if note_idx < len(note_boundaries_dec) else len(dec_tokens)
+        dec_start = note_boundaries_dec[note_idx]
 
         enc_end = enc_start
         dec_end = dec_start
         notes_in_seq = 0
 
+        # loop building a single sequence
         while note_idx + notes_in_seq < n_notes:
             next_note = note_idx + notes_in_seq + 1
             if next_note < n_notes:
                 trial_enc_end = note_boundaries_enc[next_note]
-                trial_dec_end = (
-                    note_boundaries_dec[next_note] if next_note < len(note_boundaries_dec) else len(dec_tokens)
-                )
+                trial_dec_end = note_boundaries_dec[next_note]
             else:
                 trial_enc_end = len(enc_tokens)
                 trial_dec_end = len(dec_tokens)
@@ -302,7 +305,7 @@ def tokenize_piece(data, max_seq_len=512):
         if notes_in_seq == 0:
             notes_in_seq = 1
             enc_end = note_boundaries_enc[note_idx + 1] if note_idx + 1 < n_notes else len(enc_tokens)
-            dec_end = note_boundaries_dec[note_idx + 1] if note_idx + 1 < len(note_boundaries_dec) else len(dec_tokens)
+            dec_end = note_boundaries_dec[note_idx + 1] if note_idx + 1 < n_notes else len(dec_tokens)
 
         enc_ids = [vocab.sos_id, *prefix_ids]
         for t in enc_tokens[enc_start:enc_end]:
