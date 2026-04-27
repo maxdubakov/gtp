@@ -31,25 +31,8 @@ TIME_SHIFT = 'TIME_SHIFT'
 TAB = 'TAB'
 
 PPQ = 480
-TIME_SHIFT_BINS = sorted(
-    {
-        60,  # 32nd
-        120,  # 16th
-        240,  # 8th
-        480,  # quarter
-        960,  # half
-        1920,  # whole
-        180,  # dotted 16th
-        360,  # dotted 8th
-        720,  # dotted quarter
-        1440,  # dotted half
-        80,  # 8th triplet
-        160,  # quarter triplet
-        320,  # half triplet
-        640,  # whole triplet
-    }
-)
-MAX_TIME_SHIFT = 1920
+MAX_TIME_SHIFT = 1920  # whole note at PPQ=480
+TIME_SHIFT_BINS = list(range(30, MAX_TIME_SHIFT + 1, 30))  # uniform ~31ms bins at 120 BPM, max ~16ms quantization error
 TEMPO_MIN = 40
 TEMPO_MAX = 240
 TEMPO_STEP = 5
