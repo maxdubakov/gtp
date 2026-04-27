@@ -387,11 +387,11 @@ def encoder_tokens_to_notes(token_strs):
     return notes, tempo, capo, tuning
 
 
-def decoder_tokens_to_notes(token_strs, tempo, tuning, default_dur=0.3):
+def decoder_tokens_to_notes(token_strs, tempo, tuning):
     """Reverse of notes_to_decoder_tokens.
 
-    Decoder has no NOTE_OFF; each TAB gets default_dur seconds of sustain.
-    Returns list of {pitch, string, fret, start, end}.
+    Decoder vocab has no NOTE_OFF, so the output has no `end` — only `start, pitch, string, fret`.
+    Callers that need duration (MIDI render, JSON write) synthesize it themselves.
     """
     ticks_per_sec = (tempo / 60) * PPQ
     notes = []
@@ -410,9 +410,6 @@ def decoder_tokens_to_notes(token_strs, tempo, tuning, default_dur=0.3):
             string = int(string_str)
             fret = int(fret_str)
             pitch = tuning[string - 1] + fret
-            start_sec = current_tick / ticks_per_sec
-            notes.append(
-                {'pitch': pitch, 'string': string, 'fret': fret, 'start': start_sec, 'end': start_sec + default_dur}
-            )
+            notes.append({'start': current_tick / ticks_per_sec, 'pitch': pitch, 'string': string, 'fret': fret})
 
     return notes
