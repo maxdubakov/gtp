@@ -19,7 +19,6 @@ from dataclasses import dataclass
 # Token type names — used as Token.type and as the bare identifier in vocab strings.
 # Standalone tokens (no value) are emitted as <TYPE>; parametric ones as TYPE<value>.
 PAD = 'PAD'
-SOS = 'SOS'
 EOS = 'EOS'
 TUNING_START = 'TUNING_START'
 TUNING_END = 'TUNING_END'
@@ -85,7 +84,8 @@ class Vocabulary:
             self.id_to_token[idx] = token_str
 
     def _build(self):
-        for t in (PAD, SOS, EOS, TUNING_START, TUNING_END):
+        # T5 convention: no SOS — the decoder is seeded with PAD as decoder_start_token_id.
+        for t in (PAD, EOS, TUNING_START, TUNING_END):
             self._add(_bare(t))
 
         for bpm in range(TEMPO_MIN, TEMPO_MAX + 1, TEMPO_STEP):
@@ -114,10 +114,6 @@ class Vocabulary:
     @property
     def pad_id(self):
         return self.token_to_id[_bare(PAD)]
-
-    @property
-    def sos_id(self):
-        return self.token_to_id[_bare(SOS)]
 
     @property
     def eos_id(self):
@@ -297,12 +293,12 @@ def tokenize_piece(data, max_seq_len=512):
             enc_end = note_boundaries_enc[note_idx + 1] if note_idx + 1 < n_notes else len(enc_tokens)
             dec_end = note_boundaries_dec[note_idx + 1] if note_idx + 1 < n_notes else len(dec_tokens)
 
-        enc_ids = [vocab.sos_id, *prefix_ids]
+        enc_ids = list(prefix_ids)
         for t in enc_tokens[enc_start:enc_end]:
             enc_ids.append(vocab.encode(t))
         enc_ids.append(vocab.eos_id)
 
-        dec_ids = [vocab.sos_id]
+        dec_ids = []
         for t in dec_tokens[dec_start:dec_end]:
             dec_ids.append(vocab.encode(t))
         dec_ids.append(vocab.eos_id)
@@ -339,7 +335,7 @@ def encoder_tokens_to_notes(token_strs):
 
     for i, s in enumerate(token_strs):
         t, v = parse_token_str(s)
-        if t in ('SOS', 'PAD'):
+        if t == 'PAD':
             continue
         if t == 'TEMPO':
             tempo = int(v)
@@ -365,7 +361,7 @@ def encoder_tokens_to_notes(token_strs):
 
     for s in token_strs[body_start:]:
         t, v = parse_token_str(s)
-        if t in ('SOS', 'PAD'):
+        if t == 'PAD':
             continue
         if t == 'EOS':
             break
@@ -399,7 +395,7 @@ def decoder_tokens_to_notes(token_strs, tempo, tuning):
 
     for s in token_strs:
         t, v = parse_token_str(s)
-        if t in ('SOS', 'PAD'):
+        if t == 'PAD':
             continue
         if t == 'EOS':
             break
