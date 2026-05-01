@@ -89,16 +89,20 @@ def main():
     raw_notes = data.get('notes', [])
     notes, _ = filter_notes(raw_notes, tuning)
     tempo = data.get('tempo', 120)
+    # tempo may be None (unknown — e.g. Leduc files without backing-track MP3).
+    # Use 120 BPM as the rendering fallback so MIDI / WAV synthesis still works;
+    # the encoder prefix will still omit TEMPO when the value is None.
+    tempo_fallback = tempo if tempo is not None else 120
     capo = data.get('capo', 0)
     notes = sorted(notes, key=lambda n: (n['start'], n['pitch']))
 
     enc_tokens = notes_to_encoder_tokens(notes, tempo, tuning, capo)
-    dec_tokens = notes_to_decoder_tokens(notes, tempo)
+    dec_tokens = notes_to_decoder_tokens(notes, tempo_fallback)
     enc_strs = [str(t) for t in enc_tokens]
     dec_strs = [str(t) for t in dec_tokens]
 
     enc_notes, enc_tempo, _enc_capo, _enc_tuning = encoder_tokens_to_notes(enc_strs)
-    dec_notes = decoder_tokens_to_notes(dec_strs, tempo, tuning)
+    dec_notes = decoder_tokens_to_notes(dec_strs, tempo_fallback, tuning)
     # decoder output has no `end` — synthesize a fixed sustain just for MIDI rendering
     dec_notes_for_midi = [{**n, 'end': n['start'] + args.default_dur} for n in dec_notes]
 
@@ -113,9 +117,9 @@ def main():
     }
 
     midis = {
-        'orig': notes_to_midi(notes, paths['orig'], tempo),
+        'orig': notes_to_midi(notes, paths['orig'], tempo_fallback),
         'enc': notes_to_midi(enc_notes, paths['enc'], enc_tempo),
-        'dec': notes_to_midi(dec_notes_for_midi, paths['dec'], tempo),
+        'dec': notes_to_midi(dec_notes_for_midi, paths['dec'], tempo_fallback),
     }
 
     if not args.no_wav:
