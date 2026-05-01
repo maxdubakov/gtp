@@ -7,8 +7,48 @@ follows the actual performance. Otherwise, a fixed tempo is used.
 
 import argparse
 import json
+from itertools import pairwise
 
+import numpy as np
 import pretty_midi
+
+
+def estimate_tempo_from_sync(syncpoints, bars):
+    """Estimate the song's average BPM from Soundslice sync points.
+
+    Sync entries are [bar_idx, time_sec, ...] (the optional 3rd value is an
+    intra-bar position used by Soundslice for fine sync). For tempo estimation
+    we keep only the earliest sync per bar (the bar's actual start time), then
+    compute per-segment BPM and return the median.
+
+    Returns None if too few segments or all-zero beat counts.
+    """
+    if not syncpoints or len(syncpoints) < 2:
+        return None
+
+    bar_starts = {}
+    for entry in syncpoints:
+        b, t = entry[0], entry[1]
+        if b not in bar_starts or t < bar_starts[b]:
+            bar_starts[b] = t
+
+    sorted_bars = sorted(bar_starts.items())
+    if len(sorted_bars) < 2:
+        return None
+
+    seg_tempos = []
+    for (a_idx, a_t), (b_idx, b_t) in pairwise(sorted_bars):
+        if b_idx <= a_idx or b_t <= a_t:
+            continue
+        beats = 0.0
+        for k in range(a_idx, b_idx):
+            if 0 <= k < len(bars):
+                ts = bars[k].get('time', [4, 4])
+                beats += ts[0] * 4.0 / ts[1]
+        if beats > 0:
+            seg_tempos.append(beats * 60.0 / (b_t - a_t))
+
+    return float(np.median(seg_tempos)) if seg_tempos else None
 
 
 def build_bar_timing(data, syncpoints=None, tempo_bpm=120):

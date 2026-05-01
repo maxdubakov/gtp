@@ -17,9 +17,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from soundslice_to_midi import notes_to_midi, parse_soundslice
+from soundslice_to_midi import estimate_tempo_from_sync, notes_to_midi, parse_soundslice
 
 from gtp import REPO_ROOT
+
+TEMPO_MIN = 40
+TEMPO_MAX = 240
 
 CATALOG_CSV = REPO_ROOT / 'data' / 'guitartoday' / 'posts.csv'
 SLICES_DIR = REPO_ROOT / 'data' / 'guitartoday' / 'slices'
@@ -58,16 +61,21 @@ def process_slice(slice_id):
         with open(sync_path) as f:
             syncpoints = json.load(f)
 
+    # Estimate real tempo from sync (median across per-bar-pair segments).
+    # Mark unknown if no sync, no result, or estimate is implausible.
+    tempo = estimate_tempo_from_sync(syncpoints, data['bars']) if syncpoints else None
+    if tempo is not None and not (TEMPO_MIN <= tempo <= TEMPO_MAX):
+        tempo = None
+
     try:
-        notes, _string_pitches = parse_soundslice(data, syncpoints=syncpoints)
+        notes, _string_pitches = parse_soundslice(data, syncpoints=syncpoints, tempo_bpm=tempo or 120)
     except Exception as e:
         return f'parse error: {e}', 0
 
     if not notes:
         return 'no notes', 0
 
-    # Save MIDI
-    notes_to_midi(notes, str(midi_path))
+    notes_to_midi(notes, str(midi_path), tempo_bpm=tempo or 120)
 
     # Save tab annotations with string/fret info
     track_info = next((t for t in data['tracks'] if 'pitches' in t), data['tracks'][0])
@@ -77,6 +85,7 @@ def process_slice(slice_id):
         'tuning': tuning,
         'tuning_names': [f'MIDI {p}' for p in tuning],
         'n_strings': track_info.get('strings', 6),
+        'tempo': round(tempo, 2) if tempo is not None else None,
         'has_sync': syncpoints is not None,
         'notes': [
             {
