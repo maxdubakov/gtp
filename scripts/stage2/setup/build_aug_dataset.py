@@ -38,16 +38,45 @@ def rotate_capo(pieces):
             break  # one variant per piece
 
 
-def annotate_with_subseqs(pieces, max_seq_len=512):
-    """Tokenize each piece once and stash sub-sequence count.
+def annotate_with_subseqs(pieces, stats, max_seq_len=512):
+    """Tokenize each piece once, stash sub-sequence count, and accumulate stats.
 
     Tuning augmentation (online) preserves token count, so num_subseqs is invariant
     under runtime augmentation. TabDataset uses this to build its flat index in O(1)
     per piece instead of re-tokenizing 49K+ pieces at __init__.
+
+    `stats` is a dict mutated in place: stats[source] = {pieces, subseqs, enc_tokens, dec_tokens}.
     """
     for piece in pieces:
         seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
+        enc_tokens = sum(len(enc) for enc, _ in seqs)
+        dec_tokens = sum(len(dec) for _, dec in seqs)
+        s = stats.setdefault(piece['source'], {'pieces': 0, 'subseqs': 0, 'enc_tokens': 0, 'dec_tokens': 0})
+        s['pieces'] += 1
+        s['subseqs'] += len(seqs)
+        s['enc_tokens'] += enc_tokens
+        s['dec_tokens'] += dec_tokens
         yield {**piece, 'num_subseqs': len(seqs)}
+
+
+def print_split_stats(label, stats):
+    """Print a per-source table + totals for one split."""
+    if not stats:
+        print(f'  {label}: (empty)')
+        return
+    print(f'  {label}:')
+    print(f'    {"source":<12} {"pieces":>7} {"sub-seqs":>9} {"enc tokens":>13} {"dec tokens":>13}')
+    tot_p = tot_s = tot_e = tot_d = 0
+    for src, s in sorted(stats.items()):
+        print(
+            f'    {src:<12} {s["pieces"]:>7} {s["subseqs"]:>9} '
+            f'{s["enc_tokens"]:>13,} {s["dec_tokens"]:>13,}'
+        )
+        tot_p += s['pieces']
+        tot_s += s['subseqs']
+        tot_e += s['enc_tokens']
+        tot_d += s['dec_tokens']
+    print(f'    {"TOTAL":<12} {tot_p:>7} {tot_s:>9} {tot_e:>13,} {tot_d:>13,}')
 
 
 def write_jsonl(path, items, progress_every=5000):
@@ -90,9 +119,10 @@ def main():
     val_path = out_dir / 'val.jsonl'
     test_path = out_dir / 'test.jsonl'
 
-    n_train = write_jsonl(train_path, annotate_with_subseqs(expand_all(train_pieces)))
-    n_val = write_jsonl(val_path, annotate_with_subseqs(expand_all(val_pieces)))
-    n_test = write_jsonl(test_path, annotate_with_subseqs(rotate_capo(test_pieces)))
+    train_stats, val_stats, test_stats = {}, {}, {}
+    n_train = write_jsonl(train_path, annotate_with_subseqs(expand_all(train_pieces), train_stats))
+    n_val = write_jsonl(val_path, annotate_with_subseqs(expand_all(val_pieces), val_stats))
+    n_test = write_jsonl(test_path, annotate_with_subseqs(rotate_capo(test_pieces), test_stats))
 
     print('\nWrote (post-capo-aug):')
     for path, n in [(train_path, n_train), (val_path, n_val), (test_path, n_test)]:
@@ -102,6 +132,11 @@ def main():
     avg_per_piece_train = n_train / max(1, len(train_pieces))
     avg_per_piece_val = n_val / max(1, len(val_pieces))
     print(f'\navg capo variants/piece: train={avg_per_piece_train:.2f}  val={avg_per_piece_val:.2f}')
+
+    print('\nPer-source stats (post-aug, post-tokenization):')
+    print_split_stats('train', train_stats)
+    print_split_stats('val', val_stats)
+    print_split_stats('test', test_stats)
 
 
 if __name__ == '__main__':
