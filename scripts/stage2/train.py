@@ -19,6 +19,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import Adafactor
@@ -238,7 +239,7 @@ def main():
         '--gen-eval-batches', type=int, default=10, help='Val batches for the slower tab/pitch generation eval'
     )
     parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
-    parser.add_argument('--num-workers', type=int, default=2)
+    parser.add_argument('--num-workers', type=int, default=2, help='DataLoader workers; 0 = main process only (slower but bulletproof)')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -247,11 +248,21 @@ def main():
     torch.manual_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # DataLoader workers exchange tensor data with the main process via OS resources.
+    # Default 'file_descriptor' uses /dev/shm + fd passing — on RunPod / Docker this
+    # can hit ENOBUFS after long runs ('No buffer space available'). 'file_system'
+    # uses tmpfile-based sharing instead, which is slower per transfer but stable.
+    mp.set_sharing_strategy('file_system')
+
     print('Building datasets...')
     train_ds, val_ds, _test_ds, _stats = build_datasets(datasets=args.datasets)
     print(f'  train sequences: {len(train_ds)}, val sequences: {len(val_ds)}')
 
     pin_memory = device == 'cuda'
+    # persistent_workers keeps DataLoader workers alive across iterations to
+    # avoid the resource churn from forking new workers — fixes long-run
+    # crashes ('No buffer space available', SIGABRT) seen on RunPod.
+    persistent = args.num_workers > 0
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -259,6 +270,7 @@ def main():
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         drop_last=True,
+        persistent_workers=persistent,
     )
     val_loader = DataLoader(
         val_ds,
@@ -266,6 +278,7 @@ def main():
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=pin_memory,
+        persistent_workers=persistent,
     )
 
     print(f'Building model (vocab={len(VOCAB)})...')
