@@ -140,10 +140,15 @@ for (const bar of mainStaff.bars) {
 
 notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
 
+// Effective starting tempo: what alphaTab actually used for tickToSeconds.
+// score.tempo is the file-level default (often 120 for Leduc); the first
+// tempoMap entry reflects bar-0 tempoAutomations and is what the timing reflects.
+const effectiveTempo = tempoMap[0]?.bpm ?? score.tempo;
+
 const output = {
   title: score.title,
   artist: score.artist,
-  tempo: score.tempo,
+  tempo: effectiveTempo,
   tracks: score.tracks.map((t) => ({
     name: t.name,
     tuning: t.staves[0]?.tuning || [],

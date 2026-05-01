@@ -26,7 +26,9 @@ TUNING = [64, 59, 55, 50, 45, 40]  # string 1 (high E) to string 6 (low E)
 def process_one(jams_path):
     """Extract tab data from a GuitarSet JAMS file.
 
-    Returns (notes, n_notes) where notes is a list of {pitch, string, fret, start, end}.
+    Returns (notes, tempo) where notes is a list of {pitch, string, fret, start, end}
+    and tempo is the BPM from the JAMS tempo annotation (audited to be present and
+    high-confidence for all 360 files), or None if missing.
     """
     score = jams.load(str(jams_path))
     notes = []
@@ -47,7 +49,11 @@ def process_one(jams_path):
             )
 
     notes.sort(key=lambda n: (n['start'], n['pitch']))
-    return notes
+
+    tempo_anns = score.search(namespace='tempo')
+    tempo = float(tempo_anns[0].data[0].value) if tempo_anns and tempo_anns[0].data else None
+
+    return notes, tempo
 
 
 def main():
@@ -80,7 +86,7 @@ def main():
             continue
 
         try:
-            notes = process_one(jams_path)
+            notes, tempo = process_one(jams_path)
         except Exception as e:
             failed += 1
             print(f'[{i + 1:3d}/{len(entries)}] FAIL {name}: {e}')
@@ -93,12 +99,13 @@ def main():
         tab_data = {
             'source': 'guitarset',
             'tuning': TUNING,
+            'tempo': tempo,
             'notes': notes,
         }
         with open(json_path, 'w') as f:
             json.dump(tab_data, f, indent=2)
 
-        midi = pretty_midi.PrettyMIDI()
+        midi = pretty_midi.PrettyMIDI(initial_tempo=tempo or 120.0)
         guitar = pretty_midi.Instrument(program=25)
         for n in notes:
             guitar.notes.append(

@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 GP_DIR="$REPO_ROOT/data/leduc/gp_files"
 OUTPUT_DIR="$REPO_ROOT/data/leduc/processed"
 PARSER_DIR="$REPO_ROOT/scripts/stage2/data/leduc/alphatab"
+POSTPROCESS="$REPO_ROOT/scripts/stage2/data/leduc/postprocess.py"
 PYTHON="$REPO_ROOT/venv/bin/python"
 
 mkdir -p "$OUTPUT_DIR"
@@ -44,29 +45,8 @@ for gp_file in "$GP_DIR"/*.gp "$GP_DIR"/*.gpx; do
 
     echo "$output" > "$json_file"
 
-    # Validate, normalize JSON, generate MIDI
-    "$PYTHON" -c "
-import sys, json, pretty_midi, os
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-if 'tuning' not in data and 'tracks' in data and data['tracks']:
-    data['tuning'] = data['tracks'][0].get('tuning', [64,59,55,50,45,40])
-tuning = data['tuning']
-bad = sum(1 for n in data['notes'] if n['string'] < 1 or n['string'] > len(tuning) or tuning[n['string']-1] + n['fret'] != n['pitch'])
-if bad == len(data['notes']) and len(data['notes']) > 0:
-    os.remove(sys.argv[1])
-    sys.exit(1)
-with open(sys.argv[1], 'w') as f:
-    json.dump(data, f, indent=2)
-midi = pretty_midi.PrettyMIDI(initial_tempo=data.get('tempo', 120))
-guitar = pretty_midi.Instrument(program=24)
-for n in data['notes']:
-    guitar.notes.append(pretty_midi.Note(
-        velocity=80, pitch=n['pitch'],
-        start=n['start'], end=max(n['start']+0.01, n['end'])))
-midi.instruments.append(guitar)
-midi.write(sys.argv[2])
-" "$json_file" "$mid_file" 2>/dev/null
+    # Validate, MP3-tempo-fix JSON, generate MIDI
+    "$PYTHON" "$POSTPROCESS" "$json_file" "$mid_file" "$gp_file" 2> >(grep -E '\[tempo unknown\]' >&2)
 
     if [ -f "$mid_file" ]; then
         n_notes=$(echo "$output" | grep '"n_notes"' | grep -o '[0-9]*')

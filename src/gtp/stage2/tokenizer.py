@@ -139,12 +139,19 @@ def _emit_time_shifts(delta_ticks):
 def notes_to_encoder_tokens(notes, tempo, tuning=None, capo=0):
     """Convert note list to encoder token sequence.
 
-    Includes conditioning prefix (TEMPO + CAPO + TUNING).
+    Includes conditioning prefix (TEMPO + CAPO + TUNING). When `tempo` is None the
+    TEMPO token is omitted from the prefix (signal that tempo is unknown). Note times
+    are still converted to ticks at 120 BPM density in that case — the dataset is
+    expected to have already normalized timing to 120 BPM when tempo is unknown.
     """
-    ticks_per_sec = (tempo / 60) * PPQ
+    tempo_for_ticks = tempo if tempo is not None else 120
+    ticks_per_sec = (tempo_for_ticks / 60) * PPQ
 
-    # Conditioning prefix: TEMPO → CAPO → TUNING → notes
-    tokens = [Token(TEMPO, str(quantize_tempo(tempo))), Token(CAPO, str(min(12, max(0, capo))))]
+    # Conditioning prefix: TEMPO (optional) → CAPO → TUNING → notes
+    tokens = []
+    if tempo is not None:
+        tokens.append(Token(TEMPO, str(quantize_tempo(tempo))))
+    tokens.append(Token(CAPO, str(min(12, max(0, capo)))))
     if tuning:
         tokens.append(Token(TUNING_START, None))
         for pitch in tuning:
@@ -200,15 +207,17 @@ def notes_to_decoder_tokens(notes, tempo):
 def tokenize_piece(data, max_seq_len=512):
     """Tokenize a full piece into encoder/decoder sequence pairs.
 
-    Returns list of (encoder_ids, decoder_ids) tuples.
+    Returns list of (encoder_ids, decoder_ids) tuples. `data['tempo']` may be None,
+    in which case the TEMPO token is omitted from the encoder prefix.
     """
     notes = sorted(data['notes'], key=lambda n: (n['start'], n['pitch']))
     tempo = data.get('tempo', 120)
     tuning = data.get('tuning')
     capo = data.get('capo', 0)
+    tempo_for_decoder = tempo if tempo is not None else 120
 
     enc_tokens = notes_to_encoder_tokens(notes, tempo, tuning, capo)
-    dec_tokens = notes_to_decoder_tokens(notes, tempo)
+    dec_tokens = notes_to_decoder_tokens(notes, tempo_for_decoder)
 
     vocab = VOCAB
 
