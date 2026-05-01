@@ -13,3 +13,5 @@ papers/
 .env
 node_modules/
 .coding-team/
+code_stage2.tar.gz
+data_stage2.tar.gz
