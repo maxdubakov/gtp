@@ -32,7 +32,7 @@ print(f'max_playable_fret: {MAX_PLAYABLE_FRET}')
 "
 } > data/RUNINFO.txt
 
-tar czf "$OUT" \
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT" \
     data/dadagp/processed/ \
     data/guitartoday/processed/ \
     data/guitarset/processed/ \

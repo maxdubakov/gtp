@@ -20,7 +20,7 @@ cd "$REPO_ROOT"
 
 OUT="code_stage2.tar.gz"
 
-tar czf "$OUT" \
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT" \
     --exclude='*/__pycache__' \
     --exclude='*.pyc' \
     --exclude='node_modules' \
