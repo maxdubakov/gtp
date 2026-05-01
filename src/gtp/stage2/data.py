@@ -2,6 +2,17 @@
 
 Handles all four data sources (DadaGP, GuitarToday, GuitarSet, Leduc) uniformly.
 Filters bad notes at load time. Stratified train/val/test split by source, tuning, and capo.
+
+Augmentation:
+  - Capo augmentation: applied offline by scripts/stage2/setup/build_aug_dataset.py.
+    Reads originals, splits stratified, expands each train/val piece into capo 0-7
+    variants (skipping any that push pitches outside MIDI range), and rotates one
+    capo per test piece. Writes JSONLs to AUG_DATA_DIR.
+  - Tuning augmentation: applied online in TabDataset.__getitem__ when augment=True.
+    Picks a random tuning from STANDARD_TUNINGS and re-tokenizes; preserves capo,
+    string, and fret. Pieces with non-6-string tunings are passed through unchanged.
+
+build_datasets() prefers AUG_DATA_DIR JSONLs when present; falls back to processed/.
 """
 
 import json
@@ -22,9 +33,24 @@ PROCESSED_DIRS = {
     'leduc': REPO_ROOT / 'data' / 'leduc' / 'processed',
 }
 
+AUG_DATA_DIR = REPO_ROOT / 'data' / 'stage2_aug'
+
 MIN_NOTES_PER_PIECE = 10
-MAX_FRET = 24
+MAX_FRET = 24  # vocabulary / filter_notes upper bound (some 24-fret guitars exist in the data)
+MAX_PLAYABLE_FRET = 22  # most production guitars stop at 21-22; used for capo-aug playability check
 MIN_NOTE_DURATION = 0.001  # seconds
+
+# 6-string standard tunings used for online tuning augmentation.
+# Each entry is open-string pitches in our convention: string 1 = high E (index 0).
+STANDARD_TUNINGS = [
+    [64, 59, 55, 50, 45, 40],  # standard E A D G B E
+    [63, 58, 54, 49, 44, 39],  # half-step down
+    [62, 57, 53, 48, 43, 38],  # full-step down (D)
+    [64, 59, 55, 50, 45, 38],  # drop-D
+]
+CAPO_RANGE = range(0, 8)
+MIDI_MIN = 0
+MIDI_MAX = 127
 
 
 def filter_notes(notes, tuning):
@@ -127,6 +153,58 @@ def load_all_pieces(datasets=None):
     return pieces, summary
 
 
+def expand_capo(piece, capos=CAPO_RANGE):
+    """Generate capo variants of a piece. Yields new piece dicts.
+
+    Tuning convention: tuning already includes capo (pitch = tuning[s-1] + fret),
+    where `fret` is relative to capo. A new variant with capo=N has pitches/tuning
+    shifted by (N - piece['capo']); the relative `fret` of each note is unchanged.
+
+    Skips variants that would be:
+      - musically invalid (any pitch outside MIDI [0, 127]), or
+      - physically unplayable (any relative fret + new_capo > MAX_PLAYABLE_FRET).
+    """
+    old_capo = piece['capo']
+    max_fret = max((n['fret'] for n in piece['notes']), default=0)
+    for new_capo in capos:
+        if max_fret + new_capo > MAX_PLAYABLE_FRET:
+            continue
+        delta = new_capo - old_capo
+        new_pitches = [n['pitch'] + delta for n in piece['notes']]
+        if any(p < MIDI_MIN or p > MIDI_MAX for p in new_pitches):
+            continue
+        new_tuning = [t + delta for t in piece['tuning']]
+        new_notes = [{**n, 'pitch': n['pitch'] + delta} for n in piece['notes']]
+        yield {**piece, 'tuning': new_tuning, 'capo': new_capo, 'notes': new_notes}
+
+
+def random_tuning(piece, rng):
+    """Apply random tuning augmentation. Preserves capo, string, fret; replaces tuning.
+
+    Pieces with non-6-string tunings are returned unchanged (no augmentation applied).
+    """
+    if len(piece['tuning']) != 6:
+        return piece
+    base = rng.choice(STANDARD_TUNINGS)
+    capo = piece['capo']
+    new_tuning = [t + capo for t in base]
+    new_notes = [
+        {**n, 'pitch': new_tuning[n['string'] - 1] + n['fret']} for n in piece['notes']
+    ]
+    return {**piece, 'tuning': new_tuning, 'notes': new_notes}
+
+
+def load_jsonl_pieces(path):
+    """Load pieces from a JSONL file (one piece dict per line)."""
+    pieces = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                pieces.append(json.loads(line))
+    return pieces
+
+
 def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
     """Split pieces into train/val/test, stratified by source + tuning + capo.
 
@@ -169,24 +247,52 @@ class TabDataset(Dataset):
 
     Each item is (encoder_ids, decoder_ids, source), padded to max_seq_len.
     Source travels with the sample so per-source eval works regardless of shuffling.
+
+    When augment=True, applies random tuning augmentation per __getitem__ and
+    re-tokenizes from the underlying piece. Capo is preserved (already varied
+    offline by build_aug_dataset.py for the train/val splits).
     """
 
-    def __init__(self, pieces, max_seq_len=512):
+    def __init__(self, pieces, max_seq_len=512, augment=False):
         self.max_seq_len = max_seq_len
+        self.augment = augment
         self.vocab = VOCAB
-        self.sequences = []
-        self._sources = []
+        self._rng = random.Random()  # un-seeded → independent per DataLoader worker
 
-        for piece in pieces:
-            seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
-            self.sequences.extend(seqs)
-            self._sources.extend([piece['source']] * len(seqs))
+        if augment:
+            # Keep the originals; tokenize on demand. Build flat index from cached
+            # num_subseqs annotations (written by build_aug_dataset.py). Falls back to
+            # tokenizing if the field is missing.
+            self.pieces = pieces
+            self._index = []
+            self._sources = []
+            for pi, piece in enumerate(pieces):
+                n = piece.get('num_subseqs')
+                if n is None:
+                    n = len(tokenize_piece(piece, max_seq_len=max_seq_len))
+                for si in range(n):
+                    self._index.append((pi, si))
+                    self._sources.append(piece['source'])
+        else:
+            # Pre-tokenize and cache; pieces no longer needed.
+            self.sequences = []
+            self._sources = []
+            for piece in pieces:
+                seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
+                self.sequences.extend(seqs)
+                self._sources.extend([piece['source']] * len(seqs))
 
     def __len__(self):
-        return len(self.sequences)
+        return len(self._sources)
 
     def __getitem__(self, idx):
-        enc_ids, dec_ids = self.sequences[idx]
+        if self.augment:
+            pi, si = self._index[idx]
+            piece = random_tuning(self.pieces[pi], self._rng)
+            seqs = tokenize_piece(piece, max_seq_len=self.max_seq_len)
+            enc_ids, dec_ids = seqs[min(si, len(seqs) - 1)]
+        else:
+            enc_ids, dec_ids = self.sequences[idx]
         return self._pad(enc_ids), self._pad(dec_ids), self._sources[idx]
 
     def _pad(self, ids):
@@ -194,19 +300,46 @@ class TabDataset(Dataset):
         return torch.tensor(padded[: self.max_seq_len], dtype=torch.long)
 
 
-def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=512, seed=42):
-    """Build train, validation, and test TabDatasets from all processed data.
+def build_datasets(
+    datasets=None,
+    train_ratio=0.90,
+    val_ratio=0.05,
+    max_seq_len=512,
+    seed=42,
+    augment_train=True,
+):
+    """Build train, validation, and test TabDatasets.
 
-    Returns (train_dataset, val_dataset, test_dataset, stats_dict)
+    If AUG_DATA_DIR/{train,val,test}.jsonl exist, loads those (capo augmentation already
+    applied offline). Otherwise builds from processed/ with on-the-fly stratification.
+
+    augment_train controls whether train applies online tuning augmentation per __getitem__.
+
+    Returns (train_dataset, val_dataset, test_dataset, stats_dict).
     """
-    pieces, data_quality = load_all_pieces(datasets)
-    train_pieces, val_pieces, test_pieces = stratified_split(
-        pieces, train_ratio=train_ratio, val_ratio=val_ratio, seed=seed
-    )
+    aug_train_path = AUG_DATA_DIR / 'train.jsonl'
+    if aug_train_path.exists():
+        print(f'Loading augmented JSONLs from {AUG_DATA_DIR}')
+        train_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'train.jsonl')
+        val_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'val.jsonl')
+        test_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'test.jsonl')
+        if datasets:
+            wanted = set(datasets)
+            train_pieces = [p for p in train_pieces if p['source'] in wanted]
+            val_pieces = [p for p in val_pieces if p['source'] in wanted]
+            test_pieces = [p for p in test_pieces if p['source'] in wanted]
+        data_quality = None
+        total_pieces = len(train_pieces) + len(val_pieces) + len(test_pieces)
+    else:
+        pieces, data_quality = load_all_pieces(datasets)
+        train_pieces, val_pieces, test_pieces = stratified_split(
+            pieces, train_ratio=train_ratio, val_ratio=val_ratio, seed=seed
+        )
+        total_pieces = len(pieces)
 
-    train_ds = TabDataset(train_pieces, max_seq_len=max_seq_len)
-    val_ds = TabDataset(val_pieces, max_seq_len=max_seq_len)
-    test_ds = TabDataset(test_pieces, max_seq_len=max_seq_len)
+    train_ds = TabDataset(train_pieces, max_seq_len=max_seq_len, augment=augment_train)
+    val_ds = TabDataset(val_pieces, max_seq_len=max_seq_len, augment=False)
+    test_ds = TabDataset(test_pieces, max_seq_len=max_seq_len, augment=False)
 
     def count_by_source(piece_list):
         counts = defaultdict(int)
@@ -215,7 +348,7 @@ def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=
         return dict(counts)
 
     stats = {
-        'total_pieces': len(pieces),
+        'total_pieces': total_pieces,
         'train_pieces': len(train_pieces),
         'val_pieces': len(val_pieces),
         'test_pieces': len(test_pieces),
@@ -224,10 +357,11 @@ def build_datasets(datasets=None, train_ratio=0.90, val_ratio=0.05, max_seq_len=
         'test_sequences': len(test_ds),
         'vocab_size': len(VOCAB),
         'max_seq_len': max_seq_len,
-        'sources_total': count_by_source(pieces),
+        'sources_total': count_by_source(train_pieces + val_pieces + test_pieces),
         'sources_train': count_by_source(train_pieces),
         'sources_val': count_by_source(val_pieces),
         'sources_test': count_by_source(test_pieces),
+        'augment_train': augment_train,
         'data_quality': data_quality,
     }
 
