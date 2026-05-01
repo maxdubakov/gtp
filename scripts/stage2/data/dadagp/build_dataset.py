@@ -75,8 +75,14 @@ def parse_gp_track(gp_path, track_idx):
         bar_ticks = int(TICKS_PER_QUARTER * 4 * time_sig.numerator / time_sig.denominator.value)
         current_tick += bar_ticks
 
+    # Clamp implausible tempos to None — the source files occasionally have
+    # garbage values like 5 or 375 BPM, which give the model a fake, useless
+    # signal. Note timing is left as computed (we don't re-run tick conversion
+    # at a different tempo, so existing seconds-positions stay).
+    tempo_metadata = tempo if 40 <= tempo <= 240 else None
+
     return {
-        'tempo': tempo,
+        'tempo': tempo_metadata,
         'tuning': tuning,
         'capo': capo,
         'notes': notes,
