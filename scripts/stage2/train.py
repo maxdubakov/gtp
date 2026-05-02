@@ -325,8 +325,6 @@ def main():
         log_interval = max(1, min(50, args.max_steps // 20))
         if step % log_interval == 0:
             avg_loss = float(np.mean(recent_losses[-log_interval:]))
-            avg_step_time = float(np.mean(step_times[-log_interval:]))
-
             time_elapsed = time.time() - start_time
             steps_this_run = max(1, step - time_start_step)
             avg_elapsed_per_step = time_elapsed / steps_this_run
