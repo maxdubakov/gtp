@@ -24,7 +24,7 @@ def first_viable_tab(pitch, tuning, max_fret=MAX_FRET):
     return None
 
 
-def correct_tabs(input_pitches, predicted_tabs, tuning, window=5, max_fret=MAX_FRET):
+def correct_tabs(input_pitches, predicted_tabs, tuning, window=5, max_fret=MAX_FRET, return_sources=False):
     """Paper's pitch-preserving post-processing.
 
     For each input note at position i with pitch p:
@@ -41,11 +41,17 @@ def correct_tabs(input_pitches, predicted_tabs, tuning, window=5, max_fret=MAX_F
             already includes capo (pitch = tuning[string-1] + fret).
         window: ±W index neighborhood to search. Default 5 matches the paper.
         max_fret: relative-fret upper bound for the fallback search.
+        return_sources: if True, also return a parallel list of source tags
+            (one per output entry):
+              'unchanged'   — model's tab at position i already had the right pitch
+              'window_swap' — replaced with a different model tab from within ±window
+              'fallback'    — no model tab in window matched; used first_viable_tab
 
     Returns:
         list of N (string, fret) — one per input note. Every entry produces
         the corresponding `input_pitches[i]` exactly (assuming the pitch is
         playable on the given tuning + max_fret; otherwise None for that slot).
+        If `return_sources=True`, returns `(corrected, sources)` instead.
     """
     m = len(predicted_tabs)
     predicted_pitches = [
@@ -54,6 +60,7 @@ def correct_tabs(input_pitches, predicted_tabs, tuning, window=5, max_fret=MAX_F
     ]
 
     corrected = []
+    sources = []
     for i, p_in in enumerate(input_pitches):
         lo = max(0, i - window)
         hi = min(m, i + window + 1)
@@ -69,7 +76,11 @@ def correct_tabs(input_pitches, predicted_tabs, tuning, window=5, max_fret=MAX_F
 
         if best_j >= 0:
             corrected.append(predicted_tabs[best_j])
+            sources.append('unchanged' if best_dist == 0 else 'window_swap')
         else:
             corrected.append(first_viable_tab(p_in, tuning, max_fret=max_fret))
+            sources.append('fallback')
 
+    if return_sources:
+        return corrected, sources
     return corrected
