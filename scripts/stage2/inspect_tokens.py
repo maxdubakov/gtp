@@ -12,7 +12,8 @@ import json
 import random
 import textwrap
 
-from gtp.stage2.data import PROCESSED_DIRS, filter_notes
+from gtp.stage2.data import filter_notes
+from gtp.stage2.paths import PROCESSED_DIRS
 from gtp.stage2.tokenizer import VOCAB, tokenize_piece
 
 

@@ -15,7 +15,7 @@ import json
 import statistics
 from collections import Counter
 
-from gtp.stage2.data import PROCESSED_DIRS
+from gtp.stage2.paths import PROCESSED_DIRS
 
 DEFAULT_TEMPO = 120
 

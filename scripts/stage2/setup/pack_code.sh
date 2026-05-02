@@ -10,7 +10,7 @@
 #   2. tar xzf code_stage2.tar.gz
 #   3. pip install -r requirements.txt && pip install -e .
 #   4. tar xzf data_stage2.tar.gz
-#   5. python scripts/stage2/setup/build_aug_dataset.py
+#   5. python scripts/stage2/build_aug_dataset.py
 #   6. python scripts/stage2/train.py --device cuda --num-workers 4 --batch-size 32
 
 set -euo pipefail

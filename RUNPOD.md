@@ -40,7 +40,7 @@ pip install torch==2.6.0 torchaudio==2.6.0 \
 pip install -e .
 
 # Build the augmented dataset (~9 min one-time)
-python scripts/stage2/setup/build_aug_dataset.py
+python scripts/stage2/build_aug_dataset.py
 ```
 
 ## 3. Train detached

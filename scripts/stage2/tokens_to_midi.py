@@ -22,7 +22,8 @@ import pretty_midi
 import soundfile as sf
 
 from gtp import REPO_ROOT
-from gtp.stage2.data import PROCESSED_DIRS, filter_notes
+from gtp.stage2.data import filter_notes
+from gtp.stage2.paths import PROCESSED_DIRS
 from gtp.stage2.tokenizer import (
     decoder_tokens_to_notes,
     encoder_tokens_to_notes,
