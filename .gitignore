@@ -15,4 +15,6 @@ node_modules/
 .coding-team/
 code_stage2.tar.gz
 data_stage2.tar.gz
+stage2_001.tar.gz
 SESSION_NOTES.md
+TODO.md
