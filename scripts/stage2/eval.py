@@ -25,8 +25,9 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from gtp.stage2.data import build_datasets
+from gtp.stage2.data import TabDataset, load_jsonl_pieces
 from gtp.stage2.model import build_model
+from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import (
     EOS,
@@ -287,9 +288,17 @@ def main():
     device = args.device or auto_device()
     print(f'Device: {device}')
 
-    print('Building datasets...')
-    _train_ds, val_ds, test_ds, _stats = build_datasets(datasets=args.datasets)
-    print(f'  val sequences: {len(val_ds)}, test sequences: {len(test_ds)}')
+    print('Loading val/test pieces (skipping train.jsonl)...')
+    val_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'val.jsonl')
+    test_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'test.jsonl') if args.include_test else []
+    if args.datasets:
+        wanted = set(args.datasets)
+        val_pieces = [p for p in val_pieces if p['source'] in wanted]
+        test_pieces = [p for p in test_pieces if p['source'] in wanted]
+    val_ds = TabDataset(val_pieces, augment=False)
+    test_ds = TabDataset(test_pieces, augment=False) if args.include_test else None
+    print(f'  val sequences: {len(val_ds)}', end='')
+    print(f', test sequences: {len(test_ds)}' if test_ds else '')
 
     pin_memory = device == 'cuda'
     val_loader = DataLoader(
@@ -307,7 +316,7 @@ def main():
             num_workers=args.num_workers,
             pin_memory=pin_memory,
         )
-        if args.include_test
+        if test_ds is not None
         else None
     )
 
