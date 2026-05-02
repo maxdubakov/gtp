@@ -28,10 +28,8 @@ from gtp import REPO_ROOT
 from gtp.stage2.data import build_datasets
 from gtp.stage2.model import build_model
 from gtp.stage2.tokenizer import (
-    EOS,
     MAX_TIME_SHIFT,
     NOTE_ON,
-    PAD,
     TAB,
     TIME_SHIFT_BINS,
     TUNING_END,
@@ -88,98 +86,22 @@ def parse_tuning_from_enc(enc_ids):
     return None
 
 
-def extract_tabs(token_ids):
-    """Walk decoder IDs, return list of (string, fret) from TAB tokens. Stops at EOS."""
-    tabs = []
-    for tid in token_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
-        if t == EOS:
-            break
-        if t == PAD:
-            continue
-        if t == TAB:
-            ss, ff = v.split(',')
-            tabs.append((int(ss), int(ff)))
-    return tabs
+def run_eval(model, val_loader, device, max_batches=None):
+    """Single forward pass over val: cross-entropy loss + teacher-forced tab/pitch accuracy.
 
+    Note: tab/pitch accuracy here is teacher-forced (the decoder sees ground-truth
+    previous tokens at each position), so numbers are higher than what you'd get
+    from autoregressive generation. Useful as a fast training-time monitor;
+    benchmark numbers (paper-comparable) need a separate autoregressive eval.
 
-def run_generation_eval(model, val_loader, device, max_batches=20):
-    """Generate predictions and compute tab + pitch accuracy.
-
-    Greedy-decode the decoder, parse predicted TAB tokens, align position-by-position
-    with ground-truth TABs. Length mismatches penalize: denominator is max(predicted,
-    ground_truth) so missing/extra tabs count as wrong.
-
-    Returns (overall_tab_acc, overall_pitch_acc, per_source) where per_source maps
-    source -> (tab_acc, pitch_acc, n_tabs).
+    Returns (overall_loss, overall_tab_acc, overall_pitch_acc, per_source) where
+    per_source maps source → {loss, tab_acc, pitch_acc, n_tabs}.
     """
     model.eval()
-    totals = defaultdict(lambda: [0, 0, 0])  # source -> [tab_correct, pitch_correct, n_total]
+    loss_totals = defaultdict(lambda: [0.0, 0])  # source -> [sum_loss, n_seqs]
+    tab_totals = defaultdict(lambda: [0, 0])  # source -> [correct, n_tabs]
+    pitch_totals = defaultdict(lambda: [0, 0])
 
-    with torch.no_grad():
-        for i, batch in enumerate(val_loader):
-            if i >= max_batches:
-                break
-            enc, dec, sources = batch
-            input_ids = enc.to(device)
-            attention_mask = (input_ids != VOCAB.pad_id).long()
-
-            generated = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=enc.size(1),
-                num_beams=1,
-                do_sample=False,
-                pad_token_id=VOCAB.pad_id,
-                eos_token_id=VOCAB.eos_id,
-            )
-
-            for b in range(input_ids.size(0)):
-                tuning = parse_tuning_from_enc(input_ids[b].tolist())
-                if not tuning:
-                    continue
-
-                pred = extract_tabs(generated[b, 1:].tolist())  # skip decoder_start (PAD)
-                gt = extract_tabs(dec[b].tolist())
-                if not gt:
-                    continue
-
-                n_pairs = min(len(pred), len(gt))
-                n_total = max(len(pred), len(gt))
-                tab_c = 0
-                pitch_c = 0
-                for (ps, pf), (gs, gf) in zip(pred[:n_pairs], gt[:n_pairs], strict=False):
-                    if (ps, pf) == (gs, gf):
-                        tab_c += 1
-                    if (
-                        1 <= ps <= len(tuning)
-                        and 1 <= gs <= len(tuning)
-                        and tuning[ps - 1] + pf == tuning[gs - 1] + gf
-                    ):
-                        pitch_c += 1
-
-                totals[sources[b]][0] += tab_c
-                totals[sources[b]][1] += pitch_c
-                totals[sources[b]][2] += n_total
-
-    model.train()
-    if not totals:
-        return float('nan'), float('nan'), {}
-
-    per_src = {}
-    sum_tab, sum_pitch, sum_n = 0, 0, 0
-    for src, (tc, pc, n) in totals.items():
-        per_src[src] = (tc / n if n else 0.0, pc / n if n else 0.0, n)
-        sum_tab += tc
-        sum_pitch += pc
-        sum_n += n
-    return (sum_tab / sum_n if sum_n else 0.0, sum_pitch / sum_n if sum_n else 0.0, per_src)
-
-
-def run_eval(model, val_loader, device, max_batches=None):
-    """Returns (overall_mean_loss, {source: mean_loss})."""
-    model.eval()
-    totals = defaultdict(lambda: [0.0, 0])
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             if max_batches is not None and i >= max_batches:
@@ -187,15 +109,77 @@ def run_eval(model, val_loader, device, max_batches=None):
             enc, dec, sources = batch
             input_ids, attention_mask, labels = make_t5_inputs(enc, dec, device)
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            for s, loss_val in zip(sources, per_sequence_loss(outputs.logits, labels).tolist(), strict=True):
-                totals[s][0] += loss_val
-                totals[s][1] += 1
+
+            seq_losses = per_sequence_loss(outputs.logits, labels).tolist()
+            preds = outputs.logits.argmax(-1)  # (B, T) teacher-forced predictions
+
+            # Pull to CPU once per batch — cheaper than per-element tensor access.
+            preds_cpu = preds.cpu().tolist()
+            labels_cpu = labels.cpu().tolist()
+            inputs_cpu = input_ids.cpu().tolist()
+
+            for b in range(input_ids.size(0)):
+                src = sources[b]
+                loss_totals[src][0] += seq_losses[b]
+                loss_totals[src][1] += 1
+
+                tuning = parse_tuning_from_enc(inputs_cpu[b])
+
+                for t_idx, gt_id in enumerate(labels_cpu[b]):
+                    if gt_id < 0:  # PAD-as-loss-mask (-100), skip
+                        continue
+                    gt_type, gt_val = parse_token_str(VOCAB.decode(gt_id))
+                    if gt_type != TAB:
+                        continue
+
+                    pred_id = preds_cpu[b][t_idx]
+                    tab_totals[src][1] += 1
+                    pitch_totals[src][1] += 1
+
+                    if pred_id == gt_id:
+                        tab_totals[src][0] += 1
+                        pitch_totals[src][0] += 1  # exact token match implies same pitch
+                    elif tuning:
+                        pred_type, pred_val = parse_token_str(VOCAB.decode(pred_id))
+                        if pred_type == TAB:
+                            gs, gf = (int(x) for x in gt_val.split(','))
+                            ps, pf = (int(x) for x in pred_val.split(','))
+                            if (
+                                1 <= ps <= len(tuning)
+                                and 1 <= gs <= len(tuning)
+                                and tuning[ps - 1] + pf == tuning[gs - 1] + gf
+                            ):
+                                pitch_totals[src][0] += 1
+
     model.train()
-    if not totals:
-        return float('nan'), {}
-    per_source = {s: total / count for s, (total, count) in totals.items()}
-    overall = sum(t for t, _ in totals.values()) / sum(c for _, c in totals.values())
-    return overall, per_source
+    if not loss_totals:
+        return float('nan'), float('nan'), float('nan'), {}
+
+    per_source = {}
+    sum_loss, sum_loss_n = 0.0, 0
+    sum_tab_c, sum_tab_n = 0, 0
+    sum_pitch_c, sum_pitch_n = 0, 0
+    for src in loss_totals:
+        l_sum, l_n = loss_totals[src]
+        t_c, t_n = tab_totals[src]
+        p_c, p_n = pitch_totals[src]
+        per_source[src] = {
+            'loss': l_sum / l_n if l_n else 0.0,
+            'tab_acc': t_c / t_n if t_n else 0.0,
+            'pitch_acc': p_c / p_n if p_n else 0.0,
+            'n_tabs': t_n,
+        }
+        sum_loss += l_sum
+        sum_loss_n += l_n
+        sum_tab_c += t_c
+        sum_tab_n += t_n
+        sum_pitch_c += p_c
+        sum_pitch_n += p_n
+
+    overall_loss = sum_loss / sum_loss_n if sum_loss_n else 0.0
+    overall_tab = sum_tab_c / sum_tab_n if sum_tab_n else 0.0
+    overall_pitch = sum_pitch_c / sum_pitch_n if sum_pitch_n else 0.0
+    return overall_loss, overall_tab, overall_pitch, per_source
 
 
 def format_eta(seconds):
@@ -235,11 +219,10 @@ def main():
     parser.add_argument('--eval-steps', type=int, default=1000)
     parser.add_argument('--save-steps', type=int, default=5000)
     parser.add_argument('--eval-batches', type=int, default=None, help='Cap val batches per eval (default: all)')
-    parser.add_argument(
-        '--gen-eval-batches', type=int, default=10, help='Val batches for the slower tab/pitch generation eval'
-    )
     parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
-    parser.add_argument('--num-workers', type=int, default=2, help='DataLoader workers; 0 = main process only (slower but bulletproof)')
+    parser.add_argument(
+        '--num-workers', type=int, default=2, help='DataLoader workers; 0 = main process only (slower but bulletproof)'
+    )
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -314,6 +297,8 @@ def main():
     recent_losses = []
     step_times = []
     train_iter = iter(train_loader)
+    start_time = time.time()
+    time_start_step = step
 
     while step < args.max_steps:
         try:
@@ -341,20 +326,26 @@ def main():
         if step % log_interval == 0:
             avg_loss = float(np.mean(recent_losses[-log_interval:]))
             avg_step_time = float(np.mean(step_times[-log_interval:]))
-            eta = format_eta(avg_step_time * (args.max_steps - step))
-            print(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_step_time:.2f}s/step, {eta})')
+
+            time_elapsed = time.time() - start_time
+            steps_this_run = max(1, step - time_start_step)
+            avg_elapsed_per_step = time_elapsed / steps_this_run
+            eta = format_eta(avg_elapsed_per_step * (args.max_steps - step))
+            print(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
 
         if step > 0 and step % args.eval_steps == 0:
-            overall, per_src = run_eval(model, val_loader, device, max_batches=args.eval_batches)
-            src_str = '  '.join(f'{s}={loss_val:.3f}' for s, loss_val in sorted(per_src.items()))
-            print(f'[eval @ step {step}] val_loss={overall:.4f}  {src_str}')
-
-            tab_acc, pitch_acc, gen_per_src = run_generation_eval(
-                model, val_loader, device, max_batches=args.gen_eval_batches
+            overall_loss, tab_acc, pitch_acc, per_src = run_eval(
+                model, val_loader, device, max_batches=args.eval_batches
             )
-            print(f'[gen  @ step {step}] tab_acc={tab_acc:.3f}  pitch_acc={pitch_acc:.3f}')
-            for src, (ta, pa, n) in sorted(gen_per_src.items()):
-                print(f'    {src:<12} tab={ta:.3f}  pitch={pa:.3f}  n={n}')
+            print(
+                f'[eval @ step {step}] val_loss={overall_loss:.4f}  '
+                f'tab_acc={tab_acc:.3f}  pitch_acc={pitch_acc:.3f}  (teacher-forced)'
+            )
+            for src, m in sorted(per_src.items()):
+                print(
+                    f'    {src:<12} loss={m["loss"]:.3f}  '
+                    f'tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
+                )
 
         if step > 0 and step % args.save_steps == 0:
             ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
@@ -365,10 +356,12 @@ def main():
     save_checkpoint(final_path, step, model, optimizer, args)
     print(f'\nTraining complete. Final checkpoint: {final_path}')
 
-    final_overall, final_per_src = run_eval(model, val_loader, device)
-    print(f'Final val: loss={final_overall:.4f}')
-    for s, loss_val in sorted(final_per_src.items()):
-        print(f'  {s}: {loss_val:.4f}')
+    final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, device)
+    print(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
+    for src, m in sorted(final_per_src.items()):
+        print(
+            f'  {src:<12} loss={m["loss"]:.4f}  tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
+        )
 
 
 if __name__ == '__main__':
