@@ -26,6 +26,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from gtp.stage2.data import TabDataset, load_jsonl_pieces
+from gtp.stage2.metrics import (
+    difficulty_score,
+    pitch_correct,
+    tab_correct,
+)
 from gtp.stage2.model import build_model
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.postprocess import correct_tabs
@@ -110,9 +115,12 @@ def evaluate_split(model, loader, device):
     """Run one split and return per-source counts.
 
     Returns dict {source: {n_input_notes, tab_correct_raw, tab_correct_pp,
-                           pitch_correct_raw, pitch_correct_pp}}.
-    Both raw and pp metrics use the same denominator (= number of input notes per piece),
-    so they're directly comparable. Missing predictions count as wrong for raw.
+                           pitch_correct_raw, pitch_correct_pp,
+                           difficulty_sums (gt/raw/pp), difficulty_n_subseqs}}.
+
+    Note acc metrics (tab/pitch) are aggregated per-note (sum across all notes).
+    Difficulty is aggregated per-subseq (mean of per-subseq means), since
+    difficulty is naturally a sequence-level quantity.
     """
     metrics = defaultdict(
         lambda: {
@@ -121,6 +129,12 @@ def evaluate_split(model, loader, device):
             'tab_correct_pp': 0,
             'pitch_correct_raw': 0,
             'pitch_correct_pp': 0,
+            'difficulty_sum_gt': 0.0,
+            'difficulty_sum_raw': 0.0,
+            'difficulty_sum_pp': 0.0,
+            'difficulty_n_subseqs_gt': 0,
+            'difficulty_n_subseqs_raw': 0,
+            'difficulty_n_subseqs_pp': 0,
         }
     )
 
@@ -167,51 +181,63 @@ def evaluate_split(model, loader, device):
                 m['n_input_notes'] += n
 
                 for j in range(n):
-                    gs, gf = gt_tabs[j]
-                    g_pitch = tuning[gs - 1] + gf if 1 <= gs <= len(tuning) else None
+                    g_pitch = (
+                        tuning[gt_tabs[j][0] - 1] + gt_tabs[j][1]
+                        if 1 <= gt_tabs[j][0] <= len(tuning)
+                        else None
+                    )
 
-                    # --- raw: pred_tabs[j] if it exists, else miss ---
                     if j < len(pred_tabs):
-                        ps, pf = pred_tabs[j]
-                        if (ps, pf) == (gs, gf):
+                        if tab_correct(pred_tabs[j], gt_tabs[j]):
                             m['tab_correct_raw'] += 1
-                        if (
-                            g_pitch is not None
-                            and 1 <= ps <= len(tuning)
-                            and tuning[ps - 1] + pf == g_pitch
-                        ):
+                        if g_pitch is not None and pitch_correct(pred_tabs[j], g_pitch, tuning):
                             m['pitch_correct_raw'] += 1
 
-                    # --- post-processed: corrected_tabs[j] (always defined for in-range pitch) ---
                     cor = corrected_tabs[j]
                     if cor is not None:
-                        cs, cf = cor
-                        if (cs, cf) == (gs, gf):
+                        if tab_correct(cor, gt_tabs[j]):
                             m['tab_correct_pp'] += 1
-                        if (
-                            g_pitch is not None
-                            and 1 <= cs <= len(tuning)
-                            and tuning[cs - 1] + cf == g_pitch
-                        ):
+                        if g_pitch is not None and pitch_correct(cor, g_pitch, tuning):
                             m['pitch_correct_pp'] += 1
+
+                # --- difficulty: per-subseq means ---
+                d_gt = difficulty_score(gt_tabs[:n])
+                d_raw = difficulty_score(pred_tabs)
+                d_pp = difficulty_score(corrected_tabs)
+                if d_gt is not None:
+                    m['difficulty_sum_gt'] += d_gt
+                    m['difficulty_n_subseqs_gt'] += 1
+                if d_raw is not None:
+                    m['difficulty_sum_raw'] += d_raw
+                    m['difficulty_n_subseqs_raw'] += 1
+                if d_pp is not None:
+                    m['difficulty_sum_pp'] += d_pp
+                    m['difficulty_n_subseqs_pp'] += 1
 
     return dict(metrics)
 
 
 def aggregate(metrics):
     """Add an `_overall` row summing across sources, return a clean per-source view with rates."""
-    overall = {
-        'n_input_notes': 0,
-        'tab_correct_raw': 0,
-        'tab_correct_pp': 0,
-        'pitch_correct_raw': 0,
-        'pitch_correct_pp': 0,
-    }
+    counter_keys = [
+        'n_input_notes',
+        'tab_correct_raw',
+        'tab_correct_pp',
+        'pitch_correct_raw',
+        'pitch_correct_pp',
+        'difficulty_sum_gt',
+        'difficulty_sum_raw',
+        'difficulty_sum_pp',
+        'difficulty_n_subseqs_gt',
+        'difficulty_n_subseqs_raw',
+        'difficulty_n_subseqs_pp',
+    ]
+    overall = dict.fromkeys(counter_keys, 0)
     rows = {}
     for src, m in sorted(metrics.items()):
         rows[src] = _to_rates(m)
-        for k in overall:
-            overall[k] += m[k]
+        for k in counter_keys:
+            overall[k] += m.get(k, 0)
     rows['_overall'] = _to_rates(overall)
     return rows
 
@@ -224,22 +250,36 @@ def _to_rates(m):
         'tab_acc_pp': m['tab_correct_pp'] / n,
         'pitch_acc_raw': m['pitch_correct_raw'] / n,
         'pitch_acc_pp': m['pitch_correct_pp'] / n,
+        'diff_gt': _safe_div(m['difficulty_sum_gt'], m['difficulty_n_subseqs_gt']),
+        'diff_raw': _safe_div(m['difficulty_sum_raw'], m['difficulty_n_subseqs_raw']),
+        'diff_pp': _safe_div(m['difficulty_sum_pp'], m['difficulty_n_subseqs_pp']),
+        'difficulty_n_subseqs': m['difficulty_n_subseqs_gt'],
     }
+
+
+def _safe_div(num, den):
+    return num / den if den > 0 else None
 
 
 def print_metrics(label, rows):
     print(f'  {label}:')
     print(
         f'    {"source":<12} {"n_notes":>10}  '
-        f'{"tab_raw":>8} {"tab_pp":>8}   {"pitch_raw":>10} {"pitch_pp":>10}'
+        f'{"tab_raw":>8} {"tab_pp":>8}   {"pitch_raw":>10} {"pitch_pp":>10}   '
+        f'{"diff_gt":>8} {"diff_raw":>9} {"diff_pp":>8}'
     )
     for src, r in rows.items():
         marker = ' ← overall' if src == '_overall' else ''
         print(
             f'    {src:<12} {r["n_input_notes"]:>10,}  '
             f'{r["tab_acc_raw"]:>8.3f} {r["tab_acc_pp"]:>8.3f}   '
-            f'{r["pitch_acc_raw"]:>10.3f} {r["pitch_acc_pp"]:>10.3f}{marker}'
+            f'{r["pitch_acc_raw"]:>10.3f} {r["pitch_acc_pp"]:>10.3f}   '
+            f'{_fmt(r["diff_gt"]):>8} {_fmt(r["diff_raw"]):>9} {_fmt(r["diff_pp"]):>8}{marker}'
         )
+
+
+def _fmt(x):
+    return '   --   ' if x is None else f'{x:.3f}'
 
 
 # ---------------------------------------------------------------------------

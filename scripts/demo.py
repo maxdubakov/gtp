@@ -33,6 +33,7 @@ from gtp.stage2.inference import (
     load_checkpoint,
     tokenize_for_inference,
 )
+from gtp.stage2.metrics import difficulty_score
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import VOCAB
 
@@ -143,6 +144,13 @@ def stage2(piece, checkpoint, device, anchor_tabs=None):
         f'unplayable: {sum(1 for t in corrected_tabs if t is None)}'
     )
     print(f'  postproc sources: unchanged={n_unchanged}  window_swap={n_swap}  fallback={n_fallback}')
+
+    d_raw = difficulty_score(raw_tabs)
+    d_pp = difficulty_score(corrected_tabs)
+    if d_raw is not None and d_pp is not None:
+        print(f'  difficulty: raw={d_raw:.3f}  pp={d_pp:.3f}')
+    else:
+        print('  difficulty: (need ≥2 valid tabs)')
     return corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources
 
 
@@ -252,6 +260,13 @@ def write_debug_log(path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs
         f'=== Postproc source summary: '
         f'unchanged={n_unchanged}  window_swap={n_swap}  fallback={n_fallback} ==='
     )
+
+    d_raw = difficulty_score(raw_tabs)
+    d_pp = difficulty_score(corrected_tabs)
+    lines.append('')
+    lines.append('=== Difficulty score (paper §3.6, range 0-18.5; lower = easier to play) ===')
+    lines.append(f'  raw model output: {d_raw:.3f}' if d_raw is not None else '  raw model output: --')
+    lines.append(f'  post-processed:   {d_pp:.3f}' if d_pp is not None else '  post-processed:   --')
 
     sorted_notes = sorted(piece['notes'], key=lambda n: (n['start'], n['pitch']))
     note_to_idx = {id(n): i for i, n in enumerate(sorted_notes)}
