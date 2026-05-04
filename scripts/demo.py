@@ -38,7 +38,7 @@ from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import VOCAB
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
-STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_001' / 'step_0030000_final.pth'
+STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_001' / 'step_0060000_final.pth'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
 SR = 16000
@@ -73,9 +73,9 @@ def record_with_retry(duration, sr=SR):
         peak = float(np.max(np.abs(audio)))
         print(f'Done. Duration={duration}s peak={peak:.3f}')
 
-        print('Playing back...')
-        sd.play(audio, sr)
-        sd.wait()
+        # print('Playing back...')
+        # sd.play(audio, sr)
+        # sd.wait()
 
         resp = input('Accept? [y]es / [n]o (retry) / [q]uit: ').strip().lower()
         if resp == 'y':
@@ -257,8 +257,7 @@ def write_debug_log(path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs
     n_fallback = sum(1 for s in sources if s == 'fallback')
     lines.append('')
     lines.append(
-        f'=== Postproc source summary: '
-        f'unchanged={n_unchanged}  window_swap={n_swap}  fallback={n_fallback} ==='
+        f'=== Postproc source summary: unchanged={n_unchanged}  window_swap={n_swap}  fallback={n_fallback} ==='
     )
 
     d_raw = difficulty_score(raw_tabs)
@@ -271,9 +270,7 @@ def write_debug_log(path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs
     sorted_notes = sorted(piece['notes'], key=lambda n: (n['start'], n['pitch']))
     note_to_idx = {id(n): i for i, n in enumerate(sorted_notes)}
 
-    swap_or_fallback = [
-        (i, sources[i]) for i in range(len(sources)) if sources[i] != 'unchanged'
-    ]
+    swap_or_fallback = [(i, sources[i]) for i in range(len(sources)) if sources[i] != 'unchanged']
     if swap_or_fallback:
         lines.append('')
         lines.append('=== Per-note postproc actions (only entries the postproc touched) ===')
@@ -414,7 +411,9 @@ def main():
     tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
     piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo)
     t0 = time.time()
-    tabs, raw_tabs, enc_subseqs, dec_subseqs, sources = stage2(piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs)
+    tabs, raw_tabs, enc_subseqs, dec_subseqs, sources = stage2(
+        piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs
+    )
     print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
 
     # 4) Debug log
@@ -459,8 +458,8 @@ def main():
     print(f'Wrote: {pdf_path}')
 
     print(f'\nDone! Outputs in {out_dir}/')
-    print('\n--- ASCII tab preview (first 12 lines) ---')
-    print('\n'.join(ascii_tab.split('\n')[:12]))
+    print('\n--- ASCII tab preview (first 13 lines) ---')
+    print('\n'.join(ascii_tab.split('\n')[:13]))
 
 
 if __name__ == '__main__':

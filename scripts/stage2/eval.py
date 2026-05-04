@@ -4,7 +4,7 @@ Computes pitch_acc and tab_acc, both raw (model output) and post-processed (pape
 ±5 neighbor correction → first viable fallback), per source, on val (and optionally test).
 
 Single checkpoint:
-  python scripts/stage2/eval.py --checkpoint runs/stage2_001/step_0030000_final.pth
+  python scripts/stage2/eval.py --checkpoint runs/stage2_001/step_0060000_final.pth
 
 All checkpoints in a directory:
   python scripts/stage2/eval.py --checkpoint-dir runs/stage2_001/
