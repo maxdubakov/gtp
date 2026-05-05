@@ -217,6 +217,70 @@ def obtain_pitch_candidates(observed_pitch: float, f0_model: np.ndarray) -> list
 
 
 # ---------------------------------------------------------------------------
+# Bayesian classifier (MATLAB step 2)
+# ---------------------------------------------------------------------------
+
+
+def compute_class_priors(sim: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Per-class Gaussian prior on (f0, beta).
+
+    For each (sim_row, fret) class, fit a 2D Gaussian to the n_realizations
+    Monte Carlo samples. Returns:
+      mu:    shape (6, 13, 2) - class means [mu_f0, mu_beta]
+      sigma: shape (6, 13, 2, 2) - class covariance matrices
+
+    Mirrors MATLAB's `model.mu(:,kk)` and `model.Sigma(:,:,kk)` from
+    recreate_plucking_experiment_WASPAA19.m.
+    """
+    f0_all = sim['f0']      # (6, 13, n_realizations)
+    beta_all = sim['beta']  # (6, 13, n_realizations)
+
+    mu = np.zeros((N_STRINGS, N_FRETS, 2))
+    sigma = np.zeros((N_STRINGS, N_FRETS, 2, 2))
+    for s in range(N_STRINGS):
+        for f in range(N_FRETS):
+            X = np.vstack([f0_all[s, f, :], beta_all[s, f, :]])  # (2, N)
+            mu[s, f] = X.mean(axis=1)
+            sigma[s, f] = np.cov(X)
+    return mu, sigma
+
+
+def bayesian_classify(phi: np.ndarray, candidates: list[tuple[int, int]],
+                      mu: np.ndarray, sigma: np.ndarray) -> tuple[int, int]:
+    """MATLAB's Bayesian classifier (uniform prior).
+
+    For each candidate's Gaussian (mu, Sigma), compute the discriminant
+        J = -log|Sigma| - mu^T Sigma^-1 mu + 2 phi^T Sigma^-1 mu - phi^T Sigma^-1 phi
+    and return the (sim_row, fret) of the winning candidate. The 2*log(P) term
+    is dropped since the prior is uniform across candidates (cancels in argmax).
+
+    Equivalent to maximising the log-likelihood of phi under each candidate's
+    Gaussian, with sign-flipped quadratic-form expansion:
+        log p(phi | class) = -0.5 (phi - mu)^T Sigma^-1 (phi - mu) - 0.5 log|Sigma| + const.
+
+    Mirror of the inner classifier loop at lines 195-198 of
+    recreate_plucking_experiment_WASPAA19.m.
+    """
+    best_J = -np.inf
+    best = candidates[0]
+    for s_idx, f_idx in candidates:
+        Sigma = sigma[s_idx, f_idx]
+        Sigma_inv = np.linalg.inv(Sigma)
+        det = np.linalg.det(Sigma)
+        if det <= 0:
+            continue  # numerically degenerate — skip
+        m = mu[s_idx, f_idx]
+        J = (-np.log(det)
+             - m @ Sigma_inv @ m
+             + 2 * phi @ Sigma_inv @ m
+             - phi @ Sigma_inv @ phi)
+        if best_J < J:
+            best_J = J
+            best = (s_idx, f_idx)
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Diagnostic
 # ---------------------------------------------------------------------------
 

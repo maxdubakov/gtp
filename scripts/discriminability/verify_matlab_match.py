@@ -37,7 +37,12 @@ from inharmonicity import (
     hilbert_transform,
     inharmonic_summation,
 )
-from physical_model import obtain_pitch_candidates, simulate_features
+from physical_model import (
+    bayesian_classify,
+    compute_class_priors,
+    obtain_pitch_candidates,
+    simulate_features,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIO = (REPO_ROOT / 'physical_models_for_fast_estimation_guitar_string_fret_and_plucking_position-master'
@@ -138,11 +143,22 @@ def load_matlab_grids(path: Path) -> dict:
 
 def estimate_with_class_grids(
     audio: np.ndarray, fs: int, onset_seconds: float, sim: dict,
+    mu: np.ndarray | None = None, sigma: np.ndarray | None = None,
 ) -> tuple[float, float, int, int]:
     """Faithful MATLAB-style estimator: candidate-driven inharmonic summation
-    with per-class β grids. Returns (β, f₀, string_idx, fret_idx).
+    with per-class β grids, then (optional) Bayesian classification.
 
-    String index follows MATLAB's `w0Model` row convention: 0 = low E.
+    Returns (β, f₀, string_idx, fret_idx). String index follows MATLAB's
+    `w0Model` row convention (0 = low E).
+
+    Steps (mirror recreate_plucking_experiment_WASPAA19.m):
+      1. Initial f₀ via harmonic summation (β=0).
+      2. Run inharmonic_summation per candidate; pick max-cost candidate's
+         (f₀, β) as the feature φ — this is the "extracted" estimate.
+      3. (If `mu` and `sigma` provided) Apply Bayesian classification with φ:
+         pick the candidate whose Gaussian prior maximizes the discriminant.
+         The (β, f₀) values returned remain those from step 2 — only the
+         (string_idx, fret_idx) gets re-routed by the classifier.
     """
     padded = np.concatenate([np.zeros(PREPEND_ZEROS), audio]) if PREPEND_ZEROS else audio
     onset_sample = int(np.floor(onset_seconds * fs))
@@ -162,16 +178,21 @@ def estimate_with_class_grids(
     for s_idx, f_idx in candidates:
         b_min = sim['beta_min'][s_idx, f_idx]
         b_max = sim['beta_max'][s_idx, f_idx]
-        # Match MATLAB's `start:step:stop`: includes start, then start+step, ...,
-        # up to the LAST FULL STEP ≤ stop. Compute n explicitly to avoid
-        # np.arange's float-precision quirks at the upper bound.
         n_steps = int(np.floor((b_max - b_min) / BETA_RES + 1e-12)) if b_max > b_min else 0
         beta_grid = b_min + np.arange(n_steps + 1) * BETA_RES
         f0_est, beta_est, cost = inharmonic_summation(X, f0_initial, M, fs, beta_grid, N_FFT)
         if cost > best[0]:
             best = (cost, f0_est, beta_est, s_idx, f_idx)
 
-    return best[2], best[1], best[3], best[4]
+    f0_phi, beta_phi, max_cost_s, max_cost_f = best[1], best[2], best[3], best[4]
+
+    if mu is not None and sigma is not None:
+        # MATLAB step 2: Bayesian classifier on phi = [f0, beta]
+        phi = np.array([f0_phi, beta_phi])
+        s_bayes, f_bayes = bayesian_classify(phi, candidates, mu, sigma)
+        return beta_phi, f0_phi, s_bayes, f_bayes
+
+    return beta_phi, f0_phi, max_cost_s, max_cost_f
 
 
 def main():
@@ -179,6 +200,10 @@ def main():
     ap.add_argument('--grids', choices=['matlab', 'python'], default='matlab',
                     help='matlab: load MATLAB-dumped class bounds (bit-exact match); '
                          'python: run our own Monte Carlo (validates simulation port)')
+    ap.add_argument('--classifier', choices=['max-cost', 'bayesian'], default='bayesian',
+                    help='max-cost: pick candidate with highest inharmonic_summation cost. '
+                         'bayesian: apply MATLAB step 2 (Gaussian discriminant on extracted φ). '
+                         'On the bundled MATLAB test recording, both should agree with MATLAB.')
     args = ap.parse_args()
 
     print(f'Loading audio: {AUDIO.relative_to(REPO_ROOT)}')
@@ -202,6 +227,20 @@ def main():
     print(f'  f₀ range: [{sim["f0_mean"].min():.1f}, {sim["f0_mean"].max():.1f}] Hz')
     print(f'  β range:  [{sim["beta_min"].min():.2e}, {sim["beta_max"].max():.2e}]')
 
+    print(f'Classifier: {args.classifier}')
+    if args.classifier == 'bayesian':
+        # Bayesian step needs full per-realization samples (for cov). MATLAB-loaded
+        # grids only give us bounds, not samples — so we always compute (mu, sigma)
+        # from the Python Monte Carlo here.
+        if 'f0' not in sim or 'beta' not in sim:
+            print('  [info] computing class priors from Python Monte Carlo for Bayesian step...')
+            sim_for_priors = simulate_features(n_realizations=N_REALIZATIONS, seed=0)
+        else:
+            sim_for_priors = sim
+        mu, sigma = compute_class_priors(sim_for_priors)
+    else:
+        mu, sigma = None, None
+
     print('\nPer-segment comparison:')
     print(f'  {"#":>3} | MATLAB: {"str":>3} {"fret":>4} {"β":>11} | '
           f'Python: {"str":>3} {"fret":>4} {"β":>11} | {"Δβ%":>6} {"class match":>11}')
@@ -212,7 +251,7 @@ def main():
     n_class_match = 0
 
     for onset, row in zip(onsets, matlab_rows, strict=True):
-        beta_py, _f0_py, s_idx, f_idx = estimate_with_class_grids(audio, fs, onset, sim)
+        beta_py, _f0_py, s_idx, f_idx = estimate_with_class_grids(audio, fs, onset, sim, mu, sigma)
         # Convert Python's 0-indexed string to MATLAB's 1-indexed
         py_string = s_idx + 1 if s_idx >= 0 else -1
         py_fret = f_idx if f_idx >= 0 else -1
