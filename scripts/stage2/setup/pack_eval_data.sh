@@ -33,7 +33,7 @@ done
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT" \
     data/stage2_aug/val.jsonl \
     data/stage2_aug/test.jsonl \
-    runs/stage2_001/
+    runs/stage2_001/step_0060000.pth
 
 ls -lh "$OUT"
 echo "Eval data packed: $OUT"

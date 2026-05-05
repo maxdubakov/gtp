@@ -10,6 +10,12 @@ Reads the enriched.jsonl produced by enrich_errors.py and reports:
   * Top (true -> pred) confusion patterns.
   * Per-piece error-rate distribution + outlier pieces.
   * Local-context correlations (interval_from_prev, prev_string_dist, ...)
+  * Per-piece drift signature: bucket pieces by whether the model's errors
+    are dominated by a single consistent (Δstring, Δfret) shift.
+  * Tab-equivalent accuracy: tab_strict + notes whose error matches their
+    piece's modal drift — captures "model picked a valid alternate fingering
+    consistently throughout the piece".
+  * Drift-pattern histogram across consistent-alternate pieces.
 
 Output:
   Print a human-readable report and save aggregates to <output>/summary.json.
@@ -122,6 +128,76 @@ def bucket_fret(f):
 # ---------------------------------------------------------------------------
 # Per-piece outlier finder
 # ---------------------------------------------------------------------------
+
+
+def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
+    """Per-piece (Δstring_pp, Δfret_pp) drift signature.
+
+    For each piece with ≥ min_notes notes, compute:
+      * correct_rate: fraction of notes where pred == true (drift = (0, 0)).
+      * modal_drift: most common non-zero (Δstring, Δfret) among ERROR notes.
+      * error_consistency: fraction of error notes that share modal_drift.
+      * bucket:
+          'perfect'        - correct_rate >= 0.95.
+          'consistent_alt' - error_consistency >= 0.80.
+          'partial_alt'    - 0.50 <= error_consistency < 0.80.
+          'inconsistent'   - everything else.
+
+    Pieces with neither drift signal nor enough correct notes go to 'inconsistent'.
+    """
+    by_piece: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_piece[r['piece_id']].append(r)
+
+    out = []
+    for pid, items in by_piece.items():
+        if len(items) < min_notes:
+            continue
+        n = len(items)
+        n_correct = sum(1 for r in items if r['error_type_pp'] == 'correct')
+        correct_rate = n_correct / n
+
+        drifts: Counter = Counter()
+        for r in items:
+            ds, df = r.get('delta_string_pp'), r.get('delta_fret_pp')
+            if ds is None or df is None or (ds, df) == (0, 0):
+                continue
+            drifts[(ds, df)] += 1
+
+        n_errors = sum(drifts.values())
+        if drifts:
+            modal_drift, n_modal = drifts.most_common(1)[0]
+            error_consistency = n_modal / n_errors
+        else:
+            modal_drift, n_modal, error_consistency = None, 0, 0.0
+
+        if correct_rate >= 0.95:
+            bucket = 'perfect'
+        elif error_consistency >= 0.80:
+            bucket = 'consistent_alt'
+        elif error_consistency >= 0.50:
+            bucket = 'partial_alt'
+        else:
+            bucket = 'inconsistent'
+
+        sample = items[0]
+        out.append({
+            'piece_id': pid,
+            'source': sample.get('source'),
+            'genre_coarse': sample.get('genre_coarse'),
+            'gs_style': sample.get('gs_style'),
+            'tempo': sample.get('tempo'),
+            'capo': sample.get('capo'),
+            'n': n,
+            'n_correct': n_correct,
+            'correct_rate': correct_rate,
+            'n_errors': n_errors,
+            'modal_drift': modal_drift,
+            'n_modal_drift': n_modal,
+            'error_consistency': error_consistency,
+            'bucket': bucket,
+        })
+    return out
 
 
 def per_piece_stats(records: list[dict]) -> list[dict]:
@@ -288,11 +364,78 @@ def main():
               f'p90={np.percentile(err_rates, 90):.2%}  '
               f'max={max(err_rates):.2%}')
 
+    # ---- Per-piece drift signature ----
+    drifts = per_piece_drift(records)
+    bucket_order = ['perfect', 'consistent_alt', 'partial_alt', 'inconsistent']
+    print(f'\nPer-piece drift signature (pieces with ≥20 notes, n={len(drifts)}):')
+    print(f'  {"bucket":<18s} {"#pieces":>8s} {"%pieces":>8s} '
+          f'{"#notes":>10s} {"%notes":>8s}')
+    total_p = max(len(drifts), 1)
+    total_n_drift_pieces = max(sum(d['n'] for d in drifts), 1)
+    bucket_counts = {b: 0 for b in bucket_order}
+    bucket_notes = {b: 0 for b in bucket_order}
+    for d in drifts:
+        bucket_counts[d['bucket']] += 1
+        bucket_notes[d['bucket']] += d['n']
+    for b in bucket_order:
+        print(f'  {b:<18s} {bucket_counts[b]:>8d} '
+              f'{100 * bucket_counts[b] / total_p:>7.1f}% '
+              f'{bucket_notes[b]:>10,d} '
+              f'{100 * bucket_notes[b] / total_n_drift_pieces:>7.1f}%')
+
+    # ---- Tab-equivalent accuracy ----
+    # A note is "equivalent-correct" if it's strictly correct OR if its drift
+    # matches its piece's modal drift (i.e., the model committed to a single
+    # consistent alternate fingering for the whole piece).
+    piece_modal: dict[str, tuple[int, int] | None] = {
+        d['piece_id']: d['modal_drift'] for d in drifts
+    }
+    n_strict = sum(1 for r in records if r['error_type_pp'] == 'correct')
+    n_alt = 0
+    for r in records:
+        if r['error_type_pp'] == 'correct':
+            continue
+        md = piece_modal.get(r['piece_id'])
+        if md is None:
+            continue
+        ds, df = r.get('delta_string_pp'), r.get('delta_fret_pp')
+        if ds is None or df is None:
+            continue
+        if (ds, df) == md:
+            n_alt += 1
+
+    tab_equivalent = (n_strict + n_alt) / n if n else 0
+    print('\nTab accuracy variants:')
+    print(f'  tab_strict (exact (s,f) match):    {n_strict:>10,d} / {n:,} = {n_strict / n:.4f}')
+    print(f'  tab_equivalent (+ piece-modal drift): '
+          f'{n_strict + n_alt:>7,d} / {n:,} = {tab_equivalent:.4f}')
+    print(f'  recovered by accepting consistent alt fingerings: '
+          f'+{n_alt:,} notes ({100 * n_alt / n:+.2f}pp)')
+
+    # ---- Drift-pattern histogram across consistent_alt pieces ----
+    ca_drift_notes: Counter = Counter()
+    ca_drift_pieces: Counter = Counter()
+    for d in drifts:
+        if d['bucket'] != 'consistent_alt' or d['modal_drift'] is None:
+            continue
+        ca_drift_notes[d['modal_drift']] += d['n_modal_drift']
+        ca_drift_pieces[d['modal_drift']] += 1
+
+    if ca_drift_pieces:
+        print(f'\nDominant drifts in consistent_alt pieces '
+              f'(n={bucket_counts["consistent_alt"]} pieces):')
+        print(f'  {"(Δstring, Δfret)":>16s} {"# notes":>10s} {"# pieces":>9s}')
+        for drift, notes in ca_drift_notes.most_common(15):
+            print(f'  {str(drift):>16s} {notes:>10,d} {ca_drift_pieces[drift]:>9d}')
+
     # ---- Save summary JSON ----
     summary = {
         'overall': {'n': n, 'tab_raw': raw_acc, 'tab_pp': pp_acc,
                     'pitch_raw': n_pitch_correct_raw / n if n else 0,
-                    'pitch_pp': n_pitch_correct_pp / n if n else 0},
+                    'pitch_pp': n_pitch_correct_pp / n if n else 0,
+                    'tab_strict': n_strict / n if n else 0,
+                    'tab_equivalent': tab_equivalent,
+                    'recovered_by_alt': n_alt},
         'error_type_distribution_raw': dict(err_raw_dist),
         'error_type_distribution_pp': dict(err_pp_dist),
         'top_confusions_pp': [
@@ -300,6 +443,16 @@ def main():
             for (t, p), c in confusion.most_common(50)
         ],
         'piece_outliers': [ps for ps in piece_stats if ps['n'] >= 20][:30],
+        'piece_drift_buckets': {
+            b: {'n_pieces': bucket_counts[b], 'n_notes': bucket_notes[b]}
+            for b in bucket_order
+        },
+        'consistent_alt_drift_histogram': [
+            {'drift': list(drift), 'n_notes': n_notes,
+             'n_pieces': ca_drift_pieces[drift]}
+            for drift, n_notes in ca_drift_notes.most_common(50)
+        ],
+        'piece_drift_signatures': drifts,
     }
     out_path = out_dir / 'summary.json'
     out_path.write_text(json.dumps(summary, indent=2, default=str))

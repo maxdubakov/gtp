@@ -111,7 +111,7 @@ def auto_device():
     return 'cpu'
 
 
-def evaluate_split(model, loader, device):
+def evaluate_split(model, loader, device, fallback='first_viable'):
     """Run one split and return per-source counts.
 
     Returns dict {source: {n_input_notes, tab_correct_raw, tab_correct_pp,
@@ -175,7 +175,7 @@ def evaluate_split(model, loader, device):
                 # If they differ, use the shorter (defensive).
                 n = min(len(input_pitches), len(gt_tabs))
 
-                corrected_tabs = correct_tabs(input_pitches[:n], pred_tabs, tuning)
+                corrected_tabs = correct_tabs(input_pitches[:n], pred_tabs, tuning, fallback=fallback)
 
                 m = metrics[src]
                 m['n_input_notes'] += n
@@ -323,6 +323,12 @@ def main():
     ap.add_argument('--batch-size', type=int, default=32)
     ap.add_argument('--num-workers', type=int, default=0)
     ap.add_argument('--output', default=None, help='Optional JSON path to save aggregated results')
+    ap.add_argument(
+        '--fallback', choices=['first_viable', 'nearest_viable'], default='first_viable',
+        help='Post-processing fallback strategy when no model tab in ±window matches the '
+             'input pitch. first_viable = paper-faithful (high-string-first lowest-fret). '
+             'nearest_viable = deviation: Manhattan-nearest realization to the model raw output.',
+    )
     args = ap.parse_args()
 
     device = args.device or auto_device()
@@ -371,13 +377,14 @@ def main():
 
         record = {'checkpoint': str(path), 'label': label, 'step': step, 'splits': {}}
 
-        val_metrics = evaluate_split(model, val_loader, device)
+        val_metrics = evaluate_split(model, val_loader, device, fallback=args.fallback)
         val_rows = aggregate(val_metrics)
         print_metrics('val', val_rows)
         record['splits']['val'] = val_rows
+        record['fallback'] = args.fallback
 
         if test_loader is not None:
-            test_metrics = evaluate_split(model, test_loader, device)
+            test_metrics = evaluate_split(model, test_loader, device, fallback=args.fallback)
             test_rows = aggregate(test_metrics)
             print_metrics('test', test_rows)
             record['splits']['test'] = test_rows

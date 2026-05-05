@@ -109,7 +109,7 @@ def notes_to_piece(note_events, tuning, capo, tempo):
     return {'tuning': tuning, 'tempo': tempo, 'capo': capo, 'notes': notes}
 
 
-def stage2(piece, checkpoint, device, anchor_tabs=None):
+def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable'):
     """Returns (corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources).
 
     If `anchor_tabs` is provided (list of (string, fret) for the first N notes),
@@ -118,6 +118,9 @@ def stage2(piece, checkpoint, device, anchor_tabs=None):
 
     `sources` is a parallel list to `corrected_tabs` with values
     'unchanged' / 'window_swap' / 'fallback' — see correct_tabs for meanings.
+
+    `fallback` selects the post-processing fallback strategy: 'first_viable'
+    (paper-faithful) or 'nearest_viable' (deviation; Manhattan-nearest to raw).
     """
     print('Stage 2: notes → tabs...')
     model, iteration = load_checkpoint(str(checkpoint), device)
@@ -133,7 +136,9 @@ def stage2(piece, checkpoint, device, anchor_tabs=None):
 
     sorted_notes = sorted(piece['notes'], key=lambda x: (x['start'], x['pitch']))
     input_pitches = [n['pitch'] for n in sorted_notes]
-    corrected_tabs, sources = correct_tabs(input_pitches, raw_tabs, piece['tuning'], return_sources=True)
+    corrected_tabs, sources = correct_tabs(
+        input_pitches, raw_tabs, piece['tuning'], return_sources=True, fallback=fallback,
+    )
 
     n_unchanged = sum(1 for s in sources if s == 'unchanged')
     n_swap = sum(1 for s in sources if s == 'window_swap')
@@ -368,6 +373,11 @@ def main():
         default=0,
         help='Top-K alternatives at each generation step → .alternatives.txt',
     )
+    ap.add_argument(
+        '--fallback', choices=['first_viable', 'nearest_viable'], default='first_viable',
+        help='Post-processing fallback strategy. first_viable = paper-faithful. '
+             'nearest_viable = deviation: Manhattan-nearest realization to model raw output.',
+    )
     args = ap.parse_args()
 
     anchor_tabs = None
@@ -412,7 +422,7 @@ def main():
     piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo)
     t0 = time.time()
     tabs, raw_tabs, enc_subseqs, dec_subseqs, sources = stage2(
-        piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs
+        piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs, fallback=args.fallback
     )
     print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
 

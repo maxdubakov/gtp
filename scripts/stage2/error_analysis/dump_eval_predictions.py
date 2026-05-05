@@ -193,12 +193,15 @@ def prepare_piece(piece: dict, max_seq_len: int) -> dict:
 
 
 def finalize_piece(prep: dict, raw_subseq_outputs: list[list[int]],
-                   is_augmented: bool) -> tuple[dict, list[dict]]:
+                   is_augmented: bool,
+                   fallback: str = 'first_viable') -> tuple[dict, list[dict]]:
     """Given a prepared piece and its raw decoder outputs (per sub-sequence),
     extract tabs, post-process, and build the per-note records + piece meta.
 
     `is_augmented` is propagated into piece_meta and into every note record so
     downstream slicing can distinguish original-vs-augmented predictions.
+    `fallback` selects the pp fallback strategy: 'first_viable' (paper) or
+    'nearest_viable' (deviation; Manhattan-nearest to model raw output).
     """
     piece = prep['piece']
     notes_sorted = prep['notes_sorted']
@@ -211,7 +214,7 @@ def finalize_piece(prep: dict, raw_subseq_outputs: list[list[int]],
 
     input_pitches = prep['input_pitches']
     pp_tabs, pp_sources = correct_tabs(
-        input_pitches, raw_tabs, piece['tuning'], return_sources=True,
+        input_pitches, raw_tabs, piece['tuning'], return_sources=True, fallback=fallback,
     )
 
     # Counters for the piece-level summary
@@ -316,6 +319,10 @@ def main():
                     help='How many pieces to tokenize before each batched-generate pass. '
                          'Pieces are post-processed and written incrementally per chunk so '
                          'memory stays bounded.')
+    ap.add_argument('--fallback', choices=['first_viable', 'nearest_viable'],
+                    default='first_viable',
+                    help='Post-processing fallback strategy. first_viable = paper-faithful. '
+                         'nearest_viable = deviation: Manhattan-nearest realization to model raw output.')
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -420,7 +427,7 @@ def main():
                     else:
                         orig_capo = original_capo.get((src, fname))
                         is_aug = (orig_capo is None) or (piece.get('capo', 0) != orig_capo)
-                    meta, note_records = finalize_piece(prep, raw_outs, is_aug)
+                    meta, note_records = finalize_piece(prep, raw_outs, is_aug, fallback=args.fallback)
                     meta['split'] = split
                     pf.write(json.dumps(meta) + '\n')
                     for r in note_records:
