@@ -372,6 +372,27 @@ def find_checkpoints(path):
     raise FileNotFoundError(f'Not a file or directory: {path}')
 
 
+def subsample_evenly(items, n):
+    """Pick `n` evenly-spaced items from a sorted list. Always includes first + last.
+
+    Useful for trajectory plotting when you don't want to evaluate every saved
+    checkpoint. Returns the full list unchanged if `n` is None or len <= n.
+    """
+    if n is None or len(items) <= n:
+        return items
+    if n <= 1:
+        return [items[-1]]
+    # round() biases the indices to be roughly equally spaced; first and last are always included.
+    indices = [round(i * (len(items) - 1) / (n - 1)) for i in range(n)]
+    # Dedupe in case of rounding collisions for tight n.
+    seen, out = set(), []
+    for i in indices:
+        if i not in seen:
+            seen.add(i)
+            out.append(items[i])
+    return out
+
+
 def load_checkpoint(path, device):
     """Load checkpoint + matching Vocabulary. Returns (model, vocab, iteration)."""
     from gtp.stage2.config import RunConfig, find_run_config
@@ -415,6 +436,14 @@ def main():
         'input pitch. first_viable = paper-faithful (high-string-first lowest-fret). '
         'nearest_viable = deviation: Manhattan-nearest realization to the model raw output.',
     )
+    ap.add_argument(
+        '--max-checkpoints',
+        type=int,
+        default=None,
+        help='Sample N evenly-spaced checkpoints from --checkpoint-dir (always includes '
+             'first + last). Useful for trajectory eval without paying for every saved '
+             'checkpoint. Default: eval all.',
+    )
     args = ap.parse_args()
 
     device = args.device or auto_device()
@@ -425,6 +454,10 @@ def main():
     # (same training run). Falls back to no-genre vocab if no config.json.
     # find_run_config handles both layouts (checkpoints/ subdir or flat).
     ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
+    n_total = len(ckpts)
+    ckpts = subsample_evenly(ckpts, args.max_checkpoints)
+    if len(ckpts) < n_total:
+        info(f'Sampling {len(ckpts)} of {n_total} checkpoints (--max-checkpoints={args.max_checkpoints})')
     info(f'Evaluating {len(ckpts)} checkpoint(s)')
     config_path = find_run_config(ckpts[0][1])
     include_genre = False

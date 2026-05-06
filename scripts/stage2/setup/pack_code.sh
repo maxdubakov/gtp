@@ -10,6 +10,7 @@
 #   2. tar xzf code_stage2.tar.gz
 #   3. pip install -r requirements.txt && pip install -e .
 #   3.1 or pip install torch==2.6.0 torchaudio==2.6.0 transformers numpy scipy librosa pretty_midi pyguitarpro jams soundfile mido pyfluidsynth
+#   3.2 bump ulimit: "ulimit -n 65536"
 #   4. tar xzf data_stage2.tar.gz
 #   5. python scripts/stage2/build_aug_dataset.py
 #   6. python scripts/stage2/train.py --device cuda --num-workers 4 --batch-size 32
