@@ -128,26 +128,32 @@ class TabDataset(Dataset):
             self.pieces = pieces
             self._index = []
             self._sources = []
+            self._genres = []
             self._piece_ids = []
             for pi, piece in enumerate(pieces):
                 n = piece.get('num_subseqs')
                 if n is None:
                     n = len(tokenize_piece(piece, vocab, max_seq_len=max_seq_len))
                 pid = _piece_id(piece)
+                genre = piece.get('genre', 'unknown')
                 for si in range(n):
                     self._index.append((pi, si))
                     self._sources.append(piece['source'])
+                    self._genres.append(genre)
                     self._piece_ids.append(pid)
         else:
             # Pre-tokenize and cache; pieces no longer needed.
             self.sequences = []
             self._sources = []
+            self._genres = []
             self._piece_ids = []
             for piece in pieces:
                 seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
                 pid = _piece_id(piece)
+                genre = piece.get('genre', 'unknown')
                 self.sequences.extend(seqs)
                 self._sources.extend([piece['source']] * len(seqs))
+                self._genres.extend([genre] * len(seqs))
                 self._piece_ids.extend([pid] * len(seqs))
 
     def __len__(self):
@@ -178,6 +184,26 @@ class TabDataset(Dataset):
     def _pad(self, ids):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))
         return torch.tensor(padded[: self.max_seq_len], dtype=torch.long)
+
+
+def compute_sampling_weights(
+    sources: list[str],
+    genres: list[str],
+    source_weights: dict[str, float],
+    genre_weights: dict[str, float],
+) -> list[float]:
+    """Per-sample weight = source_weights[src] * genre_weights[genre].
+
+    Both weight dicts default to 1.0 for any key not present. Used to feed
+    `torch.utils.data.WeightedRandomSampler` for per-source / per-genre
+    upsampling of the training mix.
+    """
+    if len(sources) != len(genres):
+        raise ValueError(f'sources/genres length mismatch: {len(sources)} vs {len(genres)}')
+    return [
+        source_weights.get(src, 1.0) * genre_weights.get(g, 1.0)
+        for src, g in zip(sources, genres, strict=True)
+    ]
 
 
 def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_train=True,

@@ -16,14 +16,14 @@ import argparse
 import json
 import os
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import Adafactor
 
 from gtp import REPO_ROOT
@@ -39,7 +39,7 @@ from gtp.stage2.config import (
     get_git_sha,
     get_timestamp,
 )
-from gtp.stage2.data import build_datasets
+from gtp.stage2.data import build_datasets, compute_sampling_weights
 from gtp.stage2.model import build_model
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
@@ -54,6 +54,25 @@ from gtp.stage2.tokenizer import (
 )
 
 DEFAULT_OUTPUT_DIR = os.path.join(REPO_ROOT, 'runs', 'stage2_001')
+
+# Rebalancing recipe motivated by the baseline error analysis (see README §Stage 2):
+#   * GuitarSet val_loss was ~10× DadaGP — biggest target → 8× upsample
+#   * Leduc val_loss was ~2× DadaGP — moderate target → 5× upsample
+#   * DadaGP and GuitarToday are already well-served at 1×
+#   * Within DadaGP, classical/jazz/blues/country had 73-78% pp accuracy (worst
+#     coarse buckets) — boost by 1.5×. Other genres stay at 1×.
+DEFAULT_REBALANCE_SOURCE = {
+    'dadagp': 1.0,
+    'guitarset': 8.0,
+    'leduc': 5.0,
+    'guitartoday': 1.0,
+}
+DEFAULT_REBALANCE_GENRE = {
+    'classical': 1.5,
+    'jazz': 1.5,
+    'blues': 1.5,
+    'country': 1.5,
+}
 
 
 def auto_device():
@@ -244,15 +263,31 @@ def main():
         '--experiment-label', default='', help='Free-form label saved to config.json for run comparison'
     )
     parser.add_argument('--notes', default='', help='Free-form notes saved to config.json')
-    parser.add_argument('--genre-conditioning', action='store_true',
-                        help='Add GENRE<X> token to the encoder prefix and grow vocab '
-                             'from 553 to 567 tokens. Off by default (preserves baseline). '
-                             'Old checkpoints cannot be resumed under this flag — embedding '
-                             'dims differ.')
-    parser.add_argument('--genre-dropout', type=float, default=0.15,
-                        help="Probability of replacing GENRE<X> with GENRE<unknown> during "
-                             'training (classifier-free guidance). Only active when '
-                             '--genre-conditioning is set.')
+    parser.add_argument(
+        '--genre-conditioning',
+        action='store_true',
+        help='Add GENRE<X> token to the encoder prefix and grow vocab '
+        'from 553 to 567 tokens. Off by default (preserves baseline). '
+        'Old checkpoints cannot be resumed under this flag — embedding '
+        'dims differ.',
+    )
+    parser.add_argument(
+        '--genre-dropout',
+        type=float,
+        default=0.15,
+        help='Probability of replacing GENRE<X> with GENRE<unknown> during '
+        'training (classifier-free guidance). Only active when '
+        '--genre-conditioning is set.',
+    )
+    parser.add_argument(
+        '--rebalance',
+        action='store_true',
+        help='Use WeightedRandomSampler with default per-source / per-genre '
+        'upsampling (see DEFAULT_REBALANCE_* constants). Targets the '
+        'imbalance identified in the baseline error analysis: GuitarSet '
+        '8x, Leduc 5x, plus 1.5x for under-performing DadaGP genres '
+        '(classical/jazz/blues/country).',
+    )
     args = parser.parse_args()
 
     device = args.device or auto_device()
@@ -269,8 +304,7 @@ def main():
     # module-level VOCAB global.
     vocab = Vocabulary(include_genre=args.genre_conditioning)
     if args.genre_conditioning:
-        info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. '
-              f'Genre dropout: {args.genre_dropout}')
+        info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. Genre dropout: {args.genre_dropout}')
 
     # DataLoader workers exchange tensor data with the main process via OS resources.
     # Default 'file_descriptor' uses /dev/shm + fd passing — on RunPod / Docker this
@@ -295,10 +329,34 @@ def main():
     # raise without re-introducing the FD-exhaustion crash.
     persistent = args.num_workers > 0
     prefetch = 4 if args.num_workers > 0 else None
+
+    # Rebalancing: build a WeightedRandomSampler if --rebalance, else plain shuffle.
+    train_sampler = None
+    if args.rebalance:
+        weights = compute_sampling_weights(
+            train_ds._sources,
+            train_ds._genres,
+            DEFAULT_REBALANCE_SOURCE,
+            DEFAULT_REBALANCE_GENRE,
+        )
+        train_sampler = WeightedRandomSampler(
+            weights,
+            num_samples=len(train_ds),
+            replacement=True,
+        )
+        # Print expected mix after rebalancing for quick eyeballing
+        src_counts = Counter(train_ds._sources)
+        eff_src = {s: src_counts[s] * DEFAULT_REBALANCE_SOURCE.get(s, 1.0) for s in src_counts}
+        eff_total = sum(eff_src.values())
+        info('Rebalancing enabled. Effective per-source mix:')
+        for s, w in sorted(eff_src.items(), key=lambda kv: -kv[1]):
+            info(f'  {s:<14s} {100 * w / eff_total:>5.1f}% (raw {100 * src_counts[s] / len(train_ds):>5.1f}%)')
+
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         drop_last=True,
@@ -357,7 +415,11 @@ def main():
             genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
             source=False,  # SOURCE conditioning intentionally off (leakage path)
         ),
-        rebalancing=RebalancingConfig(),  # default: no rebalancing yet
+        rebalancing=RebalancingConfig(
+            enabled=args.rebalance,
+            source_weights=DEFAULT_REBALANCE_SOURCE if args.rebalance else {},
+            genre_weights=DEFAULT_REBALANCE_GENRE if args.rebalance else {},
+        ),
         device=device_info,
     )
     config_path = Path(args.output_dir) / 'config.json'
@@ -446,9 +508,7 @@ def main():
             # Persist structured eval to metrics.jsonl for compare_runs.py.
             # train_loss is averaged over the same step window the eval covers
             # (since previous eval), so it's directly comparable to val_loss.
-            train_loss_window = (
-                float(np.mean(losses_since_eval)) if losses_since_eval else None
-            )
+            train_loss_window = float(np.mean(losses_since_eval)) if losses_since_eval else None
             metrics_record = {
                 'step': step,
                 'train_loss_since_last_eval': train_loss_window,
