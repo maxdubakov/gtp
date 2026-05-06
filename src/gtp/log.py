@@ -8,8 +8,8 @@ Two entry points:
                         primarily in Stage 1 audio/MIDI pipelines. Toggled on
                         with `set_verbose(True)`.
 
-Both prepend an `[HH:MM:SS]` local-time tag so multi-hour training logs are
-greppable for "when did X happen".
+Both prepend a `[YYYY-MM-DD HH:MM:SS]` local-time tag so multi-day training
+logs are unambiguous and greppable for "when did X happen".
 """
 
 from datetime import datetime
@@ -29,8 +29,8 @@ def is_verbose() -> bool:
 
 
 def _ts() -> str:
-    """HH:MM:SS local-time stamp."""
-    return datetime.now().strftime('%H:%M:%S')
+    """YYYY-MM-DD HH:MM:SS local-time stamp."""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
 def info(msg: str) -> None:
