@@ -102,13 +102,15 @@ def parse_gp_track(gp_path, track_idx):
                 for note in beat.notes:
                     pitch = tuning[note.string - 1] + note.value
 
-                    notes.append({
-                        'pitch': pitch,
-                        'string': note.string,
-                        'fret': note.value,
-                        'start': round(start_sec, 4),
-                        'end': round(end_sec, 4),
-                    })
+                    notes.append(
+                        {
+                            'pitch': pitch,
+                            'string': note.string,
+                            'fret': note.value,
+                            'start': round(start_sec, 4),
+                            'end': round(end_sec, 4),
+                        }
+                    )
 
                 beat_tick += dur_ticks
 
@@ -165,14 +167,12 @@ def process_one(gp_rel_path, track_idx):
     with open(json_path, 'w') as f:
         json.dump(tab_data, f, indent=2)
 
-    midi = pretty_midi.PrettyMIDI(initial_tempo=result['tempo'])
+    midi = pretty_midi.PrettyMIDI(initial_tempo=result['tempo'] if result['tempo'] is not None else 120)
     guitar = pretty_midi.Instrument(program=25)
     for n in notes:
         if n['end'] <= n['start']:
             continue
-        guitar.notes.append(pretty_midi.Note(
-            velocity=80, pitch=n['pitch'],
-            start=n['start'], end=n['end']))
+        guitar.notes.append(pretty_midi.Note(velocity=80, pitch=n['pitch'], start=n['start'], end=n['end']))
     midi.instruments.append(guitar)
     midi.write(str(mid_path))
 
@@ -199,7 +199,7 @@ def main():
     if args.info:
         return
 
-    entries = unique_entries[:args.limit] if args.limit else unique_entries
+    entries = unique_entries[: args.limit] if args.limit else unique_entries
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     done = 0
@@ -222,8 +222,7 @@ def main():
             failed += 1
 
         if (i + 1) % 500 == 0:
-            print(f'  [{i+1:5d}/{len(entries)}] done={done} skip={skipped} '
-                  f'too_few={too_few} fail={failed}')
+            print(f'  [{i + 1:5d}/{len(entries)}] done={done} skip={skipped} too_few={too_few} fail={failed}')
 
     print('\n=== Summary ===')
     print(f'Processed: {done} ({total_notes:,} total notes)')
