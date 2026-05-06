@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader
 from transformers import Adafactor
 
 from gtp import REPO_ROOT
+from gtp.log import info
 from gtp.stage2.config import (
     ConditioningConfig,
     DataConfig,
@@ -257,9 +258,9 @@ def main():
     device = args.device or auto_device()
     device_info = get_device_info(device)
     if device_info.type == 'cuda' and device_info.cuda_name:
-        print(f'Device: {device} ({device_info.cuda_name}, {device_info.cuda_memory_gib} GiB)')
+        info(f'Device: {device} ({device_info.cuda_name}, {device_info.cuda_memory_gib} GiB)')
     else:
-        print(f'Device: {device}')
+        info(f'Device: {device}')
     torch.manual_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -268,7 +269,7 @@ def main():
     # module-level VOCAB global.
     vocab = Vocabulary(include_genre=args.genre_conditioning)
     if args.genre_conditioning:
-        print(f'Genre conditioning enabled. Vocab size: {len(vocab)}. '
+        info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. '
               f'Genre dropout: {args.genre_dropout}')
 
     # DataLoader workers exchange tensor data with the main process via OS resources.
@@ -277,13 +278,13 @@ def main():
     # uses tmpfile-based sharing instead, which is slower per transfer but stable.
     mp.set_sharing_strategy('file_system')
 
-    print('Building datasets...')
+    info('Building datasets...')
     train_ds, val_ds, _test_ds, _stats = build_datasets(
         vocab,
         datasets=args.datasets,
         genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
     )
-    print(f'  train sequences: {len(train_ds)}, val sequences: {len(val_ds)}')
+    info(f'  train sequences: {len(train_ds)}, val sequences: {len(val_ds)}')
 
     pin_memory = device == 'cuda'
     # persistent_workers keeps DataLoader workers alive across iterations to
@@ -308,10 +309,10 @@ def main():
         persistent_workers=persistent,
     )
 
-    print(f'Building model (vocab={len(vocab)})...')
+    info(f'Building model (vocab={len(vocab)})...')
     model = build_model(vocab).to(device)
     model.train()
-    print(f'  parameters: {sum(p.numel() for p in model.parameters()):,}')
+    info(f'  parameters: {sum(p.numel() for p in model.parameters()):,}')
 
     # Snapshot run config to <output_dir>/config.json. metrics.jsonl is appended
     # to per eval cycle below. compare_runs.py reads both for cross-run comparison.
@@ -355,7 +356,7 @@ def main():
     )
     config_path = Path(args.output_dir) / 'config.json'
     run_config.save(config_path)
-    print(f'  config: {config_path}')
+    info(f'  config: {config_path}')
     metrics_path = Path(args.output_dir) / 'metrics.jsonl'
 
     optimizer = Adafactor(
@@ -368,7 +369,7 @@ def main():
 
     step = 0
     if args.resume:
-        print(f'Resuming from {args.resume}')
+        info(f'Resuming from {args.resume}')
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
         meta = ckpt.get('tokenizer_meta', {})
         if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
@@ -380,9 +381,9 @@ def main():
         if 'optimizer' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer'])
         step = ckpt.get('iteration', 0)
-        print(f'  resumed at step {step}')
+        info(f'  resumed at step {step}')
 
-    print(f'Training (max_steps={args.max_steps}, starting_step={step})')
+    info(f'Training (max_steps={args.max_steps}, starting_step={step})')
     recent_losses = []
     step_times = []
     losses_since_eval: list[float] = []  # reset at each eval; used for metrics.jsonl
@@ -421,18 +422,18 @@ def main():
             steps_this_run = max(1, step - time_start_step)
             avg_elapsed_per_step = time_elapsed / steps_this_run
             eta = format_eta(avg_elapsed_per_step * (args.max_steps - step))
-            print(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
+            info(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
 
         if step > 0 and step % args.eval_steps == 0:
             overall_loss, tab_acc, pitch_acc, per_src = run_eval(
                 model, val_loader, vocab, device, max_batches=args.eval_batches
             )
-            print(
+            info(
                 f'[eval @ step {step}] val_loss={overall_loss:.4f}  '
                 f'tab_acc={tab_acc:.3f}  pitch_acc={pitch_acc:.3f}  (teacher-forced)'
             )
             for src, m in sorted(per_src.items()):
-                print(
+                info(
                     f'    {src:<12} loss={m["loss"]:.3f}  '
                     f'tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
                 )
@@ -458,16 +459,16 @@ def main():
         if step > 0 and step % args.save_steps == 0:
             ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
             save_checkpoint(ckpt_path, step, model, optimizer, vocab, args)
-            print(f'[saved] {ckpt_path}')
+            info(f'[saved] {ckpt_path}')
 
     final_path = os.path.join(args.output_dir, f'step_{step:07d}_final.pth')
     save_checkpoint(final_path, step, model, optimizer, vocab, args)
-    print(f'\nTraining complete. Final checkpoint: {final_path}')
+    info(f'\nTraining complete. Final checkpoint: {final_path}')
 
     final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, vocab, device)
-    print(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
+    info(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
     for src, m in sorted(final_per_src.items()):
-        print(
+        info(
             f'  {src:<12} loss={m["loss"]:.4f}  tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
         )
 
@@ -483,7 +484,7 @@ def main():
     }
     final_eval_path = Path(args.output_dir) / 'final_eval.json'
     final_eval_path.write_text(json.dumps(final_eval, indent=2))
-    print(f'\nFinal eval written: {final_eval_path}')
+    info(f'\nFinal eval written: {final_eval_path}')
 
 
 if __name__ == '__main__':

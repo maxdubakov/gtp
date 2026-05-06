@@ -18,6 +18,7 @@ from collections import Counter, defaultdict
 import torch
 from torch.utils.data import Dataset
 
+from gtp.log import info
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
 
@@ -199,7 +200,7 @@ def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_tr
             f'Augmented JSONLs not found at {AUG_DATA_DIR}. Run scripts/stage2/build_aug_dataset.py first.'
         )
 
-    print(f'Loading augmented JSONLs from {AUG_DATA_DIR}')
+    info(f'Loading augmented JSONLs from {AUG_DATA_DIR}')
     train_pieces = load_jsonl_pieces(train_path)
     val_pieces = load_jsonl_pieces(val_path)
     test_pieces = load_jsonl_pieces(test_path)

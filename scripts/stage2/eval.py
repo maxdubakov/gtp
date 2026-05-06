@@ -25,6 +25,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from gtp.log import info
 from gtp.stage2.data import TabDataset, load_jsonl_pieces
 from gtp.stage2.metrics import (
     classify_error,
@@ -417,13 +418,13 @@ def main():
     args = ap.parse_args()
 
     device = args.device or auto_device()
-    print(f'Device: {device}')
+    info(f'Device: {device}')
 
     # Build vocab from the first checkpoint's sibling config.json. All
     # checkpoints in --checkpoint-dir mode are assumed to share a vocab
     # (same training run). Falls back to no-genre vocab if no config.json.
     ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
-    print(f'Evaluating {len(ckpts)} checkpoint(s)')
+    info(f'Evaluating {len(ckpts)} checkpoint(s)')
     first_ckpt_dir = Path(ckpts[0][1]).parent
     config_path = first_ckpt_dir / 'config.json'
     include_genre = False
@@ -435,9 +436,9 @@ def main():
         except Exception as e:
             print(f'  WARN: could not parse {config_path}: {e}.')
     vocab = Vocabulary(include_genre=include_genre)
-    print(f'Vocab: {len(vocab)} tokens (include_genre={include_genre})')
+    info(f'Vocab: {len(vocab)} tokens (include_genre={include_genre})')
 
-    print('Loading val/test pieces (skipping train.jsonl)...')
+    info('Loading val/test pieces (skipping train.jsonl)...')
     val_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'val.jsonl')
     test_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'test.jsonl') if args.include_test else []
     if args.datasets:
@@ -471,7 +472,7 @@ def main():
 
     all_results = []
     for label, path in ckpts:
-        print(f'\n===== {label} =====')
+        info(f'\n===== {label} =====')
         t0 = time.time()
         model, _vocab_ckpt, step = load_checkpoint(path, device)
         # _vocab_ckpt should match `vocab` since all ckpts share config.json;
@@ -498,7 +499,7 @@ def main():
             record['summary_test'] = test_summary
 
         elapsed = time.time() - t0
-        print(f'  elapsed: {elapsed:.1f}s')
+        info(f'  elapsed: {elapsed:.1f}s')
         all_results.append(record)
 
         # Free model memory before next checkpoint
@@ -511,7 +512,7 @@ def main():
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, 'w') as f:
             json.dump(all_results, f, indent=2)
-        print(f'\nSaved results to {out_path}')
+        info(f'\nSaved results to {out_path}')
 
 
 if __name__ == '__main__':
