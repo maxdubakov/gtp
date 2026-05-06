@@ -6,7 +6,7 @@ import os
 import numpy as np
 
 from gtp import REPO_ROOT
-from gtp.data import build_dataset, load_gaps_notes, load_guitarset_notes
+from gtp.stage1.data import build_dataset, load_gaps_notes, load_guitarset_notes
 from gtp.log import set_verbose
 
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
@@ -98,7 +98,7 @@ def show_verbose_trace(gaps_dir, guitarset_dir):
 
     # Show one sample's rolls
     print('\n--- Target rolls for one segment (verbose trace enabled) ---')
-    from gtp.data import TargetProcessor
+    from gtp.stage1.data import TargetProcessor
 
     tp = TargetProcessor()
     start_time = 0.0

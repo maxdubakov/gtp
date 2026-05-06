@@ -89,7 +89,7 @@ def main():
             device_str = 'cpu'
     print(f'  Device: {device_str}')
 
-    from gtp.inference import PianoTranscription
+    from gtp.stage1.inference import PianoTranscription
 
     t0 = time.time()
     transcriptor = PianoTranscription(checkpoint_path=CHECKPOINT, device=device_str)
@@ -212,10 +212,10 @@ def main():
 
     from torch.utils.data import DataLoader
 
-    from gtp.data import build_dataset
-    from gtp.model.kong import Regress_onset_offset_frame_velocity_CRNN
-    from gtp.model.losses import regress_onset_offset_frame_velocity_bce
-    from gtp.model.utils import move_data_to_device
+    from gtp.stage1.data import build_dataset
+    from gtp.stage1.model.kong import Regress_onset_offset_frame_velocity_CRNN
+    from gtp.stage1.model.losses import regress_onset_offset_frame_velocity_bce
+    from gtp.stage1.model.utils import move_data_to_device
 
     def collate_fn(batch):
         keys = batch[0].keys()

@@ -12,7 +12,7 @@ import numpy as np
 import soundfile as sf
 
 from gtp import REPO_ROOT
-from gtp.inference import PianoTranscription
+from gtp.stage1.inference import PianoTranscription
 
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained',
                                 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
@@ -79,7 +79,7 @@ def verify_file(audio_path, out_dir, transcriptor):
 
     # Save MIDI
     midi_path = os.path.join(out_dir, f'{stem}_predicted.mid')
-    from gtp.postprocess import write_events_to_midi
+    from gtp.stage1.postprocess import write_events_to_midi
     write_events_to_midi(note_events, midi_path, pedal_events=pedal_events)
     print(f'  MIDI -> {midi_path}')
 

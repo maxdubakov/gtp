@@ -15,7 +15,7 @@ import pretty_midi
 import soundfile as sf
 
 from gtp import REPO_ROOT
-from gtp.inference import PianoTranscription
+from gtp.stage1.inference import PianoTranscription
 
 AUDIO_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'audio_mono-mic')
 ANNOTATION_DIR = os.path.join(REPO_ROOT, 'data', 'guitarset', 'annotation')

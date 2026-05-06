@@ -15,7 +15,7 @@ import mir_eval
 import numpy as np
 
 from gtp import REPO_ROOT
-from gtp.inference import PianoTranscription
+from gtp.stage1.inference import PianoTranscription
 from gtp.log import set_verbose, trace
 
 CHECKPOINT_PATH = os.path.join(REPO_ROOT, 'models', 'pretrained', 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')

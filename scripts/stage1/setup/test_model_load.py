@@ -5,7 +5,7 @@ produces a valid forward pass on a synthetic 10-second audio clip.
 import torch
 
 from gtp import REPO_ROOT
-from gtp.model.kong import Note_pedal
+from gtp.stage1.model.kong import Note_pedal
 
 CHECKPOINT_PATH = str(REPO_ROOT / 'models' / 'pretrained' / 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 

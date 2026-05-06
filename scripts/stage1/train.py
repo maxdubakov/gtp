@@ -14,11 +14,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from gtp import REPO_ROOT
-from gtp.data import build_dataset
+from gtp.stage1.data import build_dataset
 from gtp.log import set_verbose, trace
-from gtp.model.kong import Regress_onset_offset_frame_velocity_CRNN
-from gtp.model.losses import regress_onset_offset_frame_velocity_bce
-from gtp.model.utils import move_data_to_device
+from gtp.stage1.model.kong import Regress_onset_offset_frame_velocity_CRNN
+from gtp.stage1.model.losses import regress_onset_offset_frame_velocity_bce
+from gtp.stage1.model.utils import move_data_to_device
 
 DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'pretrained', 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')

@@ -1,0 +1,36 @@
+┌────────┬──────┬─────────────────────────────────────────┬──────────────────────────────────┐
+│   #    │ Cost │                  Setup                  │          What it tests           │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│      1 │  ~5h │ 2M + GENRE + 15% dropout                │ Pure conditioning                │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│     2a │  ~5h │ 2M + rebalancing (8× GS, 5× Leduc, no   │ Pure data balance                │
+│        │      │ conditioning)                           │                                  │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│     2b │  ~5h │ 2M + GENRE + dropout + rebalancing      │ Combined recipe                  │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│ decide │    — │ Pick best 2M recipe                     │ —                                │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│      3 │  ~7h │ 4M + best recipe                        │ Capacity test                    │
+│        │      │                                         │ (Chinchilla-comfortable)         │
+├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
+│      4 │ ~25h │ 10M + best recipe — only if 4M showed   │ Stretch capacity test            │
+│        │      │ clean improvement                       │                                  │
+└────────┴──────┴─────────────────────────────────────────┴──────────────────────────────────┘
+
+Ideas what to try next:
+1. Analyze dadaGP more deeply:
+    1.1. dataset seems to have more incorrect data than I initially anticipated.
+         Eval results on it are not nice, whereas on datasets which contain subjectively more complicated data, it's good.
+         Plus, we got more samples from dadaGP than fretting transformer, suggesting that our filter is too permissive.
+    1.2. dataset is the only one which didn't go through tempo tweaks, maybe it influenced as well?.. Dunno how to check it though
+
+2. Analyze leduc gp files processing. Overall, I feel like leduc preprocessing still has bugs..
+
+3. When parsing my own tabs, I noticed model quite often goes to "easier" reproductions (high string, low fret).
+    3.1. Introduce "consistency" metric - that one has to be really thought-through, but core idea is that in music we rely on repetition a lot
+         and it's more likely that the same fret/string is played in the same relative timing of the bar.
+    3.2  Also, repetition of the whole patterns is nice within one piece (like constant phrase played at the start of the bar).
+         I recalled that Music Transformer paper addressed something similar (it's in pages now). Mb we can borrow something from there
+
+
+🦄🦄🦄interpret 2M transformer model (he-he)

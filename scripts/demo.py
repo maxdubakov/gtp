@@ -25,7 +25,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
 from gtp import REPO_ROOT
-from gtp.inference import PianoTranscription
+from gtp.stage1.inference import PianoTranscription
 from gtp.stage2.inference import (
     build_anchor_prefix,
     generate_tabs,
