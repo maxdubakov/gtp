@@ -290,7 +290,11 @@ def main():
     # persistent_workers keeps DataLoader workers alive across iterations to
     # avoid the resource churn from forking new workers — fixes long-run
     # crashes ('No buffer space available', SIGABRT) seen on RunPod.
+    # prefetch_factor lets each worker prepare 4 batches ahead so dataload
+    # IO can overlap with GPU work — independent of num_workers, safe to
+    # raise without re-introducing the FD-exhaustion crash.
     persistent = args.num_workers > 0
+    prefetch = 4 if args.num_workers > 0 else None
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -299,6 +303,7 @@ def main():
         pin_memory=pin_memory,
         drop_last=True,
         persistent_workers=persistent,
+        prefetch_factor=prefetch,
     )
     val_loader = DataLoader(
         val_ds,
@@ -307,6 +312,7 @@ def main():
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent,
+        prefetch_factor=prefetch,
     )
 
     info(f'Building model (vocab={len(vocab)})...')
