@@ -19,7 +19,7 @@ import torch
 from torch.utils.data import Dataset
 
 from gtp.stage2.paths import AUG_DATA_DIR
-from gtp.stage2.tokenizer import VOCAB, tokenize_piece
+from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
 
 MIN_NOTES_PER_PIECE = 10
 MAX_FRET = 24  # vocabulary / filter_notes upper bound (some 24-fret guitars exist in the data)
@@ -105,12 +105,19 @@ class TabDataset(Dataset):
     When augment=True, applies random tuning augmentation per __getitem__ and
     re-tokenizes from the underlying piece. Capo is preserved (already varied
     offline by build_aug_dataset.py for the train/val splits).
+
+    `genre_dropout` (training-side classifier-free guidance): when augment=True,
+    each sample's GENRE token is replaced with `GENRE<unknown>` with this
+    probability. 0.0 = always use ground-truth genre. Has no effect when
+    augment=False (val/test always use ground-truth genre).
     """
 
-    def __init__(self, pieces, max_seq_len=512, augment=False):
+    def __init__(self, pieces, vocab: Vocabulary, max_seq_len=512, augment=False,
+                 genre_dropout: float = 0.0):
         self.max_seq_len = max_seq_len
         self.augment = augment
-        self.vocab = VOCAB
+        self.genre_dropout = genre_dropout
+        self.vocab = vocab
         self._rng = random.Random()  # un-seeded → independent per DataLoader worker
 
         if augment:
@@ -124,7 +131,7 @@ class TabDataset(Dataset):
             for pi, piece in enumerate(pieces):
                 n = piece.get('num_subseqs')
                 if n is None:
-                    n = len(tokenize_piece(piece, max_seq_len=max_seq_len))
+                    n = len(tokenize_piece(piece, vocab, max_seq_len=max_seq_len))
                 pid = _piece_id(piece)
                 for si in range(n):
                     self._index.append((pi, si))
@@ -136,7 +143,7 @@ class TabDataset(Dataset):
             self._sources = []
             self._piece_ids = []
             for piece in pieces:
-                seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
+                seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
                 pid = _piece_id(piece)
                 self.sequences.extend(seqs)
                 self._sources.extend([piece['source']] * len(seqs))
@@ -149,7 +156,14 @@ class TabDataset(Dataset):
         if self.augment:
             pi, si = self._index[idx]
             piece = random_tuning(self.pieces[pi], self._rng)
-            seqs = tokenize_piece(piece, max_seq_len=self.max_seq_len)
+            genre_override = (
+                'unknown'
+                if self.genre_dropout > 0 and self._rng.random() < self.genre_dropout
+                else None
+            )
+            seqs = tokenize_piece(
+                piece, self.vocab, max_seq_len=self.max_seq_len, genre_override=genre_override,
+            )
             enc_ids, dec_ids = seqs[min(si, len(seqs) - 1)]
         else:
             enc_ids, dec_ids = self.sequences[idx]
@@ -165,7 +179,8 @@ class TabDataset(Dataset):
         return torch.tensor(padded[: self.max_seq_len], dtype=torch.long)
 
 
-def build_datasets(datasets=None, max_seq_len=512, augment_train=True):
+def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_train=True,
+                   genre_dropout: float = 0.0):
     """Build train, validation, and test TabDatasets from the augmented JSONLs.
 
     Requires that scripts/stage2/build_aug_dataset.py has already been run and
@@ -195,9 +210,10 @@ def build_datasets(datasets=None, max_seq_len=512, augment_train=True):
         val_pieces = [p for p in val_pieces if p['source'] in wanted]
         test_pieces = [p for p in test_pieces if p['source'] in wanted]
 
-    train_ds = TabDataset(train_pieces, max_seq_len=max_seq_len, augment=augment_train)
-    val_ds = TabDataset(val_pieces, max_seq_len=max_seq_len, augment=False)
-    test_ds = TabDataset(test_pieces, max_seq_len=max_seq_len, augment=False)
+    train_ds = TabDataset(train_pieces, vocab, max_seq_len=max_seq_len, augment=augment_train,
+                          genre_dropout=genre_dropout)
+    val_ds = TabDataset(val_pieces, vocab, max_seq_len=max_seq_len, augment=False)
+    test_ds = TabDataset(test_pieces, vocab, max_seq_len=max_seq_len, augment=False)
 
     def count_by_source(piece_list):
         counts = defaultdict(int)
@@ -213,7 +229,7 @@ def build_datasets(datasets=None, max_seq_len=512, augment_train=True):
         'train_sequences': len(train_ds),
         'val_sequences': len(val_ds),
         'test_sequences': len(test_ds),
-        'vocab_size': len(VOCAB),
+        'vocab_size': len(vocab),
         'max_seq_len': max_seq_len,
         'sources_total': count_by_source(train_pieces + val_pieces + test_pieces),
         'sources_train': count_by_source(train_pieces),

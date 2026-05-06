@@ -24,6 +24,11 @@ import librosa
 import numpy as np
 import pretty_midi
 
+
+# Leduc is entirely jazz transcriptions — fixed assignment.
+def classify_leduc() -> str:
+    return 'jazz'
+
 DEFAULT_TUNING = [64, 59, 55, 50, 45, 40]
 DEFAULT_TIMING_BPM = 120  # what we normalize to when real tempo is unknown
 TEMPO_MIN = 40
@@ -92,6 +97,7 @@ def main():
             n['end'] = round(n['end'] * scale, 4)
 
     data['tempo'] = round(real_tempo, 2) if real_tempo is not None else None
+    data['genre'] = classify_leduc()
 
     with open(json_path, 'w') as f:
         json.dump(data, f, indent=2)

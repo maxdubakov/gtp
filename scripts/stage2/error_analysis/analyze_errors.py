@@ -136,7 +136,7 @@ def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
     """Per-piece drift signature, enriched with metadata for downstream slicing.
 
     Thin wrapper around `gtp.stage2.metrics.piece_drift_signature` that adds
-    piece metadata (source, genre_coarse, gs_style, tempo, capo) so the
+    piece metadata (source, genre, gs_style, tempo, capo) so the
     analyze_errors tables can group by those fields.
     """
     by_piece: dict[str, list[dict]] = defaultdict(list)
@@ -152,7 +152,7 @@ def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
         out.append({
             'piece_id': pid,
             'source': sample.get('source'),
-            'genre_coarse': sample.get('genre_coarse'),
+            'genre': sample.get('genre'),
             'gs_style': sample.get('gs_style'),
             'tempo': sample.get('tempo'),
             'capo': sample.get('capo'),
@@ -174,7 +174,7 @@ def per_piece_stats(records: list[dict]) -> list[dict]:
         out.append({
             'piece_id': pid,
             'source': sample.get('source'),
-            'genre_coarse': sample.get('genre_coarse'),
+            'genre': sample.get('genre'),
             'gs_style': sample.get('gs_style'),
             'tempo': sample.get('tempo'),
             'capo': sample.get('capo'),
@@ -242,7 +242,7 @@ def main():
     # ---- Per genre (DadaGP only) ----
     dadagp_records = [r for r in records if r.get('source') == 'dadagp']
     print_table('Per coarse genre (DadaGP only):',
-                slice_by(dadagp_records, lambda r: r.get('genre_coarse'), min_n=args.min_bucket_n),
+                slice_by(dadagp_records, lambda r: r.get('genre'), min_n=args.min_bucket_n),
                 col0_name='genre')
 
     # ---- Per GuitarSet style ----
@@ -307,7 +307,7 @@ def main():
     for ps in piece_stats:
         if ps['n'] < 20:
             continue
-        cat = ps.get('genre_coarse') or ps.get('gs_style') or '-'
+        cat = ps.get('genre') or ps.get('gs_style') or '-'
         print(f'  {ps["pp_err_rate"]:>5.1%} {ps["n"]:>5d} {ps["source"] or "?":>11s} '
               f'{str(cat)[:16]:>16s} {str(ps["tempo"])[:6]:>6s} {ps["capo"]:>4} '
               f' {ps["piece_id"][:80]}')

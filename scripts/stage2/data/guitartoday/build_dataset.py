@@ -20,6 +20,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from soundslice_to_midi import estimate_tempo_from_sync, notes_to_midi, parse_soundslice
 
 from gtp import REPO_ROOT
+from gtp.stage2.genres import UNKNOWN
+
+
+# GuitarToday is one player's covers; not assignable to a genre.
+def classify_guitartoday() -> str:
+    return UNKNOWN
 
 TEMPO_MIN = 40
 TEMPO_MAX = 240
@@ -87,6 +93,7 @@ def process_slice(slice_id):
         'n_strings': track_info.get('strings', 6),
         'tempo': round(tempo, 2) if tempo is not None else None,
         'has_sync': syncpoints is not None,
+        'genre': classify_guitartoday(),
         'notes': [
             {
                 'pitch': n['pitch'],

@@ -13,12 +13,53 @@ import guitarpro as gp
 import pretty_midi
 
 from gtp import REPO_ROOT
+from gtp.stage2.genres import GENRE_RULES, UNKNOWN
 
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
 CATALOG_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
+DADAGP_META_PATH = DADAGP_DIR / '_DadaGP_all_metadata.json'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'dadagp' / 'processed'
 
 TICKS_PER_QUARTER = 960
+
+
+def _load_dadagp_metadata() -> dict:
+    """Map gp4_path → metadata dict (with `genre_tokens`).
+
+    DadaGP keys are stored with a `.tokens.txt` suffix for LM training; we
+    strip it so the keys match the relative GP path stored in our catalog.
+    """
+    if not DADAGP_META_PATH.exists():
+        return {}
+    raw = json.loads(DADAGP_META_PATH.read_text())
+    out = {}
+    for k, v in raw.items():
+        key = k[: -len('.tokens.txt')] if k.endswith('.tokens.txt') else k
+        out[key] = v
+    return out
+
+
+_DADAGP_META = _load_dadagp_metadata()
+
+
+def classify_dadagp(genre_tokens: list[str] | None) -> str:
+    """Coarse-grain a list of DadaGP `genre:*` tokens to one canonical bucket.
+
+    Returns UNKNOWN when the tokens are missing, mark the piece as unknown,
+    or fail to match any GENRE_RULES bucket (catches niche tags like
+    `genre:indie_quebecois`, `genre:regional_mexican`, etc).
+    """
+    if not genre_tokens:
+        return UNKNOWN
+    tags = [g.replace('genre:', '') for g in genre_tokens if g.startswith('genre:')]
+    if 'unknown_genre' in tags:
+        return UNKNOWN
+    for bucket, keywords in GENRE_RULES:
+        for tag in tags:
+            for kw in keywords:
+                if kw in tag:
+                    return bucket
+    return UNKNOWN
 
 
 def load_catalog():
@@ -116,6 +157,7 @@ def process_one(gp_rel_path, track_idx):
         'tempo': result['tempo'],
         'tuning': result['tuning'],
         'capo': result['capo'],
+        'genre': classify_dadagp(_DADAGP_META.get(gp_rel_path, {}).get('genre_tokens')),
         'notes': notes,
     }
 

@@ -47,7 +47,7 @@ from gtp.stage2.tokenizer import (
     TIME_SHIFT_BINS,
     TUNING_END,
     TUNING_START,
-    VOCAB,
+    Vocabulary,
     parse_token_str,
 )
 
@@ -62,12 +62,12 @@ def auto_device():
     return 'cpu'
 
 
-def make_t5_inputs(enc_ids, dec_ids, device):
-    """enc_ids, dec_ids: (B, T) padded with VOCAB.pad_id. Returns (input_ids, attention_mask, labels)."""
+def make_t5_inputs(enc_ids, dec_ids, vocab, device):
+    """enc_ids, dec_ids: (B, T) padded with vocab.pad_id. Returns (input_ids, attention_mask, labels)."""
     input_ids = enc_ids.to(device)
-    attention_mask = (input_ids != VOCAB.pad_id).long()
+    attention_mask = (input_ids != vocab.pad_id).long()
     labels = dec_ids.to(device).clone()
-    labels[labels == VOCAB.pad_id] = -100
+    labels[labels == vocab.pad_id] = -100
     return input_ids, attention_mask, labels
 
 
@@ -83,12 +83,12 @@ def per_sequence_loss(logits, labels):
     return (flat_loss * mask).sum(1) / mask.sum(1).clamp(min=1)
 
 
-def parse_tuning_from_enc(enc_ids):
+def parse_tuning_from_enc(enc_ids, vocab):
     """Walk encoder IDs, extract the tuning block as a list of pitches. None if missing."""
     in_tuning = False
     tuning = []
     for tid in enc_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == TUNING_START:
             in_tuning = True
             tuning = []
@@ -99,7 +99,7 @@ def parse_tuning_from_enc(enc_ids):
     return None
 
 
-def run_eval(model, val_loader, device, max_batches=None):
+def run_eval(model, val_loader, vocab, device, max_batches=None):
     """Single forward pass over val: cross-entropy loss + teacher-forced tab/pitch accuracy.
 
     Note: tab/pitch accuracy here is teacher-forced (the decoder sees ground-truth
@@ -120,7 +120,7 @@ def run_eval(model, val_loader, device, max_batches=None):
             if max_batches is not None and i >= max_batches:
                 break
             enc, dec, sources, _piece_ids = batch
-            input_ids, attention_mask, labels = make_t5_inputs(enc, dec, device)
+            input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
             seq_losses = per_sequence_loss(outputs.logits, labels).tolist()
@@ -136,12 +136,12 @@ def run_eval(model, val_loader, device, max_batches=None):
                 loss_totals[src][0] += seq_losses[b]
                 loss_totals[src][1] += 1
 
-                tuning = parse_tuning_from_enc(inputs_cpu[b])
+                tuning = parse_tuning_from_enc(inputs_cpu[b], vocab)
 
                 for t_idx, gt_id in enumerate(labels_cpu[b]):
                     if gt_id < 0:  # PAD-as-loss-mask (-100), skip
                         continue
-                    gt_type, gt_val = parse_token_str(VOCAB.decode(gt_id))
+                    gt_type, gt_val = parse_token_str(vocab.decode(gt_id))
                     if gt_type != TAB:
                         continue
 
@@ -153,7 +153,7 @@ def run_eval(model, val_loader, device, max_batches=None):
                         tab_totals[src][0] += 1
                         pitch_totals[src][0] += 1  # exact token match implies same pitch
                     elif tuning:
-                        pred_type, pred_val = parse_token_str(VOCAB.decode(pred_id))
+                        pred_type, pred_val = parse_token_str(vocab.decode(pred_id))
                         if pred_type == TAB:
                             gs, gf = (int(x) for x in gt_val.split(','))
                             ps, pf = (int(x) for x in pred_val.split(','))
@@ -203,7 +203,7 @@ def format_eta(seconds):
     return f'~{m}m'
 
 
-def save_checkpoint(path, step, model, optimizer, args):
+def save_checkpoint(path, step, model, optimizer, vocab, args):
     torch.save(
         {
             'iteration': step,
@@ -211,11 +211,12 @@ def save_checkpoint(path, step, model, optimizer, args):
             'optimizer': optimizer.state_dict(),
             'config': vars(args),
             'tokenizer_meta': {
-                'vocab_size': len(VOCAB),
+                'vocab_size': len(vocab),
                 'time_shift_max': MAX_TIME_SHIFT,
                 'time_shift_step': TIME_SHIFT_BINS[0],
-                'pad_id': VOCAB.pad_id,
-                'eos_id': VOCAB.eos_id,
+                'pad_id': vocab.pad_id,
+                'eos_id': vocab.eos_id,
+                'include_genre': vocab.include_genre,
             },
         },
         path,
@@ -241,12 +242,29 @@ def main():
         '--experiment-label', default='', help='Free-form label saved to config.json for run comparison'
     )
     parser.add_argument('--notes', default='', help='Free-form notes saved to config.json')
+    parser.add_argument('--genre-conditioning', action='store_true',
+                        help='Add GENRE<X> token to the encoder prefix and grow vocab '
+                             'from 553 to 567 tokens. Off by default (preserves baseline). '
+                             'Old checkpoints cannot be resumed under this flag — embedding '
+                             'dims differ.')
+    parser.add_argument('--genre-dropout', type=float, default=0.15,
+                        help="Probability of replacing GENRE<X> with GENRE<unknown> during "
+                             'training (classifier-free guidance). Only active when '
+                             '--genre-conditioning is set.')
     args = parser.parse_args()
 
     device = args.device or auto_device()
     print(f'Device: {device}')
     torch.manual_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # Construct vocab from CLI flags. The same vocab instance is threaded through
+    # build_datasets / build_model / run_eval / save_checkpoint — there is no
+    # module-level VOCAB global.
+    vocab = Vocabulary(include_genre=args.genre_conditioning)
+    if args.genre_conditioning:
+        print(f'Genre conditioning enabled. Vocab size: {len(vocab)}. '
+              f'Genre dropout: {args.genre_dropout}')
 
     # DataLoader workers exchange tensor data with the main process via OS resources.
     # Default 'file_descriptor' uses /dev/shm + fd passing — on RunPod / Docker this
@@ -255,7 +273,11 @@ def main():
     mp.set_sharing_strategy('file_system')
 
     print('Building datasets...')
-    train_ds, val_ds, _test_ds, _stats = build_datasets(datasets=args.datasets)
+    train_ds, val_ds, _test_ds, _stats = build_datasets(
+        vocab,
+        datasets=args.datasets,
+        genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
+    )
     print(f'  train sequences: {len(train_ds)}, val sequences: {len(val_ds)}')
 
     pin_memory = device == 'cuda'
@@ -281,8 +303,8 @@ def main():
         persistent_workers=persistent,
     )
 
-    print(f'Building model (vocab={len(VOCAB)})...')
-    model = build_model().to(device)
+    print(f'Building model (vocab={len(vocab)})...')
+    model = build_model(vocab).to(device)
     model.train()
     print(f'  parameters: {sum(p.numel() for p in model.parameters()):,}')
 
@@ -300,7 +322,7 @@ def main():
             d_ff=getattr(model.config, 'd_ff', 0),
             n_layers=getattr(model.config, 'num_layers', 0),
             n_heads=getattr(model.config, 'num_heads', 0),
-            vocab_size=len(VOCAB),
+            vocab_size=len(vocab),
         ),
         train=TrainConfig(
             batch_size=args.batch_size,
@@ -318,7 +340,11 @@ def main():
             train_subseqs=len(train_ds),
             val_subseqs=len(val_ds),
         ),
-        conditioning=ConditioningConfig(),  # default: no genre/source conditioning yet
+        conditioning=ConditioningConfig(
+            genre=args.genre_conditioning,
+            genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
+            source=False,  # SOURCE conditioning intentionally off (leakage path)
+        ),
         rebalancing=RebalancingConfig(),  # default: no rebalancing yet
     )
     config_path = Path(args.output_dir) / 'config.json'
@@ -339,9 +365,9 @@ def main():
         print(f'Resuming from {args.resume}')
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
         meta = ckpt.get('tokenizer_meta', {})
-        if meta.get('vocab_size') and meta['vocab_size'] != len(VOCAB):
+        if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
             raise SystemExit(
-                f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, current vocab is {len(VOCAB)}. '
+                f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, current vocab is {len(vocab)}. '
                 f'Cannot resume training with a different vocabulary.'
             )
         model.load_state_dict(ckpt['model'])
@@ -367,7 +393,7 @@ def main():
 
         t0 = time.time()
         enc, dec, _sources, _piece_ids = batch
-        input_ids, attention_mask, labels = make_t5_inputs(enc, dec, device)
+        input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
 
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
         loss = outputs.loss
@@ -393,7 +419,7 @@ def main():
 
         if step > 0 and step % args.eval_steps == 0:
             overall_loss, tab_acc, pitch_acc, per_src = run_eval(
-                model, val_loader, device, max_batches=args.eval_batches
+                model, val_loader, vocab, device, max_batches=args.eval_batches
             )
             print(
                 f'[eval @ step {step}] val_loss={overall_loss:.4f}  '
@@ -425,14 +451,14 @@ def main():
 
         if step > 0 and step % args.save_steps == 0:
             ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
-            save_checkpoint(ckpt_path, step, model, optimizer, args)
+            save_checkpoint(ckpt_path, step, model, optimizer, vocab, args)
             print(f'[saved] {ckpt_path}')
 
     final_path = os.path.join(args.output_dir, f'step_{step:07d}_final.pth')
-    save_checkpoint(final_path, step, model, optimizer, args)
+    save_checkpoint(final_path, step, model, optimizer, vocab, args)
     print(f'\nTraining complete. Final checkpoint: {final_path}')
 
-    final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, device)
+    final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, vocab, device)
     print(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
     for src, m in sorted(final_per_src.items()):
         print(

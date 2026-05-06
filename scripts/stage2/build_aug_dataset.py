@@ -29,7 +29,7 @@ from gtp.stage2.data import (
     filter_notes,
 )
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
-from gtp.stage2.tokenizer import tokenize_piece
+from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
 
 CAPO_RANGE = range(0, 8)
 MIDI_MIN = 0
@@ -103,6 +103,7 @@ def load_all_pieces(datasets=None):
                     'tuning': tuning,
                     'tempo': data.get('tempo', 120),
                     'capo': data.get('capo', 0),
+                    'genre': data.get('genre', 'unknown'),
                     'notes': notes,
                 }
             )
@@ -206,7 +207,7 @@ def rotate_capo(pieces):
 # ---------------------------------------------------------------------------
 
 
-def annotate_with_subseqs(pieces, stats, max_seq_len=512):
+def annotate_with_subseqs(pieces, stats, vocab: Vocabulary, max_seq_len=512):
     """Tokenize each piece once, stash sub-sequence count, and accumulate stats.
 
     Tuning augmentation (online) preserves token count, so num_subseqs is invariant
@@ -216,7 +217,7 @@ def annotate_with_subseqs(pieces, stats, max_seq_len=512):
     `stats` is a dict mutated in place: stats[source] = {pieces, subseqs, enc_tokens, dec_tokens}.
     """
     for piece in pieces:
-        seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
+        seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
         enc_tokens = sum(len(enc) for enc, _ in seqs)
         dec_tokens = sum(len(dec) for _, dec in seqs)
         s = stats.setdefault(piece['source'], {'pieces': 0, 'subseqs': 0, 'enc_tokens': 0, 'dec_tokens': 0})
@@ -293,9 +294,20 @@ def main():
     test_path = out_dir / 'test.jsonl'
 
     train_stats, val_stats, test_stats = {}, {}, {}
-    n_train = write_jsonl(train_path, annotate_with_subseqs(expand_all(train_pieces), train_stats))
-    n_val = write_jsonl(val_path, annotate_with_subseqs(expand_all(val_pieces), val_stats))
-    n_test = write_jsonl(test_path, annotate_with_subseqs(rotate_capo(test_pieces), test_stats))
+    # Use the no-genre vocab for num_subseqs annotation; the cached count is an
+    # optimization for TabDataset and a one-token difference (GENRE prefix) at
+    # most affects pieces near the 512-token boundary. TabDataset re-tokenizes
+    # if num_subseqs is missing.
+    vocab = Vocabulary(include_genre=False)
+    n_train = write_jsonl(
+        train_path, annotate_with_subseqs(expand_all(train_pieces), train_stats, vocab),
+    )
+    n_val = write_jsonl(
+        val_path, annotate_with_subseqs(expand_all(val_pieces), val_stats, vocab),
+    )
+    n_test = write_jsonl(
+        test_path, annotate_with_subseqs(rotate_capo(test_pieces), test_stats, vocab),
+    )
 
     print('\nWrote (post-capo-aug):')
     for path, n in [(train_path, n_train), (val_path, n_val), (test_path, n_test)]:

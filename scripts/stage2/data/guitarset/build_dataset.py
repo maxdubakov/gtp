@@ -7,11 +7,13 @@ round(pitch) - open_string_midi.
 
 import argparse
 import json
+import re
 
 import jams
 import pretty_midi
 
 from gtp import REPO_ROOT
+from gtp.stage2.genres import UNKNOWN
 
 ANNOTATION_DIR = REPO_ROOT / 'data' / 'guitarset' / 'annotation'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'guitarset' / 'processed'
@@ -21,6 +23,25 @@ NOTE_MIDI_INDICES = [1, 3, 5, 7, 9, 11]
 STRING_NUMBERS = [6, 5, 4, 3, 2, 1]
 OPEN_PITCHES = [40, 45, 50, 55, 59, 64]
 TUNING = [64, 59, 55, 50, 45, 40]  # string 1 (high E) to string 6 (low E)
+
+# Filename format: <player>_<Style><N>-<bpm>-<key>_<comp|solo>.json
+# e.g. '00_Jazz1-150-C_solo.json'. 5 style codes, mapped to canonical genres.
+GS_STYLE_TO_GENRE: dict[str, str] = {
+    'Rock': 'rock',
+    'Jazz': 'jazz',
+    'Funk': 'funk',
+    'BN':   'jazz',     # Bossa Nova, sub-bucket of jazz
+    'SS':   'folk',     # Singer-Songwriter
+}
+_GS_FILENAME_RE = re.compile(r'^\d{2}_([A-Za-z]+)\d')
+
+
+def classify_guitarset(filename: str) -> str:
+    """Extract style code from GuitarSet filename and map to canonical bucket."""
+    m = _GS_FILENAME_RE.match(filename)
+    if not m:
+        return UNKNOWN
+    return GS_STYLE_TO_GENRE.get(m.group(1), UNKNOWN)
 
 
 def process_one(jams_path):
@@ -100,6 +121,7 @@ def main():
             'source': 'guitarset',
             'tuning': TUNING,
             'tempo': tempo,
+            'genre': classify_guitarset(f'{name}.json'),
             'notes': notes,
         }
         with open(json_path, 'w') as f:

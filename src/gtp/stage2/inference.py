@@ -2,10 +2,17 @@
 
 Token-stream parsing helpers, checkpoint loading, encoder-only tokenization,
 autoregressive generation, and end-to-end "piece → tabs" inference.
+
+The vocabulary is constructed by `load_checkpoint(...)` (from the sibling
+`config.json`) and returned alongside the model. All helper functions take
+the `vocab` instance explicitly — no module-level globals.
 """
+
+from pathlib import Path
 
 import torch
 
+from gtp.stage2.config import RunConfig
 from gtp.stage2.model import build_model
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import (
@@ -15,19 +22,19 @@ from gtp.stage2.tokenizer import (
     TAB,
     TUNING_END,
     TUNING_START,
-    VOCAB,
+    Vocabulary,
     notes_to_decoder_tokens,
     parse_token_str,
     tokenize_piece,
 )
 
 
-def parse_tuning_from_enc(enc_ids):
+def parse_tuning_from_enc(enc_ids, vocab: Vocabulary):
     """Walk encoder IDs, return tuning as list of pitches. None if missing."""
     in_tuning = False
     tuning = []
     for tid in enc_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == TUNING_START:
             in_tuning = True
             tuning = []
@@ -38,12 +45,12 @@ def parse_tuning_from_enc(enc_ids):
     return None
 
 
-def extract_input_pitches(enc_ids):
+def extract_input_pitches(enc_ids, vocab: Vocabulary):
     """Walk encoder IDs, return body's NOTE_ON pitches in order (skips tuning block)."""
     in_tuning = False
     pitches = []
     for tid in enc_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == TUNING_START:
             in_tuning = True
         elif t == TUNING_END:
@@ -55,11 +62,11 @@ def extract_input_pitches(enc_ids):
     return pitches
 
 
-def extract_tabs(token_ids):
+def extract_tabs(token_ids, vocab: Vocabulary):
     """Walk decoder IDs, return list of (string, fret) from TAB tokens. Stops at EOS."""
     tabs = []
     for tid in token_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == EOS:
             break
         if t == PAD:
@@ -70,19 +77,40 @@ def extract_tabs(token_ids):
     return tabs
 
 
-def load_checkpoint(path, device):
-    """Load Stage 2 checkpoint, return (model, iteration)."""
+def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
+    """Load Stage 2 checkpoint, return `(model, vocab, iteration)`.
+
+    Reads the sibling `config.json` (if present) to determine whether the
+    checkpoint was trained with genre conditioning, then constructs a
+    matching `Vocabulary` instance. Falls back to no-genre vocab for legacy
+    checkpoints. The returned `vocab` should be passed explicitly to
+    downstream helpers (`tokenize_piece`, `generate_tabs`, etc.).
+    """
+    include_genre = False
+    config_path = Path(path).parent / 'config.json'
+    if config_path.exists():
+        try:
+            cfg = RunConfig.load(config_path)
+            include_genre = cfg.conditioning.genre
+        except Exception as e:
+            print(f'  WARN: could not parse {config_path}: {e}. Assuming no genre conditioning.')
+
+    vocab = Vocabulary(include_genre=include_genre)
+
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
     meta = ckpt.get('tokenizer_meta', {})
-    if meta.get('vocab_size') and meta['vocab_size'] != len(VOCAB):
-        raise ValueError(f'Vocab mismatch: ckpt={meta["vocab_size"]}, current={len(VOCAB)}')
-    model = build_model().to(device)
+    if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
+        raise ValueError(
+            f'Vocab mismatch: ckpt={meta["vocab_size"]}, current={len(vocab)}. '
+            f'Check sibling config.json or the --genre-conditioning flag at training time.'
+        )
+    model = build_model(vocab).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
-    return model, ckpt.get('iteration')
+    return model, vocab, ckpt.get('iteration')
 
 
-def tokenize_for_inference(piece, max_seq_len=512):
+def tokenize_for_inference(piece, vocab: Vocabulary, max_seq_len=512):
     """Tokenize a piece for Stage 2 inference (encoder sub-sequences only).
 
     Notes need only `pitch`, `start`, `end` — string and fret are dummied so
@@ -95,11 +123,11 @@ def tokenize_for_inference(piece, max_seq_len=512):
         **piece,
         'notes': [{**n, 'string': 1, 'fret': 0} for n in piece['notes']],
     }
-    sequences = tokenize_piece(dummy_piece, max_seq_len=max_seq_len)
+    sequences = tokenize_piece(dummy_piece, vocab, max_seq_len=max_seq_len)
     return [enc_ids for enc_ids, _dec_ids in sequences]
 
 
-def build_anchor_prefix(piece, anchor_tabs):
+def build_anchor_prefix(piece, vocab: Vocabulary, anchor_tabs):
     """Build a decoder prefix from user-supplied (string, fret) for the first N notes.
 
     Notes are sorted by (start, pitch); anchor_tabs[i] becomes the TAB for note i.
@@ -119,10 +147,11 @@ def build_anchor_prefix(piece, anchor_tabs):
 
     tempo_for_decoder = piece.get('tempo') if piece.get('tempo') is not None else 120
     dec_tokens = notes_to_decoder_tokens(anchored, tempo_for_decoder)
-    return [VOCAB.pad_id] + [VOCAB.encode(t) for t in dec_tokens]
+    return [vocab.pad_id] + [vocab.encode(t) for t in dec_tokens]
 
 
-def generate_with_alternatives(model, enc_ids, device, top_k=8, max_seq_len=512, decoder_prefix=None):
+def generate_with_alternatives(model, vocab: Vocabulary, enc_ids, device, top_k=8,
+                               max_seq_len=512, decoder_prefix=None):
     """Generate one sub-sequence and capture top-K alternatives at each step.
 
     Returns a list of dicts, one per generation step:
@@ -131,9 +160,9 @@ def generate_with_alternatives(model, enc_ids, device, top_k=8, max_seq_len=512,
     Probabilities come from softmaxing the logits at each step (post any logits
     processors HF applies). Useful for "what else did the model consider here?"
     """
-    padded = enc_ids + [VOCAB.pad_id] * (max_seq_len - len(enc_ids))
+    padded = enc_ids + [vocab.pad_id] * (max_seq_len - len(enc_ids))
     input_ids = torch.tensor([padded[:max_seq_len]], dtype=torch.long, device=device)
-    attention_mask = (input_ids != VOCAB.pad_id).long()
+    attention_mask = (input_ids != vocab.pad_id).long()
 
     gen_kwargs = {
         'input_ids': input_ids,
@@ -141,8 +170,8 @@ def generate_with_alternatives(model, enc_ids, device, top_k=8, max_seq_len=512,
         'max_new_tokens': max_seq_len,
         'num_beams': 1,
         'do_sample': False,
-        'pad_token_id': VOCAB.pad_id,
-        'eos_token_id': VOCAB.eos_id,
+        'pad_token_id': vocab.pad_id,
+        'eos_token_id': vocab.eos_id,
         'return_dict_in_generate': True,
         'output_scores': True,
     }
@@ -162,19 +191,20 @@ def generate_with_alternatives(model, enc_ids, device, top_k=8, max_seq_len=512,
         probs = torch.softmax(score[0], dim=-1)
         top_probs, top_ids = probs.topk(top_k)
         topk = [
-            (int(tid), VOCAB.decode(int(tid)), float(p))
+            (int(tid), vocab.decode(int(tid)), float(p))
             for tid, p in zip(top_ids.tolist(), top_probs.tolist(), strict=True)
         ]
         results.append({
             'step': step_i,
             'chosen_id': chosen_id,
-            'chosen_str': VOCAB.decode(chosen_id),
+            'chosen_str': vocab.decode(chosen_id),
             'topk': topk,
         })
     return results
 
 
-def generate_tabs(model, enc_ids_list, device, max_seq_len=512, return_raw=False, decoder_prefix=None):
+def generate_tabs(model, vocab: Vocabulary, enc_ids_list, device, max_seq_len=512,
+                  return_raw=False, decoder_prefix=None):
     """Run autoregressive greedy generation per sub-sequence; concatenate (string, fret) outputs.
 
     If `decoder_prefix` is provided (list of token IDs starting with decoder_start),
@@ -184,9 +214,9 @@ def generate_tabs(model, enc_ids_list, device, max_seq_len=512, return_raw=False
     all_tabs = []
     raw_per_subseq = []
     for sub_i, enc_ids in enumerate(enc_ids_list):
-        padded = enc_ids + [VOCAB.pad_id] * (max_seq_len - len(enc_ids))
+        padded = enc_ids + [vocab.pad_id] * (max_seq_len - len(enc_ids))
         input_ids = torch.tensor([padded[:max_seq_len]], dtype=torch.long, device=device)
-        attention_mask = (input_ids != VOCAB.pad_id).long()
+        attention_mask = (input_ids != vocab.pad_id).long()
 
         gen_kwargs = {
             'input_ids': input_ids,
@@ -194,8 +224,8 @@ def generate_tabs(model, enc_ids_list, device, max_seq_len=512, return_raw=False
             'max_new_tokens': max_seq_len,
             'num_beams': 1,
             'do_sample': False,
-            'pad_token_id': VOCAB.pad_id,
-            'eos_token_id': VOCAB.eos_id,
+            'pad_token_id': vocab.pad_id,
+            'eos_token_id': vocab.eos_id,
         }
         if decoder_prefix is not None and sub_i == 0:
             gen_kwargs['decoder_input_ids'] = torch.tensor(
@@ -207,20 +237,20 @@ def generate_tabs(model, enc_ids_list, device, max_seq_len=512, return_raw=False
         raw_ids = generated[0, 1:].tolist()  # skip decoder_start (PAD)
         if return_raw:
             raw_per_subseq.append(raw_ids)
-        all_tabs.extend(extract_tabs(raw_ids))
+        all_tabs.extend(extract_tabs(raw_ids, vocab))
     if return_raw:
         return all_tabs, raw_per_subseq
     return all_tabs
 
 
-def infer(model, piece, device, max_seq_len=512, post_process=True):
+def infer(model, vocab: Vocabulary, piece, device, max_seq_len=512, post_process=True):
     """End-to-end Stage 2 inference: piece dict → list of (string, fret) per input note.
 
     With post_process=True, applies the paper's ±5 correction so every output
     pitch matches the corresponding input pitch (paper-faithful).
     """
-    enc_list = tokenize_for_inference(piece, max_seq_len=max_seq_len)
-    raw_tabs = generate_tabs(model, enc_list, device, max_seq_len=max_seq_len)
+    enc_list = tokenize_for_inference(piece, vocab, max_seq_len=max_seq_len)
+    raw_tabs = generate_tabs(model, vocab, enc_list, device, max_seq_len=max_seq_len)
     if not post_process:
         return raw_tabs
     sorted_notes = sorted(piece['notes'], key=lambda x: (x['start'], x['pitch']))

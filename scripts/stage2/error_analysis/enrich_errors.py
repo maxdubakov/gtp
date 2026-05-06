@@ -56,39 +56,9 @@ GS_NAME_RE = re.compile(
     r'^(?P<player>\d{2})_(?P<style>[A-Za-z]+\d*)-(?P<bpm>\d+)-(?P<key>[A-Za-z#b]+)_(?P<mode>comp|solo)',
 )
 
-# Coarse genre buckets (priority ordered: first match wins). Keeps the long-tail
-# manageable; fallback bucket is 'other'.
-GENRE_RULES = [
-    ('classical', ['classical', 'baroque', 'romantic', 'opera']),
-    ('jazz',      ['jazz', 'bebop', 'swing', 'bossa', 'fusion', 'cool_jazz', 'latin_jazz']),
-    ('folk',      ['folk', 'singer_songwriter', 'americana', 'bluegrass', 'celtic']),
-    ('blues',     ['blues']),
-    ('country',   ['country', 'honky_tonk']),
-    ('metal',     ['metal', 'thrash', 'doom', 'grindcore', 'djent', 'progressive_metal',
-                   'death_metal', 'black_metal']),
-    ('punk',      ['punk', 'hardcore']),
-    ('pop',       ['pop', 'mellow_gold', 'permanent_wave']),
-    ('rock',      ['rock', 'grunge', 'shoegaze']),
-    ('electronic', ['electronic', 'edm', 'house', 'techno', 'idm']),
-    ('hip_hop',   ['hip_hop', 'rap']),
-    ('reggae',    ['reggae', 'ska', 'dub']),
-]
-
-
-def coarse_genre(genre_tokens: list[str]) -> str:
-    """Map list of fine-grained DadaGP genre tokens to one coarse bucket."""
-    if not genre_tokens:
-        return 'unknown'
-    # Strip 'genre:' prefix
-    tags = [g.replace('genre:', '') for g in genre_tokens]
-    if 'unknown_genre' in tags:
-        return 'unknown'
-    for bucket, keywords in GENRE_RULES:
-        for tag in tags:
-            for kw in keywords:
-                if kw in tag:
-                    return bucket
-    return 'other'
+# Genre is now baked into processed JSONs by the per-source build_dataset
+# scripts (see scripts/stage2/data/<source>/build_dataset.py). enrich_errors
+# just reads the existing `genre` field — no re-classification needed here.
 
 
 # ---------------------------------------------------------------------------
@@ -295,21 +265,25 @@ def main():
             # ---- per-source enrichment ----
             extras = {}
             if source == 'dadagp':
-                # Get the .gp4 file path from the raw processed JSON, then look it up
+                # Get the .gp4 file path from the raw processed JSON, then look up
+                # extra metadata in DadaGP's _all_metadata.json. The coarse `genre`
+                # field is read straight from the processed JSON (written by
+                # scripts/stage2/data/dadagp/build_dataset.py:classify_dadagp).
                 proc_extra = load_processed_extra('dadagp', filename) if filename else {}
                 gp4_path = proc_extra.get('file')
+                genre = proc_extra.get('genre', 'unknown')
                 if gp4_path and gp4_path in dadagp_meta:
                     md = dadagp_meta[gp4_path]
                     extras = {
                         'genre_tokens': md.get('genre_tokens', []),
                         'artist_token': md.get('artist_token'),
-                        'genre_coarse': coarse_genre(md.get('genre_tokens', [])),
+                        'genre': genre,
                         'dadagp_validation_set': md.get('validation_set'),
                         'gp4_path': gp4_path,
                     }
                     n_dadagp_hit += 1
                 else:
-                    extras = {'genre_coarse': 'unknown', 'gp4_path': gp4_path}
+                    extras = {'genre': genre, 'gp4_path': gp4_path}
                     n_dadagp_miss += 1
             elif source == 'guitarset':
                 extras = parse_guitarset_filename(filename)

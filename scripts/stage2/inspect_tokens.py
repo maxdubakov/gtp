@@ -14,7 +14,7 @@ import textwrap
 
 from gtp.stage2.data import filter_notes
 from gtp.stage2.paths import PROCESSED_DIRS
-from gtp.stage2.tokenizer import VOCAB, tokenize_piece
+from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
 
 
 def main():
@@ -26,7 +26,10 @@ def main():
     ap.add_argument('--head', type=int, default=0, help='Truncate token list to first N (0 = no truncation)')
     ap.add_argument('--n-notes', type=int, default=8, help='How many raw notes to show for context')
     ap.add_argument('--seed', type=int, default=None)
+    ap.add_argument('--genre-conditioning', action='store_true',
+                    help='Inspect tokens with the genre-aware vocab (567 tokens)')
     args = ap.parse_args()
+    vocab = Vocabulary(include_genre=args.genre_conditioning)
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -49,8 +52,9 @@ def main():
     tempo = data.get('tempo', 120)
     capo = data.get('capo', 0)
 
-    piece = {'tuning': tuning, 'tempo': tempo, 'capo': capo, 'notes': notes}
-    sequences = tokenize_piece(piece)
+    piece = {'tuning': tuning, 'tempo': tempo, 'capo': capo,
+             'genre': data.get('genre', 'unknown'), 'notes': notes}
+    sequences = tokenize_piece(piece, vocab)
 
     print(f'Piece: {args.source}/{path.name}')
     print(f'  tempo={tempo}  capo={capo}  tuning={tuning}')
@@ -76,19 +80,19 @@ def main():
         print()
         print(f'--- Sequence {i}  enc_len={len(enc_ids)}  dec_len={len(dec_ids)} ---')
         print('ENCODER:')
-        print(_render_tokens(enc_ids, args.head))
+        print(_render_tokens(enc_ids, vocab, args.head))
         print('DECODER:')
-        print(_render_tokens(dec_ids, args.head))
+        print(_render_tokens(dec_ids, vocab, args.head))
 
 
-def _render_tokens(ids, head):
+def _render_tokens(ids, vocab, head):
     if 0 < head < len(ids):
         shown = list(ids[:head])
         suffix = f' … ({len(ids) - head} more)'
     else:
         shown = list(ids)
         suffix = ''
-    text = ' '.join(VOCAB.decode(t) for t in shown) + suffix
+    text = ' '.join(vocab.decode(t) for t in shown) + suffix
     return textwrap.indent(textwrap.fill(text, width=110), '  ')
 
 

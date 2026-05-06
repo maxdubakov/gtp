@@ -33,9 +33,9 @@ from gtp.stage2.inference import (
     load_checkpoint,
     tokenize_for_inference,
 )
+from gtp.stage2.genres import GENRES, UNKNOWN
 from gtp.stage2.metrics import difficulty_score
 from gtp.stage2.postprocess import correct_tabs
-from gtp.stage2.tokenizer import VOCAB
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
 STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_001' / 'step_0060000_final.pth'
@@ -98,7 +98,7 @@ def stage1(audio, checkpoint, device):
     return note_events
 
 
-def notes_to_piece(note_events, tuning, capo, tempo):
+def notes_to_piece(note_events, tuning, capo, tempo, genre=UNKNOWN):
     notes = sorted(
         (
             {'pitch': int(e['midi_note']), 'start': float(e['onset_time']), 'end': float(e['offset_time'])}
@@ -106,7 +106,7 @@ def notes_to_piece(note_events, tuning, capo, tempo):
         ),
         key=lambda n: (n['start'], n['pitch']),
     )
-    return {'tuning': tuning, 'tempo': tempo, 'capo': capo, 'notes': notes}
+    return {'tuning': tuning, 'tempo': tempo, 'capo': capo, 'genre': genre, 'notes': notes}
 
 
 def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable'):
@@ -123,16 +123,16 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
     (paper-faithful) or 'nearest_viable' (deviation; Manhattan-nearest to raw).
     """
     print('Stage 2: notes → tabs...')
-    model, iteration = load_checkpoint(str(checkpoint), device)
+    model, vocab, iteration = load_checkpoint(str(checkpoint), device)
     print(f'  checkpoint iteration: {iteration}')
 
-    enc_subseqs = tokenize_for_inference(piece)
+    enc_subseqs = tokenize_for_inference(piece, vocab)
 
-    decoder_prefix = build_anchor_prefix(piece, anchor_tabs) if anchor_tabs else None
+    decoder_prefix = build_anchor_prefix(piece, vocab, anchor_tabs) if anchor_tabs else None
     if decoder_prefix is not None:
         print(f'  anchoring first {len(anchor_tabs)} notes ({len(decoder_prefix) - 1} prefix tokens)')
 
-    raw_tabs, dec_subseqs = generate_tabs(model, enc_subseqs, device, return_raw=True, decoder_prefix=decoder_prefix)
+    raw_tabs, dec_subseqs = generate_tabs(model, vocab, enc_subseqs, device, return_raw=True, decoder_prefix=decoder_prefix)
 
     sorted_notes = sorted(piece['notes'], key=lambda x: (x['start'], x['pitch']))
     input_pitches = [n['pitch'] for n in sorted_notes]
@@ -156,7 +156,7 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
         print(f'  difficulty: raw={d_raw:.3f}  pp={d_pp:.3f}')
     else:
         print('  difficulty: (need ≥2 valid tabs)')
-    return corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources
+    return corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ def group_chords(notes, max_gap=0.030):
     return groups
 
 
-def write_debug_log(path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs, corrected_tabs, sources):
+def write_debug_log(path, vocab, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs, corrected_tabs, sources):
     """Dump full pipeline state for diagnosing failures (esp. missed chord notes)."""
     lines = []
     lines.append(f'=== Stage 1 output: {len(note_events)} notes ===')
@@ -309,9 +309,9 @@ def write_debug_log(path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs
         lines.append('')
         lines.append(f'=== Stage 2 sub-seq {si + 1}/{len(enc_subseqs)} ===')
         lines.append(f'-- encoder ({len(enc)} tokens) --')
-        lines.append(' '.join(VOCAB.decode(int(t)) for t in enc))
+        lines.append(' '.join(vocab.decode(int(t)) for t in enc))
         lines.append(f'-- decoder ({len(dec)} tokens, raw model output) --')
-        lines.append(' '.join(VOCAB.decode(int(t)) for t in dec))
+        lines.append(' '.join(vocab.decode(int(t)) for t in dec))
 
     Path(path).write_text('\n'.join(lines) + '\n')
 
@@ -378,6 +378,11 @@ def main():
         help='Post-processing fallback strategy. first_viable = paper-faithful. '
              'nearest_viable = deviation: Manhattan-nearest realization to model raw output.',
     )
+    ap.add_argument(
+        '--genre', choices=list(GENRES), default=UNKNOWN,
+        help='Coarse genre conditioning hint for the model. Only used by genre-aware '
+             'checkpoints (the flag is silently ignored for legacy models). Default: unknown.',
+    )
     args = ap.parse_args()
 
     anchor_tabs = None
@@ -419,24 +424,25 @@ def main():
 
     # 3) Stage 2: MIDI → tabs
     tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
-    piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo)
+    piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo, genre=args.genre)
     t0 = time.time()
-    tabs, raw_tabs, enc_subseqs, dec_subseqs, sources = stage2(
+    tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab = stage2(
         piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs, fallback=args.fallback
     )
     print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
 
     # 4) Debug log
     debug_path = out_dir / f'{stem}.debug.txt'
-    write_debug_log(debug_path, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs, tabs, sources)
+    write_debug_log(debug_path, vocab, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs, tabs, sources)
     print(f'Wrote: {debug_path}')
 
     # 4b) Optional: per-step alternatives (re-runs generation w/ scores; first sub-seq only)
     if args.show_alternatives > 0:
-        alt_model, _ = load_checkpoint(str(args.stage2_checkpoint), device)
-        alt_prefix = build_anchor_prefix(piece, anchor_tabs) if anchor_tabs else None
+        alt_model, alt_vocab, _ = load_checkpoint(str(args.stage2_checkpoint), device)
+        alt_prefix = build_anchor_prefix(piece, alt_vocab, anchor_tabs) if anchor_tabs else None
         steps = generate_with_alternatives(
             alt_model,
+            alt_vocab,
             enc_subseqs[0],
             device,
             top_k=args.show_alternatives,

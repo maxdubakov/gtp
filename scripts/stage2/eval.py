@@ -43,7 +43,7 @@ from gtp.stage2.tokenizer import (
     TAB,
     TUNING_END,
     TUNING_START,
-    VOCAB,
+    Vocabulary,
     parse_token_str,
 )
 
@@ -52,12 +52,12 @@ from gtp.stage2.tokenizer import (
 # ---------------------------------------------------------------------------
 
 
-def parse_tuning_from_enc(enc_ids):
+def parse_tuning_from_enc(enc_ids, vocab):
     """Walk encoder IDs, return the tuning block as a list of pitches. None if missing."""
     in_tuning = False
     tuning = []
     for tid in enc_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == TUNING_START:
             in_tuning = True
             tuning = []
@@ -68,12 +68,12 @@ def parse_tuning_from_enc(enc_ids):
     return None
 
 
-def extract_input_pitches(enc_ids):
+def extract_input_pitches(enc_ids, vocab):
     """Walk encoder IDs, return the body's NOTE_ON pitches in order (skips tuning block)."""
     in_tuning = False
     pitches = []
     for tid in enc_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == TUNING_START:
             in_tuning = True
         elif t == TUNING_END:
@@ -85,11 +85,11 @@ def extract_input_pitches(enc_ids):
     return pitches
 
 
-def extract_tabs(token_ids):
+def extract_tabs(token_ids, vocab):
     """Walk decoder IDs, return list of (string, fret) from TAB tokens. Stops at EOS."""
     tabs = []
     for tid in token_ids:
-        t, v = parse_token_str(VOCAB.decode(int(tid)))
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == EOS:
             break
         if t == PAD:
@@ -113,7 +113,7 @@ def auto_device():
     return 'cpu'
 
 
-def evaluate_split(model, loader, device, fallback='first_viable'):
+def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
     """Run one split. Returns (per_source_counts, per_note_records).
 
     `per_source_counts`: dict {source: {n_input_notes, tab_correct_raw,
@@ -153,7 +153,7 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
         for batch in loader:
             enc, dec, sources, piece_ids = batch
             input_ids = enc.to(device)
-            attention_mask = (input_ids != VOCAB.pad_id).long()
+            attention_mask = (input_ids != vocab.pad_id).long()
 
             generated = model.generate(
                 input_ids=input_ids,
@@ -161,8 +161,8 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
                 max_new_tokens=enc.size(1),
                 num_beams=1,
                 do_sample=False,
-                pad_token_id=VOCAB.pad_id,
-                eos_token_id=VOCAB.eos_id,
+                pad_token_id=vocab.pad_id,
+                eos_token_id=vocab.eos_id,
             )
 
             inputs_cpu = input_ids.cpu().tolist()
@@ -172,13 +172,13 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
             for b in range(input_ids.size(0)):
                 src = sources[b]
                 pid = piece_ids[b]
-                tuning = parse_tuning_from_enc(inputs_cpu[b])
+                tuning = parse_tuning_from_enc(inputs_cpu[b], vocab)
                 if not tuning:
                     continue
 
-                input_pitches = extract_input_pitches(inputs_cpu[b])
-                gt_tabs = extract_tabs(dec_cpu[b])
-                pred_tabs = extract_tabs(gen_cpu[b][1:])  # skip decoder_start (PAD)
+                input_pitches = extract_input_pitches(inputs_cpu[b], vocab)
+                gt_tabs = extract_tabs(dec_cpu[b], vocab)
+                pred_tabs = extract_tabs(gen_cpu[b][1:], vocab)  # skip decoder_start (PAD)
 
                 if not gt_tabs or not input_pitches:
                     continue
@@ -371,17 +371,30 @@ def find_checkpoints(path):
 
 
 def load_checkpoint(path, device):
+    """Load checkpoint + matching Vocabulary. Returns (model, vocab, iteration)."""
+    from gtp.stage2.config import RunConfig
+
+    include_genre = False
+    config_path = Path(path).parent / 'config.json'
+    if config_path.exists():
+        try:
+            cfg = RunConfig.load(config_path)
+            include_genre = cfg.conditioning.genre
+        except Exception as e:
+            print(f'  WARN: could not parse {config_path}: {e}. Assuming no genre conditioning.')
+    vocab = Vocabulary(include_genre=include_genre)
+
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
     meta = ckpt.get('tokenizer_meta', {})
-    if meta.get('vocab_size') and meta['vocab_size'] != len(VOCAB):
+    if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
         raise ValueError(
             f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, '
-            f'current vocab has {len(VOCAB)}.'
+            f'current vocab has {len(vocab)}.'
         )
-    model = build_model().to(device)
+    model = build_model(vocab).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
-    return model, ckpt.get('iteration', None)
+    return model, vocab, ckpt.get('iteration', None)
 
 
 def main():
@@ -406,6 +419,24 @@ def main():
     device = args.device or auto_device()
     print(f'Device: {device}')
 
+    # Build vocab from the first checkpoint's sibling config.json. All
+    # checkpoints in --checkpoint-dir mode are assumed to share a vocab
+    # (same training run). Falls back to no-genre vocab if no config.json.
+    ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
+    print(f'Evaluating {len(ckpts)} checkpoint(s)')
+    first_ckpt_dir = Path(ckpts[0][1]).parent
+    config_path = first_ckpt_dir / 'config.json'
+    include_genre = False
+    if config_path.exists():
+        from gtp.stage2.config import RunConfig
+        try:
+            cfg = RunConfig.load(config_path)
+            include_genre = cfg.conditioning.genre
+        except Exception as e:
+            print(f'  WARN: could not parse {config_path}: {e}.')
+    vocab = Vocabulary(include_genre=include_genre)
+    print(f'Vocab: {len(vocab)} tokens (include_genre={include_genre})')
+
     print('Loading val/test pieces (skipping train.jsonl)...')
     val_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'val.jsonl')
     test_pieces = load_jsonl_pieces(AUG_DATA_DIR / 'test.jsonl') if args.include_test else []
@@ -413,8 +444,8 @@ def main():
         wanted = set(args.datasets)
         val_pieces = [p for p in val_pieces if p['source'] in wanted]
         test_pieces = [p for p in test_pieces if p['source'] in wanted]
-    val_ds = TabDataset(val_pieces, augment=False)
-    test_ds = TabDataset(test_pieces, augment=False) if args.include_test else None
+    val_ds = TabDataset(val_pieces, vocab, augment=False)
+    test_ds = TabDataset(test_pieces, vocab, augment=False) if args.include_test else None
     print(f'  val sequences: {len(val_ds)}', end='')
     print(f', test sequences: {len(test_ds)}' if test_ds else '')
 
@@ -438,18 +469,17 @@ def main():
         else None
     )
 
-    ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
-    print(f'Evaluating {len(ckpts)} checkpoint(s)')
-
     all_results = []
     for label, path in ckpts:
         print(f'\n===== {label} =====')
         t0 = time.time()
-        model, step = load_checkpoint(path, device)
+        model, _vocab_ckpt, step = load_checkpoint(path, device)
+        # _vocab_ckpt should match `vocab` since all ckpts share config.json;
+        # we use the outer `vocab` for consistency with the pre-built datasets.
 
         record = {'checkpoint': str(path), 'label': label, 'step': step, 'splits': {}}
 
-        val_metrics, val_records = evaluate_split(model, val_loader, device, fallback=args.fallback)
+        val_metrics, val_records = evaluate_split(model, val_loader, vocab, device, fallback=args.fallback)
         val_rows = aggregate(val_metrics)
         print_metrics('val', val_rows)
         val_summary = compute_eval_summary(val_records)
@@ -459,7 +489,7 @@ def main():
         record['fallback'] = args.fallback
 
         if test_loader is not None:
-            test_metrics, test_records = evaluate_split(model, test_loader, device, fallback=args.fallback)
+            test_metrics, test_records = evaluate_split(model, test_loader, vocab, device, fallback=args.fallback)
             test_rows = aggregate(test_metrics)
             print_metrics('test', test_rows)
             test_summary = compute_eval_summary(test_records)

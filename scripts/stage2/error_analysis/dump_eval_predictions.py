@@ -42,7 +42,6 @@ from gtp.stage2.inference import (
 )
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.postprocess import correct_tabs
-from gtp.stage2.tokenizer import VOCAB
 
 # Constants matching scripts/stage2/build_aug_dataset.py — kept here so we can
 # reproduce its train/val/test split deterministically without importing from
@@ -146,7 +145,7 @@ def piece_id(piece: dict) -> str:
     return f'{src}:{name}:capo{capo}'
 
 
-def generate_tabs_batched(model, enc_ids_list: list[list[int]], device: str,
+def generate_tabs_batched(model, vocab, enc_ids_list: list[list[int]], device: str,
                           max_seq_len: int, batch_size: int) -> list[list[int]]:
     """Batched autoregressive greedy generation.
 
@@ -160,9 +159,9 @@ def generate_tabs_batched(model, enc_ids_list: list[list[int]], device: str,
     out = []
     for start in range(0, len(enc_ids_list), batch_size):
         batch = enc_ids_list[start:start + batch_size]
-        padded = [enc + [VOCAB.pad_id] * (max_seq_len - len(enc)) for enc in batch]
+        padded = [enc + [vocab.pad_id] * (max_seq_len - len(enc)) for enc in batch]
         input_ids = torch.tensor(padded, dtype=torch.long, device=device)
-        attention_mask = (input_ids != VOCAB.pad_id).long()
+        attention_mask = (input_ids != vocab.pad_id).long()
         with torch.no_grad():
             generated = model.generate(
                 input_ids=input_ids,
@@ -170,8 +169,8 @@ def generate_tabs_batched(model, enc_ids_list: list[list[int]], device: str,
                 max_new_tokens=max_seq_len,
                 num_beams=1,
                 do_sample=False,
-                pad_token_id=VOCAB.pad_id,
-                eos_token_id=VOCAB.eos_id,
+                pad_token_id=vocab.pad_id,
+                eos_token_id=vocab.eos_id,
             )
         for row in generated:
             # Skip the decoder_start (PAD) prefix, then keep until EOS or end.
@@ -179,7 +178,7 @@ def generate_tabs_batched(model, enc_ids_list: list[list[int]], device: str,
     return out
 
 
-def prepare_piece(piece: dict, max_seq_len: int) -> dict:
+def prepare_piece(piece: dict, vocab, max_seq_len: int) -> dict:
     """Tokenize + sort. Doesn't touch the model — pure CPU work, can run cheaply
     in bulk before batched generation."""
     notes_sorted = sorted(piece['notes'], key=lambda n: (n['start'], n['pitch']))
@@ -187,12 +186,12 @@ def prepare_piece(piece: dict, max_seq_len: int) -> dict:
         'piece_id': piece_id(piece),
         'piece': piece,
         'notes_sorted': notes_sorted,
-        'enc_subseqs': tokenize_for_inference(piece, max_seq_len=max_seq_len),
+        'enc_subseqs': tokenize_for_inference(piece, vocab, max_seq_len=max_seq_len),
         'input_pitches': [int(n['pitch']) for n in notes_sorted],
     }
 
 
-def finalize_piece(prep: dict, raw_subseq_outputs: list[list[int]],
+def finalize_piece(prep: dict, vocab, raw_subseq_outputs: list[list[int]],
                    is_augmented: bool,
                    fallback: str = 'first_viable') -> tuple[dict, list[dict]]:
     """Given a prepared piece and its raw decoder outputs (per sub-sequence),
@@ -210,7 +209,7 @@ def finalize_piece(prep: dict, raw_subseq_outputs: list[list[int]],
 
     raw_tabs: list[tuple[int, int]] = []
     for raw_ids in raw_subseq_outputs:
-        raw_tabs.extend(extract_tabs(raw_ids))
+        raw_tabs.extend(extract_tabs(raw_ids, vocab))
 
     input_pitches = prep['input_pitches']
     pp_tabs, pp_sources = correct_tabs(
@@ -331,7 +330,7 @@ def main():
     print(f'Device: {device}')
 
     print(f'Loading checkpoint: {args.checkpoint}')
-    model, step = load_checkpoint(args.checkpoint, device)
+    model, vocab, step = load_checkpoint(args.checkpoint, device)
     print(f'  iteration: {step}')
 
     pieces_path = out_dir / 'pieces.jsonl'
@@ -395,7 +394,7 @@ def main():
 
                 # Phase 1: tokenize all pieces in chunk; collect sub-sequences
                 #          along with which (chunk_idx, subseq_idx) they came from.
-                preps = [prepare_piece(p, args.max_seq_len) for p in chunk]
+                preps = [prepare_piece(p, vocab, args.max_seq_len) for p in chunk]
                 flat_subseqs: list[list[int]] = []
                 ownership: list[tuple[int, int]] = []  # (piece_idx_in_chunk, subseq_idx_in_piece)
                 for ci, prep in enumerate(preps):
@@ -406,7 +405,7 @@ def main():
                 # Phase 2: batched generation across the entire chunk
                 if flat_subseqs:
                     flat_outputs = generate_tabs_batched(
-                        model, flat_subseqs, device,
+                        model, vocab, flat_subseqs, device,
                         max_seq_len=args.max_seq_len, batch_size=args.batch_size,
                     )
                 else:
@@ -427,7 +426,7 @@ def main():
                     else:
                         orig_capo = original_capo.get((src, fname))
                         is_aug = (orig_capo is None) or (piece.get('capo', 0) != orig_capo)
-                    meta, note_records = finalize_piece(prep, raw_outs, is_aug, fallback=args.fallback)
+                    meta, note_records = finalize_piece(prep, vocab, raw_outs, is_aug, fallback=args.fallback)
                     meta['split'] = split
                     pf.write(json.dumps(meta) + '\n')
                     for r in note_records:
