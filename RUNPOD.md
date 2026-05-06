@@ -49,12 +49,12 @@ python scripts/stage2/build_aug_dataset.py
 mkdir -p runs/stage2_001
 
 PYTHONUNBUFFERED=1 nohup python scripts/stage2/train.py \
-    --device cuda --num-workers 2 \
-    --batch-size 64 \
-    --max-steps 30000 \
-    --eval-steps 1000 --save-steps 1000 \
-    --output-dir runs/stage2_001 \
-    > runs/stage2_001/train.log 2>&1 &
+      --output-dir runs/stage2_002_exp1_genre \
+      --max-steps 60000 --batch-size 64 --device cuda \
+      --num-workers 4 \
+      --genre-conditioning --genre-dropout 0.10 \
+      --experiment-label "Exp 1: GENRE conditioning + 10% dropout" \
+      > runs/stage2_002_exp1_genre/train.log 2>&1 &
 disown
 ```
 
