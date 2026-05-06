@@ -92,6 +92,20 @@ class RebalancingConfig:
 
 
 @dataclass
+class DeviceConfig:
+    """Device snapshot at the start of a run.
+
+    Helps explain wall-clock differences across runs (e.g. A100 vs RTX 4090).
+    `type` is the resolved device string ('cpu' | 'mps' | 'cuda').
+    `cuda_name` and `cuda_memory_gib` are populated only when type=='cuda'.
+    """
+
+    type: str = ''
+    cuda_name: str = ''
+    cuda_memory_gib: float = 0.0
+
+
+@dataclass
 class RunConfig:
     run_id: str
     experiment_label: str = ''
@@ -102,6 +116,7 @@ class RunConfig:
     data: DataConfig = field(default_factory=DataConfig)
     conditioning: ConditioningConfig = field(default_factory=ConditioningConfig)
     rebalancing: RebalancingConfig = field(default_factory=RebalancingConfig)
+    device: DeviceConfig = field(default_factory=DeviceConfig)
     notes: str = ''
 
     def save(self, path) -> None:
@@ -124,6 +139,7 @@ class RunConfig:
             data=DataConfig(**data.get('data', {})),
             conditioning=ConditioningConfig(**data.get('conditioning', {})),
             rebalancing=RebalancingConfig(**data.get('rebalancing', {})),
+            device=DeviceConfig(**data.get('device', {})),
             notes=data.get('notes', ''),
         )
 
@@ -154,3 +170,25 @@ def get_git_sha(short: bool = True) -> str:
 def get_timestamp() -> str:
     """ISO-8601 local time, second resolution."""
     return datetime.now().isoformat(timespec='seconds')
+
+
+def get_device_info(device: str) -> DeviceConfig:
+    """Snapshot device info for a run. `device` is 'cpu' | 'mps' | 'cuda'.
+
+    For 'cuda', queries torch for the GPU name and total memory (GiB,
+    1024^3, matching nvidia-smi). Silently leaves the optional fields
+    empty on any error so this is never a startup blocker.
+    """
+    info = DeviceConfig(type=device)
+    if device != 'cuda':
+        return info
+    try:
+        import torch  # local import — config.py stays usable without torch.
+
+        if torch.cuda.is_available():
+            info.cuda_name = torch.cuda.get_device_name(0)
+            props = torch.cuda.get_device_properties(0)
+            info.cuda_memory_gib = round(props.total_memory / (1024 ** 3), 2)
+    except Exception:
+        pass
+    return info

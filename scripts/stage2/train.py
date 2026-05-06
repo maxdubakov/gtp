@@ -34,6 +34,7 @@ from gtp.stage2.config import (
     RebalancingConfig,
     RunConfig,
     TrainConfig,
+    get_device_info,
     get_git_sha,
     get_timestamp,
 )
@@ -254,7 +255,11 @@ def main():
     args = parser.parse_args()
 
     device = args.device or auto_device()
-    print(f'Device: {device}')
+    device_info = get_device_info(device)
+    if device_info.type == 'cuda' and device_info.cuda_name:
+        print(f'Device: {device} ({device_info.cuda_name}, {device_info.cuda_memory_gib} GiB)')
+    else:
+        print(f'Device: {device}')
     torch.manual_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -346,6 +351,7 @@ def main():
             source=False,  # SOURCE conditioning intentionally off (leakage path)
         ),
         rebalancing=RebalancingConfig(),  # default: no rebalancing yet
+        device=device_info,
     )
     config_path = Path(args.output_dir) / 'config.json'
     run_config.save(config_path)
