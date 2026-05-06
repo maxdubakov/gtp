@@ -83,11 +83,24 @@ def load_jsonl_pieces(path):
     return pieces
 
 
+def _piece_id(piece):
+    """Synthesize a stable piece identifier from source/filename/capo.
+
+    Mirrors the convention used by dump_eval_predictions.py so per-piece
+    metrics line up across the train-time and post-hoc analysis pipelines.
+    """
+    src = piece.get('source', '?')
+    fname = piece.get('filename', piece.get('file', '?'))
+    capo = piece.get('capo', 0)
+    return f'{src}:{fname}:capo{capo}'
+
+
 class TabDataset(Dataset):
     """PyTorch Dataset for Stage 2 (MIDI → Tab) training.
 
-    Each item is (encoder_ids, decoder_ids, source), padded to max_seq_len.
-    Source travels with the sample so per-source eval works regardless of shuffling.
+    Each item is (encoder_ids, decoder_ids, source, piece_id), padded to max_seq_len.
+    `source` and `piece_id` travel with the sample so per-source / per-piece eval
+    work regardless of shuffling.
 
     When augment=True, applies random tuning augmentation per __getitem__ and
     re-tokenizes from the underlying piece. Capo is preserved (already varied
@@ -107,21 +120,27 @@ class TabDataset(Dataset):
             self.pieces = pieces
             self._index = []
             self._sources = []
+            self._piece_ids = []
             for pi, piece in enumerate(pieces):
                 n = piece.get('num_subseqs')
                 if n is None:
                     n = len(tokenize_piece(piece, max_seq_len=max_seq_len))
+                pid = _piece_id(piece)
                 for si in range(n):
                     self._index.append((pi, si))
                     self._sources.append(piece['source'])
+                    self._piece_ids.append(pid)
         else:
             # Pre-tokenize and cache; pieces no longer needed.
             self.sequences = []
             self._sources = []
+            self._piece_ids = []
             for piece in pieces:
                 seqs = tokenize_piece(piece, max_seq_len=max_seq_len)
+                pid = _piece_id(piece)
                 self.sequences.extend(seqs)
                 self._sources.extend([piece['source']] * len(seqs))
+                self._piece_ids.extend([pid] * len(seqs))
 
     def __len__(self):
         return len(self._sources)
@@ -134,7 +153,12 @@ class TabDataset(Dataset):
             enc_ids, dec_ids = seqs[min(si, len(seqs) - 1)]
         else:
             enc_ids, dec_ids = self.sequences[idx]
-        return self._pad(enc_ids), self._pad(dec_ids), self._sources[idx]
+        return (
+            self._pad(enc_ids),
+            self._pad(dec_ids),
+            self._sources[idx],
+            self._piece_ids[idx],
+        )
 
     def _pad(self, ids):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))

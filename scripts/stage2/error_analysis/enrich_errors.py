@@ -45,6 +45,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from gtp.stage2.metrics import classify_error as _classify_error_type
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DADAGP_META_PATH = REPO_ROOT / 'data' / 'DadaGP-v1.1' / '_DadaGP_all_metadata.json'
 
@@ -225,28 +227,22 @@ def compute_local_context(notes: list[dict], capo: int = 0) -> list[dict]:
 
 def classify_error(true_s: int, true_f: int, true_pitch: int,
                    pred_s: int | None, pred_f: int | None, pred_pitch: int | None) -> dict:
-    """Return delta_string, delta_fret, delta_pitch, and a category label."""
-    if pred_s is None or pred_f is None:
-        return {'delta_string': None, 'delta_fret': None, 'delta_pitch': None,
-                'error_type': 'no_prediction'}
+    """Wrapper around `gtp.stage2.metrics.classify_error` that also returns deltas.
 
+    Returns dict with `delta_string`, `delta_fret`, `delta_pitch`, `error_type`.
+    Categorization logic lives in `metrics.classify_error` and is shared with
+    `eval.py` to keep the taxonomy in one place.
+    """
+    error_type = _classify_error_type(true_s, true_f, true_pitch, pred_s, pred_f, pred_pitch)
+    if error_type == 'no_prediction':
+        return {'delta_string': None, 'delta_fret': None, 'delta_pitch': None,
+                'error_type': error_type}
     dstr = pred_s - true_s
     dfret = pred_f - true_f
     dpitch = (pred_pitch - true_pitch) if pred_pitch is not None else None
-
-    if dstr == 0 and dfret == 0:
-        return {'delta_string': 0, 'delta_fret': 0, 'delta_pitch': 0, 'error_type': 'correct'}
-
-    if dpitch is not None and dpitch != 0:
-        return {'delta_string': dstr, 'delta_fret': dfret, 'delta_pitch': dpitch,
-                'error_type': 'pitch_mismatch'}
-
-    # Same pitch, different position
-    if abs(dstr) == 1:
-        return {'delta_string': dstr, 'delta_fret': dfret, 'delta_pitch': 0,
-                'error_type': 'same_pitch_adj_string'}
-    return {'delta_string': dstr, 'delta_fret': dfret, 'delta_pitch': 0,
-            'error_type': 'same_pitch_far_string'}
+    return {'delta_string': dstr, 'delta_fret': dfret,
+            'delta_pitch': 0 if error_type != 'pitch_mismatch' else dpitch,
+            'error_type': error_type}
 
 
 # ---------------------------------------------------------------------------

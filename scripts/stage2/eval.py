@@ -27,6 +27,8 @@ from torch.utils.data import DataLoader
 
 from gtp.stage2.data import TabDataset, load_jsonl_pieces
 from gtp.stage2.metrics import (
+    classify_error,
+    compute_eval_summary,
     difficulty_score,
     pitch_correct,
     tab_correct,
@@ -112,13 +114,21 @@ def auto_device():
 
 
 def evaluate_split(model, loader, device, fallback='first_viable'):
-    """Run one split and return per-source counts.
+    """Run one split. Returns (per_source_counts, per_note_records).
 
-    Returns dict {source: {n_input_notes, tab_correct_raw, tab_correct_pp,
-                           pitch_correct_raw, pitch_correct_pp,
-                           difficulty_sums (gt/raw/pp), difficulty_n_subseqs}}.
+    `per_source_counts`: dict {source: {n_input_notes, tab_correct_raw,
+        tab_correct_pp, pitch_correct_raw, pitch_correct_pp, difficulty_sums,
+        difficulty_n_subseqs}}.
 
-    Note acc metrics (tab/pitch) are aggregated per-note (sum across all notes).
+    `per_note_records`: list of dicts (one per ground-truth note across all
+        sub-sequences), each with the fields needed by
+        gtp.stage2.metrics.compute_eval_summary:
+            piece_id, source, pitch, true_string, true_fret,
+            pred_raw_string, pred_raw_fret, pred_raw_pitch,
+            pred_pp_string, pred_pp_fret, pred_pp_pitch,
+            error_type_raw, error_type_pp,
+            delta_string_pp, delta_fret_pp.
+
     Difficulty is aggregated per-subseq (mean of per-subseq means), since
     difficulty is naturally a sequence-level quantity.
     """
@@ -137,10 +147,11 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
             'difficulty_n_subseqs_pp': 0,
         }
     )
+    note_records: list[dict] = []
 
     with torch.no_grad():
         for batch in loader:
-            enc, dec, sources = batch
+            enc, dec, sources, piece_ids = batch
             input_ids = enc.to(device)
             attention_mask = (input_ids != VOCAB.pad_id).long()
 
@@ -160,6 +171,7 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
 
             for b in range(input_ids.size(0)):
                 src = sources[b]
+                pid = piece_ids[b]
                 tuning = parse_tuning_from_enc(inputs_cpu[b])
                 if not tuning:
                     continue
@@ -181,24 +193,59 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
                 m['n_input_notes'] += n
 
                 for j in range(n):
+                    true_s, true_f = gt_tabs[j]
                     g_pitch = (
-                        tuning[gt_tabs[j][0] - 1] + gt_tabs[j][1]
-                        if 1 <= gt_tabs[j][0] <= len(tuning)
+                        tuning[true_s - 1] + true_f
+                        if 1 <= true_s <= len(tuning)
                         else None
                     )
 
-                    if j < len(pred_tabs):
-                        if tab_correct(pred_tabs[j], gt_tabs[j]):
-                            m['tab_correct_raw'] += 1
-                        if g_pitch is not None and pitch_correct(pred_tabs[j], g_pitch, tuning):
-                            m['pitch_correct_raw'] += 1
+                    raw = pred_tabs[j] if j < len(pred_tabs) else None
+                    cor = corrected_tabs[j] if j < len(corrected_tabs) else None
 
-                    cor = corrected_tabs[j]
+                    if raw is not None:
+                        if tab_correct(raw, gt_tabs[j]):
+                            m['tab_correct_raw'] += 1
+                        if g_pitch is not None and pitch_correct(raw, g_pitch, tuning):
+                            m['pitch_correct_raw'] += 1
                     if cor is not None:
                         if tab_correct(cor, gt_tabs[j]):
                             m['tab_correct_pp'] += 1
                         if g_pitch is not None and pitch_correct(cor, g_pitch, tuning):
                             m['pitch_correct_pp'] += 1
+
+                    raw_s, raw_f = (raw if raw else (None, None))
+                    raw_pitch = (
+                        tuning[raw_s - 1] + raw_f
+                        if raw_s is not None and 1 <= raw_s <= len(tuning)
+                        else None
+                    )
+                    pp_s, pp_f = (cor if cor else (None, None))
+                    pp_pitch = (
+                        tuning[pp_s - 1] + pp_f
+                        if pp_s is not None and 1 <= pp_s <= len(tuning)
+                        else None
+                    )
+
+                    note_records.append({
+                        'piece_id': pid,
+                        'source': src,
+                        'pitch': g_pitch,
+                        'true_string': true_s,
+                        'true_fret': true_f,
+                        'pred_raw_string': raw_s,
+                        'pred_raw_fret': raw_f,
+                        'pred_raw_pitch': raw_pitch,
+                        'pred_pp_string': pp_s,
+                        'pred_pp_fret': pp_f,
+                        'pred_pp_pitch': pp_pitch,
+                        'error_type_raw': classify_error(
+                            true_s, true_f, g_pitch, raw_s, raw_f, raw_pitch),
+                        'error_type_pp': classify_error(
+                            true_s, true_f, g_pitch, pp_s, pp_f, pp_pitch),
+                        'delta_string_pp': (pp_s - true_s) if pp_s is not None else None,
+                        'delta_fret_pp': (pp_f - true_f) if pp_f is not None else None,
+                    })
 
                 # --- difficulty: per-subseq means ---
                 d_gt = difficulty_score(gt_tabs[:n])
@@ -214,7 +261,7 @@ def evaluate_split(model, loader, device, fallback='first_viable'):
                     m['difficulty_sum_pp'] += d_pp
                     m['difficulty_n_subseqs_pp'] += 1
 
-    return dict(metrics)
+    return dict(metrics), note_records
 
 
 def aggregate(metrics):
@@ -276,6 +323,31 @@ def print_metrics(label, rows):
             f'{r["pitch_acc_raw"]:>10.3f} {r["pitch_acc_pp"]:>10.3f}   '
             f'{_fmt(r["diff_gt"]):>8} {_fmt(r["diff_raw"]):>9} {_fmt(r["diff_pp"]):>8}{marker}'
         )
+
+
+def _print_summary(label, s):
+    """Print the rich Stage-2 metrics summary returned by compute_eval_summary."""
+    if not s or s.get('n_notes', 0) == 0:
+        print(f'  [{label}] (no records)')
+        return
+    print(f'\n  [{label}] tab_strict={s["tab_strict_acc"]:.3f}  '
+          f'tab_equivalent={s["tab_equivalent_acc"]:.3f}  '
+          f'pitch_pp={s["pitch_pp_acc"]:.3f}  '
+          f'recovered_by_alt={s["recovered_by_alt"]:,}')
+    bc = s.get('drift_buckets', {})
+    bn = s.get('drift_buckets_notes', {})
+    n_qualified = max(s.get('n_pieces_qualified', 1), 1)
+    n_notes_total = max(sum(bn.values()), 1)
+    print(f'    drift buckets ({s.get("n_pieces_qualified", 0)} pieces ≥20 notes):')
+    for b in ('perfect', 'consistent_alt', 'partial_alt', 'inconsistent'):
+        p = bc.get(b, 0)
+        n = bn.get(b, 0)
+        print(f'      {b:<16s}  {p:>4d} pcs ({100 * p / n_qualified:>5.1f}%)  '
+              f'{n:>8,d} notes ({100 * n / n_notes_total:>5.1f}%)')
+    if s.get('consistent_alt_drift_histogram'):
+        print('    top consistent_alt drifts:')
+        for drift, n_pcs in list(s['consistent_alt_drift_histogram'].items())[:5]:
+            print(f'      ({drift})  {n_pcs} pcs')
 
 
 def _fmt(x):
@@ -377,17 +449,23 @@ def main():
 
         record = {'checkpoint': str(path), 'label': label, 'step': step, 'splits': {}}
 
-        val_metrics = evaluate_split(model, val_loader, device, fallback=args.fallback)
+        val_metrics, val_records = evaluate_split(model, val_loader, device, fallback=args.fallback)
         val_rows = aggregate(val_metrics)
         print_metrics('val', val_rows)
+        val_summary = compute_eval_summary(val_records)
+        _print_summary('val', val_summary)
         record['splits']['val'] = val_rows
+        record['summary_val'] = val_summary
         record['fallback'] = args.fallback
 
         if test_loader is not None:
-            test_metrics = evaluate_split(model, test_loader, device, fallback=args.fallback)
+            test_metrics, test_records = evaluate_split(model, test_loader, device, fallback=args.fallback)
             test_rows = aggregate(test_metrics)
             print_metrics('test', test_rows)
+            test_summary = compute_eval_summary(test_records)
+            _print_summary('test', test_summary)
             record['splits']['test'] = test_rows
+            record['summary_test'] = test_summary
 
         elapsed = time.time() - t0
         print(f'  elapsed: {elapsed:.1f}s')

@@ -13,9 +13,11 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -25,8 +27,19 @@ from torch.utils.data import DataLoader
 from transformers import Adafactor
 
 from gtp import REPO_ROOT
+from gtp.stage2.config import (
+    ConditioningConfig,
+    DataConfig,
+    ModelConfig,
+    RebalancingConfig,
+    RunConfig,
+    TrainConfig,
+    get_git_sha,
+    get_timestamp,
+)
 from gtp.stage2.data import build_datasets
 from gtp.stage2.model import build_model
+from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
     MAX_TIME_SHIFT,
     NOTE_ON,
@@ -106,7 +119,7 @@ def run_eval(model, val_loader, device, max_batches=None):
         for i, batch in enumerate(val_loader):
             if max_batches is not None and i >= max_batches:
                 break
-            enc, dec, sources = batch
+            enc, dec, sources, _piece_ids = batch
             input_ids, attention_mask, labels = make_t5_inputs(enc, dec, device)
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
@@ -224,6 +237,10 @@ def main():
         '--num-workers', type=int, default=2, help='DataLoader workers; 0 = main process only (slower but bulletproof)'
     )
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument(
+        '--experiment-label', default='', help='Free-form label saved to config.json for run comparison'
+    )
+    parser.add_argument('--notes', default='', help='Free-form notes saved to config.json')
     args = parser.parse_args()
 
     device = args.device or auto_device()
@@ -269,6 +286,46 @@ def main():
     model.train()
     print(f'  parameters: {sum(p.numel() for p in model.parameters()):,}')
 
+    # Snapshot run config to <output_dir>/config.json. metrics.jsonl is appended
+    # to per eval cycle below. compare_runs.py reads both for cross-run comparison.
+    run_config = RunConfig(
+        run_id=Path(args.output_dir).name,
+        experiment_label=args.experiment_label,
+        timestamp=get_timestamp(),
+        git_sha=get_git_sha(),
+        notes=args.notes,
+        model=ModelConfig(
+            params=sum(p.numel() for p in model.parameters()),
+            d_model=getattr(model.config, 'd_model', 0),
+            d_ff=getattr(model.config, 'd_ff', 0),
+            n_layers=getattr(model.config, 'num_layers', 0),
+            n_heads=getattr(model.config, 'num_heads', 0),
+            vocab_size=len(VOCAB),
+        ),
+        train=TrainConfig(
+            batch_size=args.batch_size,
+            max_steps=args.max_steps,
+            eval_steps=args.eval_steps,
+            save_steps=args.save_steps,
+            eval_batches=args.eval_batches,
+            num_workers=args.num_workers,
+            seed=args.seed,
+            resumed_from=args.resume,
+        ),
+        data=DataConfig(
+            dataset_dir=str(AUG_DATA_DIR),
+            sources=args.datasets or [],
+            train_subseqs=len(train_ds),
+            val_subseqs=len(val_ds),
+        ),
+        conditioning=ConditioningConfig(),  # default: no genre/source conditioning yet
+        rebalancing=RebalancingConfig(),  # default: no rebalancing yet
+    )
+    config_path = Path(args.output_dir) / 'config.json'
+    run_config.save(config_path)
+    print(f'  config: {config_path}')
+    metrics_path = Path(args.output_dir) / 'metrics.jsonl'
+
     optimizer = Adafactor(
         model.parameters(),
         lr=None,
@@ -296,6 +353,7 @@ def main():
     print(f'Training (max_steps={args.max_steps}, starting_step={step})')
     recent_losses = []
     step_times = []
+    losses_since_eval: list[float] = []  # reset at each eval; used for metrics.jsonl
     train_iter = iter(train_loader)
     start_time = time.time()
     time_start_step = step
@@ -308,7 +366,7 @@ def main():
             batch = next(train_iter)
 
         t0 = time.time()
-        enc, dec, _sources = batch
+        enc, dec, _sources, _piece_ids = batch
         input_ids, attention_mask, labels = make_t5_inputs(enc, dec, device)
 
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
@@ -319,7 +377,9 @@ def main():
         optimizer.step()
 
         step += 1
-        recent_losses.append(loss.item())
+        loss_val = loss.item()
+        recent_losses.append(loss_val)
+        losses_since_eval.append(loss_val)
         step_times.append(time.time() - t0)
 
         log_interval = max(1, min(50, args.max_steps // 20))
@@ -344,6 +404,24 @@ def main():
                     f'    {src:<12} loss={m["loss"]:.3f}  '
                     f'tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
                 )
+            # Persist structured eval to metrics.jsonl for compare_runs.py.
+            # train_loss is averaged over the same step window the eval covers
+            # (since previous eval), so it's directly comparable to val_loss.
+            train_loss_window = (
+                float(np.mean(losses_since_eval)) if losses_since_eval else None
+            )
+            metrics_record = {
+                'step': step,
+                'train_loss_since_last_eval': train_loss_window,
+                'n_train_steps_in_window': len(losses_since_eval),
+                'val_loss': overall_loss,
+                'tab_acc_tf': tab_acc,
+                'pitch_acc_tf': pitch_acc,
+                'per_source': per_src,
+            }
+            with metrics_path.open('a') as f:
+                f.write(json.dumps(metrics_record) + '\n')
+            losses_since_eval.clear()
 
         if step > 0 and step % args.save_steps == 0:
             ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
@@ -360,6 +438,20 @@ def main():
         print(
             f'  {src:<12} loss={m["loss"]:.4f}  tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
         )
+
+    # Final eval JSON. Note: this is teacher-forced; for autoregressive metrics
+    # (tab_strict / tab_equivalent / drift buckets) run dump_eval_predictions.py
+    # + analyze_errors.py separately. Those numbers go into a richer summary.json.
+    final_eval = {
+        'step': step,
+        'val_loss': final_loss,
+        'tab_acc_tf': final_tab,
+        'pitch_acc_tf': final_pitch,
+        'per_source': final_per_src,
+    }
+    final_eval_path = Path(args.output_dir) / 'final_eval.json'
+    final_eval_path.write_text(json.dumps(final_eval, indent=2))
+    print(f'\nFinal eval written: {final_eval_path}')
 
 
 if __name__ == '__main__':
