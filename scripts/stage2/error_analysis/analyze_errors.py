@@ -33,6 +33,8 @@ from pathlib import Path
 
 import numpy as np
 
+from gtp.stage2.metrics import piece_drift_signature
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -131,19 +133,11 @@ def bucket_fret(f):
 
 
 def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
-    """Per-piece (Δstring_pp, Δfret_pp) drift signature.
+    """Per-piece drift signature, enriched with metadata for downstream slicing.
 
-    For each piece with ≥ min_notes notes, compute:
-      * correct_rate: fraction of notes where pred == true (drift = (0, 0)).
-      * modal_drift: most common non-zero (Δstring, Δfret) among ERROR notes.
-      * error_consistency: fraction of error notes that share modal_drift.
-      * bucket:
-          'perfect'        - correct_rate >= 0.95.
-          'consistent_alt' - error_consistency >= 0.80.
-          'partial_alt'    - 0.50 <= error_consistency < 0.80.
-          'inconsistent'   - everything else.
-
-    Pieces with neither drift signal nor enough correct notes go to 'inconsistent'.
+    Thin wrapper around `gtp.stage2.metrics.piece_drift_signature` that adds
+    piece metadata (source, genre_coarse, gs_style, tempo, capo) so the
+    analyze_errors tables can group by those fields.
     """
     by_piece: dict[str, list[dict]] = defaultdict(list)
     for r in records:
@@ -153,33 +147,7 @@ def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
     for pid, items in by_piece.items():
         if len(items) < min_notes:
             continue
-        n = len(items)
-        n_correct = sum(1 for r in items if r['error_type_pp'] == 'correct')
-        correct_rate = n_correct / n
-
-        drifts: Counter = Counter()
-        for r in items:
-            ds, df = r.get('delta_string_pp'), r.get('delta_fret_pp')
-            if ds is None or df is None or (ds, df) == (0, 0):
-                continue
-            drifts[(ds, df)] += 1
-
-        n_errors = sum(drifts.values())
-        if drifts:
-            modal_drift, n_modal = drifts.most_common(1)[0]
-            error_consistency = n_modal / n_errors
-        else:
-            modal_drift, n_modal, error_consistency = None, 0, 0.0
-
-        if correct_rate >= 0.95:
-            bucket = 'perfect'
-        elif error_consistency >= 0.80:
-            bucket = 'consistent_alt'
-        elif error_consistency >= 0.50:
-            bucket = 'partial_alt'
-        else:
-            bucket = 'inconsistent'
-
+        sig = piece_drift_signature(items)
         sample = items[0]
         out.append({
             'piece_id': pid,
@@ -188,14 +156,7 @@ def per_piece_drift(records: list[dict], min_notes: int = 20) -> list[dict]:
             'gs_style': sample.get('gs_style'),
             'tempo': sample.get('tempo'),
             'capo': sample.get('capo'),
-            'n': n,
-            'n_correct': n_correct,
-            'correct_rate': correct_rate,
-            'n_errors': n_errors,
-            'modal_drift': modal_drift,
-            'n_modal_drift': n_modal,
-            'error_consistency': error_consistency,
-            'bucket': bucket,
+            **sig,
         })
     return out
 
