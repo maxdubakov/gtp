@@ -38,7 +38,7 @@ from gtp.stage2.metrics import difficulty_score
 from gtp.stage2.postprocess import correct_tabs
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
-STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_001' / 'step_0060000_final.pth'
+STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_baseline' / 'checkpoints' / 'step_0060000_final.pth'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
 SR = 16000

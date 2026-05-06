@@ -22,11 +22,15 @@ PYTHON="$REPO_ROOT/venv/bin/python"
     echo "git_dirty: $(git diff --quiet 2>/dev/null && echo no || echo yes)"
     echo "build_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     "$PYTHON" -c "
-from gtp.stage2.tokenizer import VOCAB, TIME_SHIFT_BINS
+from gtp.stage2.tokenizer import Vocabulary, TIME_SHIFT_BINS
 from gtp.stage2.data import MAX_PLAYABLE_FRET
-print(f'vocab_size: {len(VOCAB)}')
-print(f'pad_id: {VOCAB.pad_id}')
-print(f'eos_id: {VOCAB.eos_id}')
+# Snapshot both vocab variants so RUNINFO records what either training mode would use.
+v_no_genre = Vocabulary(include_genre=False)
+v_genre = Vocabulary(include_genre=True)
+print(f'vocab_size_no_genre: {len(v_no_genre)}')
+print(f'vocab_size_genre: {len(v_genre)}')
+print(f'pad_id: {v_no_genre.pad_id}')
+print(f'eos_id: {v_no_genre.eos_id}')
 print(f'time_shift_step: {TIME_SHIFT_BINS[0]}')
 print(f'max_playable_fret: {MAX_PLAYABLE_FRET}')
 "

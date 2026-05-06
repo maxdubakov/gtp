@@ -13,13 +13,13 @@ Outputs (under --output-dir):
 
 Usage:
   python scripts/stage2/error_analysis/dump_eval_predictions.py \\
-      --checkpoint runs/stage2_001/step_0060000_final.pth \\
+      --checkpoint runs/stage2_baseline/checkpoints/step_0060000_final.pth \\
       --splits val test \\
       --output-dir results/error_analysis/run_60k
 
 Smoke (sub-sample of pieces from each source):
   python scripts/stage2/error_analysis/dump_eval_predictions.py \\
-      --checkpoint runs/stage2_001/step_0060000_final.pth \\
+      --checkpoint runs/stage2_baseline/checkpoints/step_0060000_final.pth \\
       --splits val \\
       --pieces-per-source 5 \\
       --output-dir /tmp/dump_smoke

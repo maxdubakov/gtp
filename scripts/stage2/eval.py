@@ -4,16 +4,16 @@ Computes pitch_acc and tab_acc, both raw (model output) and post-processed (pape
 ±5 neighbor correction → first viable fallback), per source, on val (and optionally test).
 
 Single checkpoint:
-  python scripts/stage2/eval.py --checkpoint runs/stage2_001/step_0060000_final.pth
+  python scripts/stage2/eval.py --checkpoint runs/stage2_baseline/checkpoints/step_0060000_final.pth
 
 All checkpoints in a directory:
-  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_001/
+  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_baseline/
 
 Include test split (default is val only):
-  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_001/ --include-test
+  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_baseline/ --include-test
 
 Persist results for plotting / later analysis:
-  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_001/ --output results/eval.json
+  python scripts/stage2/eval.py --checkpoint-dir runs/stage2_baseline/ --output results/eval.json
 """
 
 import argparse
@@ -26,6 +26,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from gtp.log import info
+from gtp.stage2.config import RunConfig, find_run_config
 from gtp.stage2.data import TabDataset, load_jsonl_pieces
 from gtp.stage2.metrics import (
     classify_error,
@@ -195,11 +196,7 @@ def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
 
                 for j in range(n):
                     true_s, true_f = gt_tabs[j]
-                    g_pitch = (
-                        tuning[true_s - 1] + true_f
-                        if 1 <= true_s <= len(tuning)
-                        else None
-                    )
+                    g_pitch = tuning[true_s - 1] + true_f if 1 <= true_s <= len(tuning) else None
 
                     raw = pred_tabs[j] if j < len(pred_tabs) else None
                     cor = corrected_tabs[j] if j < len(corrected_tabs) else None
@@ -215,38 +212,30 @@ def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
                         if g_pitch is not None and pitch_correct(cor, g_pitch, tuning):
                             m['pitch_correct_pp'] += 1
 
-                    raw_s, raw_f = (raw if raw else (None, None))
-                    raw_pitch = (
-                        tuning[raw_s - 1] + raw_f
-                        if raw_s is not None and 1 <= raw_s <= len(tuning)
-                        else None
-                    )
-                    pp_s, pp_f = (cor if cor else (None, None))
-                    pp_pitch = (
-                        tuning[pp_s - 1] + pp_f
-                        if pp_s is not None and 1 <= pp_s <= len(tuning)
-                        else None
-                    )
+                    raw_s, raw_f = raw if raw else (None, None)
+                    raw_pitch = tuning[raw_s - 1] + raw_f if raw_s is not None and 1 <= raw_s <= len(tuning) else None
+                    pp_s, pp_f = cor if cor else (None, None)
+                    pp_pitch = tuning[pp_s - 1] + pp_f if pp_s is not None and 1 <= pp_s <= len(tuning) else None
 
-                    note_records.append({
-                        'piece_id': pid,
-                        'source': src,
-                        'pitch': g_pitch,
-                        'true_string': true_s,
-                        'true_fret': true_f,
-                        'pred_raw_string': raw_s,
-                        'pred_raw_fret': raw_f,
-                        'pred_raw_pitch': raw_pitch,
-                        'pred_pp_string': pp_s,
-                        'pred_pp_fret': pp_f,
-                        'pred_pp_pitch': pp_pitch,
-                        'error_type_raw': classify_error(
-                            true_s, true_f, g_pitch, raw_s, raw_f, raw_pitch),
-                        'error_type_pp': classify_error(
-                            true_s, true_f, g_pitch, pp_s, pp_f, pp_pitch),
-                        'delta_string_pp': (pp_s - true_s) if pp_s is not None else None,
-                        'delta_fret_pp': (pp_f - true_f) if pp_f is not None else None,
-                    })
+                    note_records.append(
+                        {
+                            'piece_id': pid,
+                            'source': src,
+                            'pitch': g_pitch,
+                            'true_string': true_s,
+                            'true_fret': true_f,
+                            'pred_raw_string': raw_s,
+                            'pred_raw_fret': raw_f,
+                            'pred_raw_pitch': raw_pitch,
+                            'pred_pp_string': pp_s,
+                            'pred_pp_fret': pp_f,
+                            'pred_pp_pitch': pp_pitch,
+                            'error_type_raw': classify_error(true_s, true_f, g_pitch, raw_s, raw_f, raw_pitch),
+                            'error_type_pp': classify_error(true_s, true_f, g_pitch, pp_s, pp_f, pp_pitch),
+                            'delta_string_pp': (pp_s - true_s) if pp_s is not None else None,
+                            'delta_fret_pp': (pp_f - true_f) if pp_f is not None else None,
+                        }
+                    )
 
                 # --- difficulty: per-subseq means ---
                 d_gt = difficulty_score(gt_tabs[:n])
@@ -331,10 +320,12 @@ def _print_summary(label, s):
     if not s or s.get('n_notes', 0) == 0:
         print(f'  [{label}] (no records)')
         return
-    print(f'\n  [{label}] tab_strict={s["tab_strict_acc"]:.3f}  '
-          f'tab_equivalent={s["tab_equivalent_acc"]:.3f}  '
-          f'pitch_pp={s["pitch_pp_acc"]:.3f}  '
-          f'recovered_by_alt={s["recovered_by_alt"]:,}')
+    print(
+        f'\n  [{label}] tab_strict={s["tab_strict_acc"]:.3f}  '
+        f'tab_equivalent={s["tab_equivalent_acc"]:.3f}  '
+        f'pitch_pp={s["pitch_pp_acc"]:.3f}  '
+        f'recovered_by_alt={s["recovered_by_alt"]:,}'
+    )
     bc = s.get('drift_buckets', {})
     bn = s.get('drift_buckets_notes', {})
     n_qualified = max(s.get('n_pieces_qualified', 1), 1)
@@ -343,8 +334,10 @@ def _print_summary(label, s):
     for b in ('perfect', 'consistent_alt', 'partial_alt', 'inconsistent'):
         p = bc.get(b, 0)
         n = bn.get(b, 0)
-        print(f'      {b:<16s}  {p:>4d} pcs ({100 * p / n_qualified:>5.1f}%)  '
-              f'{n:>8,d} notes ({100 * n / n_notes_total:>5.1f}%)')
+        print(
+            f'      {b:<16s}  {p:>4d} pcs ({100 * p / n_qualified:>5.1f}%)  '
+            f'{n:>8,d} notes ({100 * n / n_notes_total:>5.1f}%)'
+        )
     if s.get('consistent_alt_drift_histogram'):
         print('    top consistent_alt drifts:')
         for drift, n_pcs in list(s['consistent_alt_drift_histogram'].items())[:5]:
@@ -361,23 +354,31 @@ def _fmt(x):
 
 
 def find_checkpoints(path):
-    """Resolve --checkpoint or --checkpoint-dir to a list of (label, path) pairs."""
+    """Resolve --checkpoint or --checkpoint-dir to a list of (label, path) pairs.
+
+    Supports both layouts:
+      - new:    <run-dir>/checkpoints/step_*.pth
+      - legacy: <run-dir>/step_*.pth
+    When given a run dir, prefers the `checkpoints/` subdir if it exists.
+    """
     p = Path(path)
     if p.is_file():
         return [(p.stem, p)]
     if p.is_dir():
-        files = sorted(p.glob('step_*.pth'))
+        ckpt_dir = p / 'checkpoints'
+        search_dir = ckpt_dir if ckpt_dir.is_dir() else p
+        files = sorted(search_dir.glob('step_*.pth'))
         return [(f.stem, f) for f in files]
     raise FileNotFoundError(f'Not a file or directory: {path}')
 
 
 def load_checkpoint(path, device):
     """Load checkpoint + matching Vocabulary. Returns (model, vocab, iteration)."""
-    from gtp.stage2.config import RunConfig
+    from gtp.stage2.config import RunConfig, find_run_config
 
     include_genre = False
-    config_path = Path(path).parent / 'config.json'
-    if config_path.exists():
+    config_path = find_run_config(path)
+    if config_path is not None:
         try:
             cfg = RunConfig.load(config_path)
             include_genre = cfg.conditioning.genre
@@ -388,10 +389,7 @@ def load_checkpoint(path, device):
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
     meta = ckpt.get('tokenizer_meta', {})
     if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
-        raise ValueError(
-            f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, '
-            f'current vocab has {len(vocab)}.'
-        )
+        raise ValueError(f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, current vocab has {len(vocab)}.')
     model = build_model(vocab).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
@@ -410,10 +408,12 @@ def main():
     ap.add_argument('--num-workers', type=int, default=0)
     ap.add_argument('--output', default=None, help='Optional JSON path to save aggregated results')
     ap.add_argument(
-        '--fallback', choices=['first_viable', 'nearest_viable'], default='first_viable',
+        '--fallback',
+        choices=['first_viable', 'nearest_viable'],
+        default='first_viable',
         help='Post-processing fallback strategy when no model tab in ±window matches the '
-             'input pitch. first_viable = paper-faithful (high-string-first lowest-fret). '
-             'nearest_viable = deviation: Manhattan-nearest realization to the model raw output.',
+        'input pitch. first_viable = paper-faithful (high-string-first lowest-fret). '
+        'nearest_viable = deviation: Manhattan-nearest realization to the model raw output.',
     )
     args = ap.parse_args()
 
@@ -423,13 +423,12 @@ def main():
     # Build vocab from the first checkpoint's sibling config.json. All
     # checkpoints in --checkpoint-dir mode are assumed to share a vocab
     # (same training run). Falls back to no-genre vocab if no config.json.
+    # find_run_config handles both layouts (checkpoints/ subdir or flat).
     ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
     info(f'Evaluating {len(ckpts)} checkpoint(s)')
-    first_ckpt_dir = Path(ckpts[0][1]).parent
-    config_path = first_ckpt_dir / 'config.json'
+    config_path = find_run_config(ckpts[0][1])
     include_genre = False
-    if config_path.exists():
-        from gtp.stage2.config import RunConfig
+    if config_path is not None:
         try:
             cfg = RunConfig.load(config_path)
             include_genre = cfg.conditioning.genre

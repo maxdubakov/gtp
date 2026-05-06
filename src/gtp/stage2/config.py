@@ -172,6 +172,21 @@ def get_timestamp() -> str:
     return datetime.now().isoformat(timespec='seconds')
 
 
+def find_run_config(checkpoint_path) -> Path | None:
+    """Locate the sibling config.json for a checkpoint, handling both layouts.
+
+    New layout:    <run-dir>/checkpoints/step_X.pth + <run-dir>/config.json
+    Legacy layout: <run-dir>/step_X.pth + <run-dir>/config.json
+
+    Returns the config.json Path if found, else None.
+    """
+    p = Path(checkpoint_path)
+    for candidate in (p.parent / 'config.json', p.parent.parent / 'config.json'):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def get_device_info(device: str) -> DeviceConfig:
     """Snapshot device info for a run. `device` is 'cpu' | 'mps' | 'cuda'.
 

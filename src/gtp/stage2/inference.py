@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 
-from gtp.stage2.config import RunConfig
+from gtp.stage2.config import RunConfig, find_run_config
 from gtp.stage2.model import build_model
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import (
@@ -87,8 +87,8 @@ def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
     downstream helpers (`tokenize_piece`, `generate_tabs`, etc.).
     """
     include_genre = False
-    config_path = Path(path).parent / 'config.json'
-    if config_path.exists():
+    config_path = find_run_config(path)
+    if config_path is not None:
         try:
             cfg = RunConfig.load(config_path)
             include_genre = cfg.conditioning.genre

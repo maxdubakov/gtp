@@ -9,7 +9,7 @@ periodic eval/save, ETA logging. Differences:
 Usage:
   python scripts/stage2/train.py --device cuda --num-workers 4
   python scripts/stage2/train.py --datasets guitarset --batch-size 2 --max-steps 50  # smoke test
-  python scripts/stage2/train.py --resume runs/stage2_001/step_0010000.pth
+  python scripts/stage2/train.py --resume runs/stage2_baseline/checkpoints/step_0010000.pth
 """
 
 import argparse
@@ -463,11 +463,15 @@ def main():
             losses_since_eval.clear()
 
         if step > 0 and step % args.save_steps == 0:
-            ckpt_path = os.path.join(args.output_dir, f'step_{step:07d}.pth')
+            ckpt_dir = os.path.join(args.output_dir, 'checkpoints')
+            os.makedirs(ckpt_dir, exist_ok=True)
+            ckpt_path = os.path.join(ckpt_dir, f'step_{step:07d}.pth')
             save_checkpoint(ckpt_path, step, model, optimizer, vocab, args)
             info(f'[saved] {ckpt_path}')
 
-    final_path = os.path.join(args.output_dir, f'step_{step:07d}_final.pth')
+    final_dir = os.path.join(args.output_dir, 'checkpoints')
+    os.makedirs(final_dir, exist_ok=True)
+    final_path = os.path.join(final_dir, f'step_{step:07d}_final.pth')
     save_checkpoint(final_path, step, model, optimizer, vocab, args)
     info(f'\nTraining complete. Final checkpoint: {final_path}')
 
