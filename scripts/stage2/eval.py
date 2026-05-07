@@ -18,6 +18,7 @@ Persist results for plotting / later analysis:
 
 import argparse
 import json
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -372,25 +373,33 @@ def find_checkpoints(path):
     raise FileNotFoundError(f'Not a file or directory: {path}')
 
 
-def subsample_evenly(items, n):
-    """Pick `n` evenly-spaced items from a sorted list. Always includes first + last.
+_STEP_RE = re.compile(r'step_(\d+)')
 
-    Useful for trajectory plotting when you don't want to evaluate every saved
-    checkpoint. Returns the full list unchanged if `n` is None or len <= n.
+
+def filter_by_steps(items, steps):
+    """Keep only `(label, path)` items whose label encodes one of the requested steps.
+
+    Use case: aligning eval sample points across runs with different save cadences
+    so the resulting eval_sampled.json files are directly comparable. Errors if
+    any requested step is not found among `items`.
+
+    When duplicate labels exist for the same step (e.g. step_0030000.pth and
+    step_0030000_final.pth), prefers the `_final` variant.
     """
-    if n is None or len(items) <= n:
-        return items
-    if n <= 1:
-        return [items[-1]]
-    # round() biases the indices to be roughly equally spaced; first and last are always included.
-    indices = [round(i * (len(items) - 1) / (n - 1)) for i in range(n)]
-    # Dedupe in case of rounding collisions for tight n.
-    seen, out = set(), []
-    for i in indices:
-        if i not in seen:
-            seen.add(i)
-            out.append(items[i])
-    return out
+    by_step: dict[int, tuple] = {}
+    for label, path in items:
+        m = _STEP_RE.search(label)
+        if not m:
+            continue
+        s = int(m.group(1))
+        if s not in by_step or '_final' in label:
+            by_step[s] = (label, path)
+    missing = [s for s in steps if s not in by_step]
+    if missing:
+        raise SystemExit(
+            f'Requested checkpoint-steps not found: {missing}. Available: {sorted(by_step)}'
+        )
+    return [by_step[s] for s in steps]
 
 
 def load_checkpoint(path, device):
@@ -437,12 +446,15 @@ def main():
         'nearest_viable = deviation: Manhattan-nearest realization to the model raw output.',
     )
     ap.add_argument(
-        '--max-checkpoints',
+        '--checkpoint-steps',
         type=int,
+        nargs='+',
         default=None,
-        help='Sample N evenly-spaced checkpoints from --checkpoint-dir (always includes '
-             'first + last). Useful for trajectory eval without paying for every saved '
-             'checkpoint. Default: eval all.',
+        metavar='STEP',
+        help='Eval only checkpoints at these exact step values (e.g. '
+             '--checkpoint-steps 5000 10000 15000 ...). Errors if any requested step '
+             "is not saved. Useful for aligning eval points across runs with "
+             'different save cadences. Default: eval all available checkpoints.',
     )
     args = ap.parse_args()
 
@@ -455,9 +467,10 @@ def main():
     # find_run_config handles both layouts (checkpoints/ subdir or flat).
     ckpts = find_checkpoints(args.checkpoint or args.checkpoint_dir)
     n_total = len(ckpts)
-    ckpts = subsample_evenly(ckpts, args.max_checkpoints)
-    if len(ckpts) < n_total:
-        info(f'Sampling {len(ckpts)} of {n_total} checkpoints (--max-checkpoints={args.max_checkpoints})')
+    if args.checkpoint_steps:
+        ckpts = filter_by_steps(ckpts, args.checkpoint_steps)
+        info(f'Selecting {len(ckpts)} of {n_total} checkpoints '
+             f'(--checkpoint-steps={args.checkpoint_steps})')
     info(f'Evaluating {len(ckpts)} checkpoint(s)')
     config_path = find_run_config(ckpts[0][1])
     include_genre = False
