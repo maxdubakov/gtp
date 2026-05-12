@@ -8,14 +8,16 @@
 ├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
 │     2b │  ~5h │ 2M + GENRE + dropout + rebalancing      │ Combined recipe                  │
 ├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
-│ decide │    — │ Pick best 2M recipe                     │ —                                │
-├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
-│      3 │  ~7h │ 4M + best recipe                        │ Capacity test                    │
-│        │      │                                         │ (Chinchilla-comfortable)         │
-├────────┼──────┼─────────────────────────────────────────┼──────────────────────────────────┤
-│      4 │ ~25h │ 10M + best recipe — only if 4M showed   │ Stretch capacity test            │
-│        │      │ clean improvement                       │                                  │
-└────────┴──────┴─────────────────────────────────────────┴──────────────────────────────────┘
+exp 3 - re-classificed genres for Leduc + collapse underpresented genres to unknown
+exp 4 - bigger model with same genres if worked
+exp 5 - beam search on the best model (no re-training)
+exp 6 - anchor postprocessing (no re-training)
+exp 7 - exp 5 + exp 6
+exp 8 - (alt. in case exp 3-4 fails) add PREV_TAB to input sequence
+But, test this before: look at where errors happen within a piece.
+If errors are roughly uniformly distributed across the piece, anchor tokens at sub-sequence boundaries will not likely help.
+If errors cluster at the start of sub-sequences (notes 1-20 of each sub-sequence vs notes 100+), anchor tokens should help A LOT.
+You can compute this from your existing enriched.jsonl — just add a note_index_within_subseq column and slice tab_pp by it. ~30 minutes of analysis, no retraining needed. If errors cluster at boundaries, anchor tokens are high-value. If they don't, the position commitment problem is happening inside sub-sequences too and anchor tokens alone won't be enough.
 
 Ideas what to try next:
 1. Analyze dadaGP more deeply:
