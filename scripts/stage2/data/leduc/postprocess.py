@@ -24,10 +24,147 @@ import librosa
 import numpy as np
 import pretty_midi
 
+JAZZ_ARTIST_SUBSTRINGS: tuple[str, ...] = (
+    'joe pass',
+    'wes montgomery',
+    'george benson',
+    'johnny smith',
+    'kenny burrell',
+    'martin taylor',
+    'dick garcia',
+    'emily remler',
+    'barney kessel',
+    'bucky pizzarelli',
+    'ed bickert',
+    'grant green',
+    'larry carlton',
+    'lou mecca',
+    'peter leitch',
+    'ron eschete',
+    'tal farlow',
+    'ted greene',
+    'al di meola',
+    'al viola',
+    'baden powell',
+    'benny golson',
+    'billy bauer',
+    'charlie byrd',
+    'vince guaraldi',
+    'earl klugh',
+    'harry leahey',
+    'ike isaacs',
+    'jack wilkins',
+    'jim hall',
+    'jim mullen',
+    'jimmy ponder',
+    'john collins',
+    'john mclaughlin',
+    'kenny poole',
+    'lenny breau',
+    'lorne lofsky',
+    'pasquale grasso',
+    'luiz bonfa',
+    'george van eps',
+    'coryell',
+    'ernest ranglin',
+    'sandy devito',
+    'stephen d. anderson',
+    'pat martino',
+    'charlie parker',
+    'royal roost',
+    'francois leduc',
+)
 
-# Leduc is entirely jazz transcriptions — fixed assignment.
-def classify_leduc() -> str:
-    return 'jazz'
+NOT_JAZZ_ARTIST_SUBSTRINGS: tuple[str, ...] = (
+    'chet atkins',
+    'jerry reed',
+)
+
+PEDAGOGY_TITLE_KEYWORDS: tuple[str, ...] = (
+    'worksheet',
+    'etude',
+    'block chord',
+    'comping',
+    'chicken picking',
+    'backward targeting',
+    '7th on bass',
+    '3rd on bass',
+    'extensions',
+)
+
+CHRISTMAS_TITLE_KEYWORDS: tuple[str, ...] = (
+    'christmas',
+    'xmas',
+    'holly jolly',
+    'jingle',
+    'silent night',
+    'auld lang',
+    'noel',
+    'rudolph',
+    'amazing grace',
+    'wassail',
+    'joy to the world',
+    'frosty',
+    'sleigh ride',
+    'winter wonderland',
+    'home for the holidays',
+    'mommy kissing santa',
+    'come all ye',
+    'come, all ye',
+    'manger',
+    'santa',
+    'snowman',
+    'merry little',
+    'first noel',
+    'santa baby',
+    'feliz navidad',
+    'deck the hall',
+    'herald angel',
+    'midnight clear',
+    'jolly old',
+    'mistletoe',
+    'o holy',
+    'town of bethlehem',
+    'chipmunk song',
+    'coventry carol',
+    'god rest',
+    'let it snow',
+    'o come',
+    'emmanuel',
+)
+
+
+def _normalize(s: str | None) -> str:
+    import unicodedata
+
+    if not s:
+        return ''
+    nfkd = unicodedata.normalize('NFKD', s)
+    return nfkd.encode('ascii', 'ignore').decode('ascii').lower().strip()
+
+
+def classify_leduc(artist: str | None, title: str | None) -> tuple[str, float, str]:
+    a = _normalize(artist)
+    t = _normalize(title)
+
+    for x in NOT_JAZZ_ARTIST_SUBSTRINGS:
+        if x in a:
+            return 'unknown', 0.95, f'country_artist:{x.replace(" ", "_")}'
+
+    for x in JAZZ_ARTIST_SUBSTRINGS:
+        if x in a:
+            return 'jazz', 0.95, f'jazz_artist:{x.replace(" ", "_")}'
+
+    for kw in PEDAGOGY_TITLE_KEYWORDS:
+        if kw in t:
+            return 'unknown', 0.85, f'pedagogy_title:{kw.replace(" ", "_")}'
+
+    for kw in CHRISTMAS_TITLE_KEYWORDS:
+        if kw in t:
+            return 'unknown', 0.85, f'christmas_title:{kw.replace(" ", "_")}'
+
+    return 'unknown', 0.50, 'default_no_match'
+
 
 DEFAULT_TUNING = [64, 59, 55, 50, 45, 40]
 DEFAULT_TIMING_BPM = 120  # what we normalize to when real tempo is unknown
@@ -97,7 +234,10 @@ def main():
             n['end'] = round(n['end'] * scale, 4)
 
     data['tempo'] = round(real_tempo, 2) if real_tempo is not None else None
-    data['genre'] = classify_leduc()
+    genre, genre_conf, genre_reason = classify_leduc(data.get('artist'), data.get('title'))
+    data['genre'] = genre
+    data['genre_confidence'] = genre_conf
+    data['genre_reason'] = genre_reason
 
     with open(json_path, 'w') as f:
         json.dump(data, f, indent=2)
