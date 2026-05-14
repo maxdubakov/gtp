@@ -86,7 +86,7 @@ def _bare(token_type):
 class Vocabulary:
     """Stage 2 token vocabulary.
 
-    Pass `include_genre=True` to add 14 `GENRE<X>` tokens for conditioning.
+    Pass `include_genre=True` to add `GENRE<X>` tokens for conditioning.
     The flag is part of model config so old (no-genre) checkpoints continue
     to load against a `Vocabulary(include_genre=False)`.
     """
@@ -354,8 +354,6 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
         note_idx += notes_in_seq
 
     return sequences
-
-
 
 
 def parse_token_str(s):

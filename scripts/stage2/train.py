@@ -59,7 +59,7 @@ DEFAULT_OUTPUT_DIR = os.path.join(REPO_ROOT, 'runs', 'stage2_001')
 #   * GuitarSet val_loss was ~10× DadaGP — biggest target → 8× upsample
 #   * Leduc val_loss was ~2× DadaGP — moderate target → 5× upsample
 #   * DadaGP and GuitarToday are already well-served at 1×
-#   * Within DadaGP, classical/jazz/blues/country had 73-78% pp accuracy (worst
+#   * Within DadaGP, classical/jazz/blues had 73-78% pp accuracy (worst
 #     coarse buckets) — boost by 1.5×. Other genres stay at 1×.
 DEFAULT_REBALANCE_SOURCE = {
     'dadagp': 1.0,
@@ -71,7 +71,6 @@ DEFAULT_REBALANCE_GENRE = {
     'classical': 1.5,
     'jazz': 1.5,
     'blues': 1.5,
-    'country': 1.5,
 }
 
 
