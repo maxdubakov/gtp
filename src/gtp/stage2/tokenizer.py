@@ -364,6 +364,21 @@ def parse_token_str(s):
     return s[:open_idx], s[open_idx + 1 : -1]
 
 
+def parse_tuning_from_enc(enc_ids, vocab) -> list[int] | None:
+    in_tuning = False
+    tuning: list[int] = []
+    for tid in enc_ids:
+        t, v = parse_token_str(vocab.decode(int(tid)))
+        if t == TUNING_START:
+            in_tuning = True
+            tuning = []
+        elif t == TUNING_END:
+            return tuning if tuning else None
+        elif t == NOTE_ON and in_tuning:
+            tuning.append(int(v))
+    return None
+
+
 def encoder_tokens_to_notes(token_strs):
     """Reverse of notes_to_encoder_tokens.
 

@@ -1,22 +1,10 @@
-"""Train T5 model with self-adaptive Adafactor.
-
-Mirrors the Stage 1 training pattern: argparse, infinite iterator over the loader,
-periodic eval/save, ETA logging. Differences:
-  - HF T5ForConditionalGeneration (returns loss when given labels)
-  - Adafactor in self-adaptive mode (lr=None, no manual schedule)
-  - Per-source val loss tracking via the source tag in TabDataset batches
-
-Usage:
-  python scripts/stage2/train.py --device cuda --num-workers 4
-  python scripts/stage2/train.py --datasets guitarset --batch-size 2 --max-steps 50  # smoke test
-  python scripts/stage2/train.py --resume runs/stage2_baseline/checkpoints/step_0010000.pth
-"""
+"""Train T5 model with self-adaptive Adafactor."""
 
 import argparse
 import json
 import os
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +14,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import Adafactor
 
-from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage2.config import (
     ConditioningConfig,
@@ -39,39 +26,20 @@ from gtp.stage2.config import (
     get_git_sha,
     get_timestamp,
 )
-from gtp.stage2.data import build_datasets, compute_sampling_weights
+from gtp.stage2.data import DEFAULT_REBALANCE_GENRE, DEFAULT_REBALANCE_SOURCE, build_datasets, compute_sampling_weights
+from gtp.stage2.metrics import pitch_of
 from gtp.stage2.model import build_model
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
     MAX_TIME_SHIFT,
-    NOTE_ON,
     TAB,
     TIME_SHIFT_BINS,
-    TUNING_END,
-    TUNING_START,
     Vocabulary,
     parse_token_str,
+    parse_tuning_from_enc,
 )
 
-DEFAULT_OUTPUT_DIR = os.path.join(REPO_ROOT, 'runs', 'stage2_001')
-
-# Rebalancing recipe motivated by the baseline error analysis (see README §Stage 2):
-#   * GuitarSet val_loss was ~10× DadaGP — biggest target → 8× upsample
-#   * Leduc val_loss was ~2× DadaGP — moderate target → 5× upsample
-#   * DadaGP and GuitarToday are already well-served at 1×
-#   * Within DadaGP, classical/jazz/blues had 73-78% pp accuracy (worst
-#     coarse buckets) — boost by 1.5×. Other genres stay at 1×.
-DEFAULT_REBALANCE_SOURCE = {
-    'dadagp': 1.0,
-    'guitarset': 8.0,
-    'leduc': 5.0,
-    'guitartoday': 1.0,
-}
-DEFAULT_REBALANCE_GENRE = {
-    'classical': 1.5,
-    'jazz': 1.5,
-    'blues': 1.5,
-}
+IGNORE_INDEX = -100
 
 
 def auto_device():
@@ -87,45 +55,21 @@ def make_t5_inputs(enc_ids, dec_ids, vocab, device):
     input_ids = enc_ids.to(device)
     attention_mask = (input_ids != vocab.pad_id).long()
     labels = dec_ids.to(device).clone()
-    labels[labels == vocab.pad_id] = -100
+    labels[labels == vocab.pad_id] = IGNORE_INDEX
     return input_ids, attention_mask, labels
 
 
 def per_sequence_loss(logits, labels):
-    """Mean cross-entropy per sequence, ignoring -100 positions. Returns (B,) tensor."""
+    """Mean cross-entropy per sequence. Returns (B,) tensor."""
     flat_loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1)),
-        labels.reshape(-1),
-        reduction='none',
-        ignore_index=-100,
+        logits.reshape(-1, logits.size(-1)), labels.reshape(-1), reduction='none', ignore_index=IGNORE_INDEX
     ).reshape(labels.shape)
-    mask = (labels != -100).float()
-    return (flat_loss * mask).sum(1) / mask.sum(1).clamp(min=1)
+    mask = (labels != IGNORE_INDEX).float()
+    return (flat_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1)
 
 
-def parse_tuning_from_enc(enc_ids, vocab):
-    """Walk encoder IDs, extract the tuning block as a list of pitches. None if missing."""
-    in_tuning = False
-    tuning = []
-    for tid in enc_ids:
-        t, v = parse_token_str(vocab.decode(int(tid)))
-        if t == TUNING_START:
-            in_tuning = True
-            tuning = []
-        elif t == TUNING_END:
-            return tuning if tuning else None
-        elif t == NOTE_ON and in_tuning:
-            tuning.append(int(v))
-    return None
-
-
-def run_eval(model, val_loader, vocab, device, max_batches=None):
+def run_eval(model, val_loader, vocab, device):
     """Single forward pass over val: cross-entropy loss + teacher-forced tab/pitch accuracy.
-
-    Note: tab/pitch accuracy here is teacher-forced (the decoder sees ground-truth
-    previous tokens at each position), so numbers are higher than what you'd get
-    from autoregressive generation. Useful as a fast training-time monitor;
-    benchmark numbers (paper-comparable) need a separate autoregressive eval.
 
     Returns (overall_loss, overall_tab_acc, overall_pitch_acc, per_source) where
     per_source maps source → {loss, tab_acc, pitch_acc, n_tabs}.
@@ -136,17 +80,14 @@ def run_eval(model, val_loader, vocab, device, max_batches=None):
     pitch_totals = defaultdict(lambda: [0, 0])
 
     with torch.no_grad():
-        for i, batch in enumerate(val_loader):
-            if max_batches is not None and i >= max_batches:
-                break
+        for batch in val_loader:
             enc, dec, sources, _piece_ids = batch
             input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
             seq_losses = per_sequence_loss(outputs.logits, labels).tolist()
-            preds = outputs.logits.argmax(-1)  # (B, T) teacher-forced predictions
+            preds = outputs.logits.argmax(-1)  # (B, T, V) -> (B, T) where we take max. probable token
 
-            # Pull to CPU once per batch — cheaper than per-element tensor access.
             preds_cpu = preds.cpu().tolist()
             labels_cpu = labels.cpu().tolist()
             inputs_cpu = input_ids.cpu().tolist()
@@ -159,7 +100,7 @@ def run_eval(model, val_loader, vocab, device, max_batches=None):
                 tuning = parse_tuning_from_enc(inputs_cpu[b], vocab)
 
                 for t_idx, gt_id in enumerate(labels_cpu[b]):
-                    if gt_id < 0:  # PAD-as-loss-mask (-100), skip
+                    if gt_id < 0:  # PAD-as-loss-mask (IGNORE_INDEX), skip
                         continue
                     gt_type, gt_val = parse_token_str(vocab.decode(gt_id))
                     if gt_type != TAB:
@@ -175,13 +116,10 @@ def run_eval(model, val_loader, vocab, device, max_batches=None):
                     elif tuning:
                         pred_type, pred_val = parse_token_str(vocab.decode(pred_id))
                         if pred_type == TAB:
-                            gs, gf = (int(x) for x in gt_val.split(','))
-                            ps, pf = (int(x) for x in pred_val.split(','))
-                            if (
-                                1 <= ps <= len(tuning)
-                                and 1 <= gs <= len(tuning)
-                                and tuning[ps - 1] + pf == tuning[gs - 1] + gf
-                            ):
+                            gt_tab = tuple(int(x) for x in gt_val.split(','))
+                            pred_tab = tuple(int(x) for x in pred_val.split(','))
+                            gt_pitch = pitch_of(gt_tab, tuning)
+                            if gt_pitch is not None and pitch_of(pred_tab, tuning) == gt_pitch:
                                 pitch_totals[src][0] += 1
 
     model.train()
@@ -245,18 +183,22 @@ def save_checkpoint(path, step, model, optimizer, vocab, args):
 
 def main():
     parser = argparse.ArgumentParser(description='Train (MIDI → Tab) T5 model')
-    parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument('--resume', default=None, help='Resume from checkpoint (model + optimizer + step)')
-    parser.add_argument('--datasets', nargs='+', default=None, help='Subset of sources (default: all four)')
-    parser.add_argument('--batch-size', type=int, default=16)
-    parser.add_argument('--max-steps', type=int, default=30000)
-    parser.add_argument('--eval-steps', type=int, default=1000)
-    parser.add_argument('--save-steps', type=int, default=1000)
-    parser.add_argument('--eval-batches', type=int, default=None, help='Cap val batches per eval (default: all)')
-    parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
     parser.add_argument(
-        '--num-workers', type=int, default=2, help='DataLoader workers; 0 = main process only (slower but bulletproof)'
+        '--output-dir',
+        required=True,
+        help='Required, output directory under runs/',
     )
+    parser.add_argument('--resume', default=None, help='Resume from checkpoint (model + optimizer + step)')
+    parser.add_argument('--batch-size', required=True, type=int, default=16)
+    parser.add_argument('--max-steps', required=True, type=int, default=30000)
+    parser.add_argument(
+        '--checkpoint-steps',
+        type=int,
+        default=1000,
+        help='Interval (in steps) between paired eval + save events. Eval and save are coupled — every checkpoint event runs val and writes a .pth.',
+    )
+    parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
+    parser.add_argument('--num-workers', required=True, type=int, default=2, help='Number of dataLoader workers')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument(
         '--experiment-label', default='', help='Free-form label saved to config.json for run comparison'
@@ -265,92 +207,63 @@ def main():
     parser.add_argument(
         '--genre-conditioning',
         action='store_true',
-        help='Add GENRE<X> token to the encoder prefix and grow vocab '
-        'from 553 to 567 tokens. Off by default (preserves baseline). '
-        'Old checkpoints cannot be resumed under this flag — embedding '
-        'dims differ.',
+        help='Add a number of GENRE tokens to the encoder prefix to condition on. See genre.py for more info',
     )
     parser.add_argument(
         '--genre-dropout',
         type=float,
         default=0.15,
-        help='Probability of replacing GENRE<X> with GENRE<unknown> during '
-        'training (classifier-free guidance). Only active when '
-        '--genre-conditioning is set.',
+        help='Probability of replacing GENRE<X> token with GENRE<unknown> during training',
     )
     parser.add_argument(
         '--rebalance',
         action='store_true',
-        help='Use WeightedRandomSampler with default per-source / per-genre '
-        'upsampling (see DEFAULT_REBALANCE_* constants). Targets the '
-        'imbalance identified in the baseline error analysis: GuitarSet '
-        '8x, Leduc 5x, plus 1.5x for under-performing DadaGP genres '
-        '(classical/jazz/blues/country).',
+        help='Use WeightedRandomSampler with default per-source / per-genre rates. See data.py for more info',
     )
     args = parser.parse_args()
+    os.makedirs(args.output_dir, exist_ok=True)
+    config_path = Path(args.output_dir) / 'config.json'
+    metrics_path = Path(args.output_dir) / 'metrics.jsonl'
 
+    # Setup device
     device = args.device or auto_device()
     device_info = get_device_info(device)
     if device_info.type == 'cuda' and device_info.cuda_name:
         info(f'Device: {device} ({device_info.cuda_name}, {device_info.cuda_memory_gib} GiB)')
     else:
         info(f'Device: {device}')
-    torch.manual_seed(args.seed)
-    os.makedirs(args.output_dir, exist_ok=True)
 
-    # Construct vocab from CLI flags. The same vocab instance is threaded through
-    # build_datasets / build_model / run_eval / save_checkpoint — there is no
-    # module-level VOCAB global.
+    # Set seed to replicate results
+    torch.manual_seed(args.seed)
+
+    # Initialize vocabulary
     vocab = Vocabulary(include_genre=args.genre_conditioning)
     if args.genre_conditioning:
         info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. Genre dropout: {args.genre_dropout}')
 
-    # DataLoader workers exchange tensor data with the main process via OS resources.
-    # Default 'file_descriptor' uses /dev/shm + fd passing — on RunPod / Docker this
-    # can hit ENOBUFS after long runs ('No buffer space available'). 'file_system'
-    # uses tmpfile-based sharing instead, which is slower per transfer but stable.
+    # Use file_system instead of default file_descriptor to make data loading more stable
     mp.set_sharing_strategy('file_system')
 
+    # Build datasets
     info('Building datasets...')
     train_ds, val_ds, _test_ds, _stats = build_datasets(
         vocab,
-        datasets=args.datasets,
         genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
     )
-    info(f'  train sequences: {len(train_ds)}, val sequences: {len(val_ds)}')
+    info(f'Train sequences: {len(train_ds)}\nValidation sequences: {len(val_ds)}')
 
-    pin_memory = device == 'cuda'
-    # persistent_workers keeps DataLoader workers alive across iterations to
-    # avoid the resource churn from forking new workers — fixes long-run
-    # crashes ('No buffer space available', SIGABRT) seen on RunPod.
-    # prefetch_factor lets each worker prepare 4 batches ahead so dataload
-    # IO can overlap with GPU work — independent of num_workers, safe to
-    # raise without re-introducing the FD-exhaustion crash.
-    persistent = args.num_workers > 0
-    prefetch = 4 if args.num_workers > 0 else None
-
-    # Rebalancing: build a WeightedRandomSampler if --rebalance, else plain shuffle.
+    # Optional rebalancing
     train_sampler = None
     if args.rebalance:
-        weights = compute_sampling_weights(
-            train_ds._sources,
-            train_ds._genres,
-            DEFAULT_REBALANCE_SOURCE,
-            DEFAULT_REBALANCE_GENRE,
-        )
+        weights = compute_sampling_weights(train_ds.sources, train_ds.genres)
         train_sampler = WeightedRandomSampler(
             weights,
             num_samples=len(train_ds),
             replacement=True,
         )
-        # Print expected mix after rebalancing for quick eyeballing
-        src_counts = Counter(train_ds._sources)
-        eff_src = {s: src_counts[s] * DEFAULT_REBALANCE_SOURCE.get(s, 1.0) for s in src_counts}
-        eff_total = sum(eff_src.values())
-        info('Rebalancing enabled. Effective per-source mix:')
-        for s, w in sorted(eff_src.items(), key=lambda kv: -kv[1]):
-            info(f'  {s:<14s} {100 * w / eff_total:>5.1f}% (raw {100 * src_counts[s] / len(train_ds):>5.1f}%)')
 
+    pin_memory = device == 'cuda'  # load data batches to pinned memory of GPU (faster tensor.to operation)
+    persistent = args.num_workers > 0  # Utilize the same processes for workers
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -360,7 +273,6 @@ def main():
         pin_memory=pin_memory,
         drop_last=True,
         persistent_workers=persistent,
-        prefetch_factor=prefetch,
     )
     val_loader = DataLoader(
         val_ds,
@@ -369,16 +281,15 @@ def main():
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent,
-        prefetch_factor=prefetch,
     )
 
+    # Initialize model
     info(f'Building model (vocab={len(vocab)})...')
     model = build_model(vocab).to(device)
     model.train()
-    info(f'  parameters: {sum(p.numel() for p in model.parameters()):,}')
+    info(f'Done. Parameters: {sum(p.numel() for p in model.parameters()):,}')
 
-    # Snapshot run config to <output_dir>/config.json. metrics.jsonl is appended
-    # to per eval cycle below. compare_runs.py reads both for cross-run comparison.
+    # Save run config to <output_dir>/config.json
     run_config = RunConfig(
         run_id=Path(args.output_dir).name,
         experiment_label=args.experiment_label,
@@ -396,23 +307,20 @@ def main():
         train=TrainConfig(
             batch_size=args.batch_size,
             max_steps=args.max_steps,
-            eval_steps=args.eval_steps,
-            save_steps=args.save_steps,
-            eval_batches=args.eval_batches,
+            checkpoint_steps=args.checkpoint_steps,
             num_workers=args.num_workers,
             seed=args.seed,
             resumed_from=args.resume,
         ),
         data=DataConfig(
             dataset_dir=str(AUG_DATA_DIR),
-            sources=args.datasets or [],
+            sources=[],
             train_subseqs=len(train_ds),
             val_subseqs=len(val_ds),
         ),
         conditioning=ConditioningConfig(
             genre=args.genre_conditioning,
             genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
-            source=False,  # SOURCE conditioning intentionally off (leakage path)
         ),
         rebalancing=RebalancingConfig(
             enabled=args.rebalance,
@@ -421,11 +329,10 @@ def main():
         ),
         device=device_info,
     )
-    config_path = Path(args.output_dir) / 'config.json'
     run_config.save(config_path)
-    info(f'  config: {config_path}')
-    metrics_path = Path(args.output_dir) / 'metrics.jsonl'
+    info(f'Config saved to {config_path}')
 
+    # Initialize optimizer
     optimizer = Adafactor(
         model.parameters(),
         lr=None,
@@ -434,6 +341,7 @@ def main():
         warmup_init=True,
     )
 
+    # Optional resuming
     step = 0
     if args.resume:
         info(f'Resuming from {args.resume}')
@@ -441,24 +349,25 @@ def main():
         meta = ckpt.get('tokenizer_meta', {})
         if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
             raise SystemExit(
-                f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, current vocab is {len(vocab)}. '
-                f'Cannot resume training with a different vocabulary.'
+                f'Vocab mismatch: checkpoint has {meta["vocab_size"]} tokens, current vocab is {len(vocab)}'
             )
         model.load_state_dict(ckpt['model'])
-        if 'optimizer' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer'])
+        if 'optimizer' not in ckpt:
+            raise SystemExit('Optimizer is not found in checkpoint')
+        optimizer.load_state_dict(ckpt['optimizer'])
         step = ckpt.get('iteration', 0)
-        info(f'  resumed at step {step}')
+        info(f'Resumed at step {step}')
 
-    info(f'Training (max_steps={args.max_steps}, starting_step={step})')
+    info(f'Training started: starting_step={step}, max_steps={args.max_steps}')
     recent_losses = []
     step_times = []
-    losses_since_eval: list[float] = []  # reset at each eval; used for metrics.jsonl
+    losses_since_eval: list[float] = []
     train_iter = iter(train_loader)
     start_time = time.time()
     time_start_step = step
 
     while step < args.max_steps:
+        # try/except block to continue training even if epoch finished
         try:
             batch = next(train_iter)
         except StopIteration:
@@ -491,22 +400,18 @@ def main():
             eta = format_eta(avg_elapsed_per_step * (args.max_steps - step))
             info(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
 
-        if step > 0 and step % args.eval_steps == 0:
-            overall_loss, tab_acc, pitch_acc, per_src = run_eval(
-                model, val_loader, vocab, device, max_batches=args.eval_batches
-            )
+        # Evaluate & Save
+        if step > 0 and step % args.checkpoint_steps == 0:
+            overall_loss, tab_acc, pitch_acc, per_src = run_eval(model, val_loader, vocab, device)
             info(
                 f'[eval @ step {step}] val_loss={overall_loss:.4f}  '
                 f'tab_acc={tab_acc:.3f}  pitch_acc={pitch_acc:.3f}  (teacher-forced)'
             )
             for src, m in sorted(per_src.items()):
                 info(
-                    f'    {src:<12} loss={m["loss"]:.3f}  '
+                    f'    [src:{src:<12}] loss={m["loss"]:.3f}  '
                     f'tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
                 )
-            # Persist structured eval to metrics.jsonl for compare_runs.py.
-            # train_loss is averaged over the same step window the eval covers
-            # (since previous eval), so it's directly comparable to val_loss.
             train_loss_window = float(np.mean(losses_since_eval)) if losses_since_eval else None
             metrics_record = {
                 'step': step,
@@ -521,7 +426,6 @@ def main():
                 f.write(json.dumps(metrics_record) + '\n')
             losses_since_eval.clear()
 
-        if step > 0 and step % args.save_steps == 0:
             ckpt_dir = os.path.join(args.output_dir, 'checkpoints')
             os.makedirs(ckpt_dir, exist_ok=True)
             ckpt_path = os.path.join(ckpt_dir, f'step_{step:07d}.pth')
@@ -538,12 +442,9 @@ def main():
     info(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
     for src, m in sorted(final_per_src.items()):
         info(
-            f'  {src:<12} loss={m["loss"]:.4f}  tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
+            f'  [{src:<12}] loss={m["loss"]:.4f}  tab={m["tab_acc"]:.3f}  pitch={m["pitch_acc"]:.3f}  n_tabs={m["n_tabs"]}'
         )
 
-    # Final eval JSON. Note: this is teacher-forced; for autoregressive metrics
-    # (tab_strict / tab_equivalent / drift buckets) run dump_eval_predictions.py
-    # + analyze_errors.py separately. Those numbers go into a richer summary.json.
     final_eval = {
         'step': step,
         'val_loss': final_loss,
@@ -553,7 +454,7 @@ def main():
     }
     final_eval_path = Path(args.output_dir) / 'final_eval.json'
     final_eval_path.write_text(json.dumps(final_eval, indent=2))
-    info(f'\nFinal eval written: {final_eval_path}')
+    info(f'\nFinal eval: {final_eval_path}')
 
 
 if __name__ == '__main__':

@@ -26,6 +26,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from gtp import REPO_ROOT
+
 
 @dataclass
 class ModelConfig:
@@ -41,9 +43,7 @@ class ModelConfig:
 class TrainConfig:
     batch_size: int = 16
     max_steps: int = 30000
-    eval_steps: int = 1000
-    save_steps: int = 5000
-    eval_batches: int | None = None
+    checkpoint_steps: int = 1000
     num_workers: int = 2
     seed: int = 42
     optimizer: str = 'Adafactor'
@@ -67,15 +67,12 @@ class DataConfig:
 class ConditioningConfig:
     """Conditioning tokens added to the encoder prefix.
 
-    `genre`: include `GENRE<X>` token. Dropped to `GENRE<unknown>` `genre_dropout`
-    fraction of the time during training (classifier-free style).
-    `source`: include `SOURCE<dataset>` token. Off by default — leakage path,
-    not useful at inference time.
+    `genre`: include `GENRE<X>` token. Dropped to `GENRE<unknown>`
+    `genre_dropout`: Drop genre token with this rate during training
     """
 
     genre: bool = False
     genre_dropout: float = 0.0
-    source: bool = False
 
 
 @dataclass
@@ -150,7 +147,11 @@ class RunConfig:
 
 
 def get_git_sha(short: bool = True) -> str:
-    """Best-effort git SHA. Returns 'unknown' on failure (no git, detached, etc.)."""
+    version_file = REPO_ROOT / 'VERSION'
+    if version_file.exists():
+        sha = version_file.read_text().strip()
+        if sha:
+            return sha
     cmd = ['git', 'rev-parse']
     if short:
         cmd.append('--short')
@@ -203,7 +204,7 @@ def get_device_info(device: str) -> DeviceConfig:
         if torch.cuda.is_available():
             info.cuda_name = torch.cuda.get_device_name(0)
             props = torch.cuda.get_device_properties(0)
-            info.cuda_memory_gib = round(props.total_memory / (1024 ** 3), 2)
+            info.cuda_memory_gib = round(props.total_memory / (1024**3), 2)
     except Exception:
         pass
     return info

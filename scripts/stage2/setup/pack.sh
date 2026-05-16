@@ -13,6 +13,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO_ROOT"
+git rev-parse --short HEAD > VERSION 2>/dev/null || echo unknown > VERSION
 
 OUT="gtp_stage2_runpod.tar.gz"
 
@@ -21,6 +22,7 @@ REQUIRED=(
     scripts/stage2
     pyproject.toml
     requirements.txt
+    VERSION
     data/stage2_aug/train.jsonl
     data/stage2_aug/val.jsonl
     data/stage2_aug/test.jsonl

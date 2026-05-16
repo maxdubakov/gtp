@@ -48,27 +48,12 @@ from gtp.stage2.tokenizer import (
     TUNING_START,
     Vocabulary,
     parse_token_str,
+    parse_tuning_from_enc,
 )
 
 # ---------------------------------------------------------------------------
 # Token-stream helpers
 # ---------------------------------------------------------------------------
-
-
-def parse_tuning_from_enc(enc_ids, vocab):
-    """Walk encoder IDs, return the tuning block as a list of pitches. None if missing."""
-    in_tuning = False
-    tuning = []
-    for tid in enc_ids:
-        t, v = parse_token_str(vocab.decode(int(tid)))
-        if t == TUNING_START:
-            in_tuning = True
-            tuning = []
-        elif t == TUNING_END:
-            return tuning if tuning else None
-        elif t == NOTE_ON and in_tuning:
-            tuning.append(int(v))
-    return None
 
 
 def extract_input_pitches(enc_ids, vocab):

@@ -36,6 +36,18 @@ STANDARD_TUNINGS = [
     [64, 59, 55, 50, 45, 38],  # drop-D
 ]
 
+DEFAULT_REBALANCE_SOURCE = {
+    'dadagp': 1.0,
+    'guitarset': 8.0,
+    'leduc': 5.0,
+    'guitartoday': 1.0,
+}
+DEFAULT_REBALANCE_GENRE = {
+    'classical': 1.5,
+    'jazz': 1.5,
+    'blues': 1.5,
+}
+
 
 def filter_notes(notes, tuning):
     """Drop invalid notes; return (clean_notes, reason_counts)."""
@@ -113,8 +125,7 @@ class TabDataset(Dataset):
     augment=False (val/test always use ground-truth genre).
     """
 
-    def __init__(self, pieces, vocab: Vocabulary, max_seq_len=512, augment=False,
-                 genre_dropout: float = 0.0):
+    def __init__(self, pieces, vocab: Vocabulary, max_seq_len=512, augment=False, genre_dropout: float = 0.0):
         self.max_seq_len = max_seq_len
         self.augment = augment
         self.genre_dropout = genre_dropout
@@ -163,13 +174,12 @@ class TabDataset(Dataset):
         if self.augment:
             pi, si = self._index[idx]
             piece = random_tuning(self.pieces[pi], self._rng)
-            genre_override = (
-                'unknown'
-                if self.genre_dropout > 0 and self._rng.random() < self.genre_dropout
-                else None
-            )
+            genre_override = 'unknown' if self.genre_dropout > 0 and self._rng.random() < self.genre_dropout else None
             seqs = tokenize_piece(
-                piece, self.vocab, max_seq_len=self.max_seq_len, genre_override=genre_override,
+                piece,
+                self.vocab,
+                max_seq_len=self.max_seq_len,
+                genre_override=genre_override,
             )
             enc_ids, dec_ids = seqs[min(si, len(seqs) - 1)]
         else:
@@ -185,12 +195,18 @@ class TabDataset(Dataset):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))
         return torch.tensor(padded[: self.max_seq_len], dtype=torch.long)
 
+    @property
+    def sources(self):
+        return self._sources
+
+    @property
+    def genres(self):
+        return self._genres
+
 
 def compute_sampling_weights(
     sources: list[str],
     genres: list[str],
-    source_weights: dict[str, float],
-    genre_weights: dict[str, float],
 ) -> list[float]:
     """Per-sample weight = source_weights[src] * genre_weights[genre].
 
@@ -201,13 +217,12 @@ def compute_sampling_weights(
     if len(sources) != len(genres):
         raise ValueError(f'sources/genres length mismatch: {len(sources)} vs {len(genres)}')
     return [
-        source_weights.get(src, 1.0) * genre_weights.get(g, 1.0)
+        DEFAULT_REBALANCE_SOURCE.get(src, 1.0) * DEFAULT_REBALANCE_GENRE.get(g, 1.0)
         for src, g in zip(sources, genres, strict=True)
     ]
 
 
-def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_train=True,
-                   genre_dropout: float = 0.0):
+def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_train=True, genre_dropout: float = 0.0):
     """Build train, validation, and test TabDatasets from the augmented JSONLs.
 
     Requires that scripts/stage2/build_aug_dataset.py has already been run and
@@ -237,8 +252,9 @@ def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_tr
         val_pieces = [p for p in val_pieces if p['source'] in wanted]
         test_pieces = [p for p in test_pieces if p['source'] in wanted]
 
-    train_ds = TabDataset(train_pieces, vocab, max_seq_len=max_seq_len, augment=augment_train,
-                          genre_dropout=genre_dropout)
+    train_ds = TabDataset(
+        train_pieces, vocab, max_seq_len=max_seq_len, augment=augment_train, genre_dropout=genre_dropout
+    )
     val_ds = TabDataset(val_pieces, vocab, max_seq_len=max_seq_len, augment=False)
     test_ds = TabDataset(test_pieces, vocab, max_seq_len=max_seq_len, augment=False)
 
