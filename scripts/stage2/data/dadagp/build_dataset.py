@@ -13,7 +13,7 @@ import guitarpro as gp
 import pretty_midi
 
 from gtp import REPO_ROOT
-from gtp.stage2.genres import GENRE_RULES, UNKNOWN
+from gtp.stage2.genres import UNKNOWN
 from gtp.stage2.metrics import pitch_of
 
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
@@ -22,6 +22,18 @@ DADAGP_META_PATH = DADAGP_DIR / '_DadaGP_all_metadata.json'
 OUTPUT_DIR = REPO_ROOT / 'data' / 'dadagp' / 'processed'
 
 TICKS_PER_QUARTER = 960
+
+GENRE_RULES: list[tuple[str, list[str]]] = [
+    ('classical', ['classical', 'baroque', 'romantic', 'opera']),
+    ('jazz', ['jazz', 'bebop', 'swing', 'bossa', 'fusion', 'cool_jazz', 'latin_jazz']),
+    ('funk', ['funk']),
+    ('folk', ['folk', 'singer_songwriter', 'americana', 'bluegrass', 'celtic']),
+    ('blues', ['blues']),
+    ('metal', ['metal', 'thrash', 'doom', 'grindcore', 'djent', 'progressive_metal', 'death_metal', 'black_metal']),
+    ('punk', ['punk', 'hardcore']),
+    ('pop', ['pop', 'mellow_gold', 'permanent_wave']),
+    ('rock', ['rock', 'grunge', 'shoegaze']),
+]
 
 
 def _load_dadagp_metadata() -> dict:
