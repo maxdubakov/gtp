@@ -1,20 +1,4 @@
-"""Build the offline-augmented Stage 2 dataset.
-
-Loads all pieces from data/<source>/processed/, runs a stratified split (by source +
-tuning + capo), then:
-  - train + val: emits all valid capo variants per piece (capo 0-7, skipping variants
-    that fall outside MIDI range or push the relative fret past MAX_PLAYABLE_FRET when
-    a capo is added).
-  - test:        rotates one capo per piece across 0-7, paper-style (rotate_capo).
-
-Writes data/stage2_aug/{train,val,test}.jsonl. Run once before training.
-
-Tuning augmentation is NOT applied here — it happens online in TabDataset.
-
-Usage:
-  python scripts/stage2/build_aug_dataset.py
-  python scripts/stage2/build_aug_dataset.py --output-dir /tmp/aug --seed 7
-"""
+"""Build the offline-augmented Stage 2 dataset"""
 
 import argparse
 import json
@@ -36,29 +20,21 @@ MIDI_MIN = 0
 MIDI_MAX = 127
 
 
-# ---------------------------------------------------------------------------
-# Loading processed JSONs
-# ---------------------------------------------------------------------------
-
-
 def _print_summary(summary):
-    """Print a compact per-source data quality table."""
     if not summary:
         return
-    print('\n[data load] per-source summary:')
-    print(f'  {"source":<12} {"seen":>6} {"kept":>6} {"skip<10":>8} {"notes":>10}  filtered')
+    print('\nData summary:')
+    print(f'{"source":<12} {"seen":>6} {"kept":>6} {"skip<10":>8} {"notes":>10}  filtered')
     for name, s in summary.items():
         reason_str = ', '.join(f'{k}={v}' for k, v in s['filter_reasons'].items()) or '-'
         print(
-            f'  {name:<12} {s["pieces_seen"]:>6} {s["pieces_kept"]:>6} '
+            f'{name:<12} {s["pieces_seen"]:>6} {s["pieces_kept"]:>6} '
             f'{s["pieces_skipped_few_notes"]:>8} {s["notes_kept"]:>10}  {reason_str}'
         )
 
 
-def load_all_pieces(datasets=None):
-    """Load processed JSON files. Returns (pieces, summary) and prints per-source stats."""
-    if datasets is None:
-        datasets = list(PROCESSED_DIRS.keys())
+def load_all_pieces():
+    datasets = list(PROCESSED_DIRS.keys())
 
     pieces = []
     summary = {}
@@ -76,11 +52,7 @@ def load_all_pieces(datasets=None):
         }
 
         for f in sorted(os.listdir(path)):
-            if not f.endswith('.json'):
-                continue
-            if f.startswith('._'):
-                # macOS AppleDouble metadata sidecars (from BSD tar without
-                # COPYFILE_DISABLE=1) — not real JSON, skip silently.
+            if not f.endswith('.json') or f.startswith('._'):
                 continue
             with open(path / f, encoding='utf-8', errors='replace') as fh:
                 data = json.load(fh)
@@ -114,23 +86,16 @@ def load_all_pieces(datasets=None):
     return pieces, summary
 
 
-# ---------------------------------------------------------------------------
-# Stratified split + capo augmentation
-# ---------------------------------------------------------------------------
-
-
 def _tuning_key(tuning):
-    """Normalize tuning to a hashable key for stratification."""
     return tuple(tuning)
 
 
 def _capo_key(capo):
-    """Bucket capo values: 0 vs non-zero."""
     return 'capo' if capo > 0 else 'no_capo'
 
 
 def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
-    """Split pieces into train/val/test, stratified by source + tuning + capo."""
+    """train/val/test split, stratified by source + tuning + capo."""
     rng = random.Random(seed)
 
     groups = defaultdict(list)
@@ -163,7 +128,7 @@ def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
 
 
 def expand_capo(piece, capos=CAPO_RANGE):
-    """Generate capo variants of a piece. Yields new piece dicts.
+    """Generate capo variants of a piece (augmentation)
 
     Tuning convention: tuning already includes capo (pitch = tuning[s-1] + fret),
     where `fret` is relative to capo. A new variant with capo=N has pitches/tuning
@@ -173,6 +138,7 @@ def expand_capo(piece, capos=CAPO_RANGE):
       - musically invalid (any pitch outside MIDI [0, 127]), or
       - physically unplayable (any relative fret + new_capo > MAX_PLAYABLE_FRET).
     """
+    # TODO: we modify tuning AND capo.. is it ok?..
     old_capo = piece['capo']
     max_fret = max((n['fret'] for n in piece['notes']), default=0)
     for new_capo in capos:
@@ -202,20 +168,8 @@ def rotate_capo(pieces):
             break  # one variant per piece
 
 
-# ---------------------------------------------------------------------------
-# Tokenization annotation + JSONL writing
-# ---------------------------------------------------------------------------
-
-
 def annotate_with_subseqs(pieces, stats, vocab: Vocabulary, max_seq_len=512):
-    """Tokenize each piece once, stash sub-sequence count, and accumulate stats.
-
-    Tuning augmentation (online) preserves token count, so num_subseqs is invariant
-    under runtime augmentation. TabDataset uses this to build its flat index in O(1)
-    per piece instead of re-tokenizing 49K+ pieces at __init__.
-
-    `stats` is a dict mutated in place: stats[source] = {pieces, subseqs, enc_tokens, dec_tokens}.
-    """
+    """Tokenize each piece once, stash sub-sequence count, and accumulate stats"""
     for piece in pieces:
         seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
         enc_tokens = sum(len(enc) for enc, _ in seqs)
@@ -229,20 +183,19 @@ def annotate_with_subseqs(pieces, stats, vocab: Vocabulary, max_seq_len=512):
 
 
 def print_split_stats(label, stats):
-    """Print a per-source table + totals for one split."""
     if not stats:
-        print(f'  {label}: (empty)')
+        print(f'{label}: (empty)')
         return
-    print(f'  {label}:')
-    print(f'    {"source":<12} {"pieces":>7} {"sub-seqs":>9} {"enc tokens":>13} {"dec tokens":>13}')
+    print(f'{label}:')
+    print(f'{"source":<12} {"pieces":>7} {"sub-seqs":>9} {"enc tokens":>13} {"dec tokens":>13}')
     tot_p = tot_s = tot_e = tot_d = 0
     for src, s in sorted(stats.items()):
-        print(f'    {src:<12} {s["pieces"]:>7} {s["subseqs"]:>9} {s["enc_tokens"]:>13,} {s["dec_tokens"]:>13,}')
+        print(f'{src:<12} {s["pieces"]:>7} {s["subseqs"]:>9} {s["enc_tokens"]:>13,} {s["dec_tokens"]:>13,}')
         tot_p += s['pieces']
         tot_s += s['subseqs']
         tot_e += s['enc_tokens']
         tot_d += s['dec_tokens']
-    print(f'    {"TOTAL":<12} {tot_p:>7} {tot_s:>9} {tot_e:>13,} {tot_d:>13,}')
+    print(f'{"TOTAL":<12} {tot_p:>7} {tot_s:>9} {tot_e:>13,} {tot_d:>13,}')
 
 
 def write_jsonl(path, items, progress_every=5000):
@@ -256,16 +209,16 @@ def write_jsonl(path, items, progress_every=5000):
     return count
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--output-dir', default=str(AUG_DATA_DIR))
     ap.add_argument('--train-ratio', type=float, default=0.90)
     ap.add_argument('--val-ratio', type=float, default=0.05)
+    ap.add_argument(
+        '--genre-conditioning',
+        action='store_true',
+        help='Add a number of GENRE tokens to the encoder prefix to condition on. See genre.py for more info',
+    )
     ap.add_argument('--seed', type=int, default=42)
     args = ap.parse_args()
 
@@ -274,28 +227,22 @@ def main():
 
     print('Loading pieces...')
     pieces, _summary = load_all_pieces()
-    print(f'  total pieces kept: {len(pieces)}')
+    print(f'Total pieces: {len(pieces)}')
 
-    print('Stratified split...')
     train_pieces, val_pieces, test_pieces = stratified_split(
         pieces,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
         seed=args.seed,
     )
-    print(f'  pre-aug counts: train={len(train_pieces)}  val={len(val_pieces)}  test={len(test_pieces)}')
-
+    print(f'Pre-augmented counts: train={len(train_pieces)}  val={len(val_pieces)}  test={len(test_pieces)}')
     print('Expanding capo variants and annotating sub-sequence counts...')
     train_path = out_dir / 'train.jsonl'
     val_path = out_dir / 'val.jsonl'
     test_path = out_dir / 'test.jsonl'
 
     train_stats, val_stats, test_stats = {}, {}, {}
-    # Use the no-genre vocab for num_subseqs annotation; the cached count is an
-    # optimization for TabDataset and a one-token difference (GENRE prefix) at
-    # most affects pieces near the 512-token boundary. TabDataset re-tokenizes
-    # if num_subseqs is missing.
-    vocab = Vocabulary(include_genre=False)
+    vocab = Vocabulary(include_genre=args.genre_conditioning)
     n_train = write_jsonl(
         train_path,
         annotate_with_subseqs(expand_all(train_pieces), train_stats, vocab),
