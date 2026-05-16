@@ -1,11 +1,8 @@
-"""Stage 2 model: halved t5-small from HuggingFace Transformers, trained from scratch.
-
-Per Hamberger et al. 2025 (Fretting-Transformer):
-  d_model=128, d_ff=1024, 3 enc/dec layers, 4 heads.
-"""
+"""Stage 2 model: halved t5-small from HuggingFace"""
 
 from transformers import T5Config, T5ForConditionalGeneration
 
+# default model settings are selected per Hamberger et al. 2025 (Fretting-Transformer)
 MODEL_CONFIG = {
     'd_model': 128,
     'd_ff': 1024,
@@ -20,12 +17,6 @@ MODEL_CONFIG = {
 
 
 def build_model(vocab, **overrides):
-    """Build a T5ForConditionalGeneration sized to the given vocab.
-
-    Pass `labels` (NOT `decoder_input_ids`) at training time — HF prepends
-    `decoder_start_token_id` (= PAD, T5 convention) and right-shifts internally.
-    Set PAD positions inside `labels` to -100 so the loss ignores them.
-    """
     config = T5Config(
         vocab_size=len(vocab),
         pad_token_id=vocab.pad_id,
