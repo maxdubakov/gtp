@@ -173,19 +173,16 @@ def get_timestamp() -> str:
     return datetime.now().isoformat(timespec='seconds')
 
 
-def find_run_config(checkpoint_path) -> Path | None:
-    """Locate the sibling config.json for a checkpoint, handling both layouts.
+def find_run_config(checkpoint_path) -> Path:
+    """Locate the sibling config.json for a checkpoint. Expects layout:
+        <run-dir>/checkpoints/step_X.pth  →  <run-dir>/config.json
 
-    New layout:    <run-dir>/checkpoints/step_X.pth + <run-dir>/config.json
-    Legacy layout: <run-dir>/step_X.pth + <run-dir>/config.json
-
-    Returns the config.json Path if found, else None.
+    Raises FileNotFoundError if not found.
     """
-    p = Path(checkpoint_path)
-    for candidate in (p.parent / 'config.json', p.parent.parent / 'config.json'):
-        if candidate.exists():
-            return candidate
-    return None
+    candidate = Path(checkpoint_path).parent.parent / 'config.json'
+    if not candidate.exists():
+        raise FileNotFoundError(f'config.json not found at {candidate} (expected sibling of checkpoint dir)')
+    return candidate
 
 
 def get_device_info(device: str) -> DeviceConfig:

@@ -34,14 +34,15 @@ from pathlib import Path
 
 import torch
 
+from gtp.device import auto_device
 from gtp.stage2.data import MIN_NOTES_PER_PIECE, filter_notes, load_jsonl_pieces
 from gtp.stage2.inference import (
-    extract_tabs,
     load_checkpoint,
     tokenize_for_inference,
 )
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.postprocess import correct_tabs
+from gtp.stage2.tokenizer import extract_tabs
 
 # Constants matching scripts/stage2/build_aug_dataset.py — kept here so we can
 # reproduce its train/val/test split deterministically without importing from
@@ -49,14 +50,6 @@ from gtp.stage2.postprocess import correct_tabs
 SPLIT_SEED = 42
 TRAIN_RATIO = 0.90
 VAL_RATIO = 0.05
-
-
-def auto_device():
-    if torch.backends.mps.is_available():
-        return 'mps'
-    if torch.cuda.is_available():
-        return 'cuda'
-    return 'cpu'
 
 
 def _load_processed_pieces(datasets: list[str] | None = None) -> list[dict]:
@@ -80,14 +73,16 @@ def _load_processed_pieces(datasets: list[str] | None = None) -> list[dict]:
             notes, _ = filter_notes(data.get('notes', []), tuning)
             if len(notes) < MIN_NOTES_PER_PIECE:
                 continue
-            pieces.append({
-                'source': name,
-                'filename': f.name,
-                'tuning': tuning,
-                'tempo': data.get('tempo', 120),
-                'capo': data.get('capo', 0),
-                'notes': notes,
-            })
+            pieces.append(
+                {
+                    'source': name,
+                    'filename': f.name,
+                    'tuning': tuning,
+                    'tempo': data.get('tempo', 120),
+                    'capo': data.get('capo', 0),
+                    'notes': notes,
+                }
+            )
     return pieces
 
 
@@ -116,8 +111,8 @@ def _stratified_split_originals(pieces: list[dict]) -> tuple[list[dict], list[di
             train.extend(group)
             continue
         train.extend(group[:n_train])
-        val.extend(group[n_train: n_train + n_val])
-        test.extend(group[n_train + n_val:])
+        val.extend(group[n_train : n_train + n_val])
+        test.extend(group[n_train + n_val :])
     rng.shuffle(train)
     rng.shuffle(val)
     rng.shuffle(test)
@@ -145,8 +140,9 @@ def piece_id(piece: dict) -> str:
     return f'{src}:{name}:capo{capo}'
 
 
-def generate_tabs_batched(model, vocab, enc_ids_list: list[list[int]], device: str,
-                          max_seq_len: int, batch_size: int) -> list[list[int]]:
+def generate_tabs_batched(
+    model, vocab, enc_ids_list: list[list[int]], device: str, max_seq_len: int, batch_size: int
+) -> list[list[int]]:
     """Batched autoregressive greedy generation.
 
     Pads each sub-sequence to max_seq_len, stacks into batches of `batch_size`,
@@ -158,7 +154,7 @@ def generate_tabs_batched(model, vocab, enc_ids_list: list[list[int]], device: s
     """
     out = []
     for start in range(0, len(enc_ids_list), batch_size):
-        batch = enc_ids_list[start:start + batch_size]
+        batch = enc_ids_list[start : start + batch_size]
         padded = [enc + [vocab.pad_id] * (max_seq_len - len(enc)) for enc in batch]
         input_ids = torch.tensor(padded, dtype=torch.long, device=device)
         attention_mask = (input_ids != vocab.pad_id).long()
@@ -191,9 +187,9 @@ def prepare_piece(piece: dict, vocab, max_seq_len: int) -> dict:
     }
 
 
-def finalize_piece(prep: dict, vocab, raw_subseq_outputs: list[list[int]],
-                   is_augmented: bool,
-                   fallback: str = 'first_viable') -> tuple[dict, list[dict]]:
+def finalize_piece(
+    prep: dict, vocab, raw_subseq_outputs: list[list[int]], is_augmented: bool, fallback: str = 'first_viable'
+) -> tuple[dict, list[dict]]:
     """Given a prepared piece and its raw decoder outputs (per sub-sequence),
     extract tabs, post-process, and build the per-note records + piece meta.
 
@@ -213,7 +209,11 @@ def finalize_piece(prep: dict, vocab, raw_subseq_outputs: list[list[int]],
 
     input_pitches = prep['input_pitches']
     pp_tabs, pp_sources = correct_tabs(
-        input_pitches, raw_tabs, piece['tuning'], return_sources=True, fallback=fallback,
+        input_pitches,
+        raw_tabs,
+        piece['tuning'],
+        return_sources=True,
+        fallback=fallback,
     )
 
     # Counters for the piece-level summary
@@ -252,23 +252,25 @@ def finalize_piece(prep: dict, vocab, raw_subseq_outputs: list[list[int]],
         else:
             ps = pf = p_pitch = None
 
-        note_records.append({
-            'piece_id': pid,
-            'note_idx': i,
-            'pitch': true_pitch,
-            'onset': float(n['start']),
-            'end': float(n['end']),
-            'true_string': true_s,
-            'true_fret': true_f,
-            'pred_raw_string': rs,
-            'pred_raw_fret': rf,
-            'pred_raw_pitch': r_pitch,
-            'pred_pp_string': ps,
-            'pred_pp_fret': pf,
-            'pred_pp_pitch': p_pitch,
-            'pp_source': pp_sources[i] if i < len(pp_sources) else None,
-            'is_augmented': is_augmented,
-        })
+        note_records.append(
+            {
+                'piece_id': pid,
+                'note_idx': i,
+                'pitch': true_pitch,
+                'onset': float(n['start']),
+                'end': float(n['end']),
+                'true_string': true_s,
+                'true_fret': true_f,
+                'pred_raw_string': rs,
+                'pred_raw_fret': rf,
+                'pred_raw_pitch': r_pitch,
+                'pred_pp_string': ps,
+                'pred_pp_fret': pf,
+                'pred_pp_pitch': p_pitch,
+                'pp_source': pp_sources[i] if i < len(pp_sources) else None,
+                'is_augmented': is_augmented,
+            }
+        )
 
     piece_meta = {
         'piece_id': pid,
@@ -296,32 +298,59 @@ def finalize_piece(prep: dict, vocab, raw_subseq_outputs: list[list[int]],
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--checkpoint', required=True, help='Stage 2 .pth checkpoint')
-    ap.add_argument('--splits', nargs='+', default=['val'], choices=['val', 'test'],
-                    help='Which JSONL splits to dump from data/stage2_aug/')
+    ap.add_argument(
+        '--splits',
+        nargs='+',
+        default=['val'],
+        choices=['val', 'test'],
+        help='Which JSONL splits to dump from data/stage2_aug/',
+    )
     ap.add_argument('--output-dir', required=True)
     ap.add_argument('--device', default=None)
     ap.add_argument('--max-seq-len', type=int, default=512)
-    ap.add_argument('--pieces-per-source', type=int, default=None,
-                    help='Smoke-test cap: limit to first N pieces per source within each split')
-    ap.add_argument('--datasets', nargs='+', default=None,
-                    help='Filter pieces to specific source(s), e.g. --datasets dadagp guitarset')
-    ap.add_argument('--no-augmentation', action='store_true',
-                    help='Evaluate on the ORIGINAL un-augmented pieces (one per song) loaded '
-                         'directly from data/<source>/processed/. Reproduces the same '
-                         'train/val/test split (seed=42) as the augmented build, just without '
-                         'the per-piece capo expansion. Default: use stage2_aug/{val,test}.jsonl.')
-    ap.add_argument('--batch-size', type=int, default=32,
-                    help='Sub-sequences per generate() call. Bigger = better GPU utilization '
-                         'on small models. 32 is fine for our 2.24M-param T5; up to 128+ on a '
-                         'real GPU. Set 1 to reproduce the old per-sub-sequence behavior.')
-    ap.add_argument('--chunk-pieces', type=int, default=64,
-                    help='How many pieces to tokenize before each batched-generate pass. '
-                         'Pieces are post-processed and written incrementally per chunk so '
-                         'memory stays bounded.')
-    ap.add_argument('--fallback', choices=['first_viable', 'nearest_viable'],
-                    default='first_viable',
-                    help='Post-processing fallback strategy. first_viable = paper-faithful. '
-                         'nearest_viable = deviation: Manhattan-nearest realization to model raw output.')
+    ap.add_argument(
+        '--pieces-per-source',
+        type=int,
+        default=None,
+        help='Smoke-test cap: limit to first N pieces per source within each split',
+    )
+    ap.add_argument(
+        '--datasets',
+        nargs='+',
+        default=None,
+        help='Filter pieces to specific source(s), e.g. --datasets dadagp guitarset',
+    )
+    ap.add_argument(
+        '--no-augmentation',
+        action='store_true',
+        help='Evaluate on the ORIGINAL un-augmented pieces (one per song) loaded '
+        'directly from data/<source>/processed/. Reproduces the same '
+        'train/val/test split (seed=42) as the augmented build, just without '
+        'the per-piece capo expansion. Default: use stage2_aug/{val,test}.jsonl.',
+    )
+    ap.add_argument(
+        '--batch-size',
+        type=int,
+        default=32,
+        help='Sub-sequences per generate() call. Bigger = better GPU utilization '
+        'on small models. 32 is fine for our 2.24M-param T5; up to 128+ on a '
+        'real GPU. Set 1 to reproduce the old per-sub-sequence behavior.',
+    )
+    ap.add_argument(
+        '--chunk-pieces',
+        type=int,
+        default=64,
+        help='How many pieces to tokenize before each batched-generate pass. '
+        'Pieces are post-processed and written incrementally per chunk so '
+        'memory stays bounded.',
+    )
+    ap.add_argument(
+        '--fallback',
+        choices=['first_viable', 'nearest_viable'],
+        default='first_viable',
+        help='Post-processing fallback strategy. first_viable = paper-faithful. '
+        'nearest_viable = deviation: Manhattan-nearest realization to model raw output.',
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -390,7 +419,7 @@ def main():
         n_done = 0
         with pieces_path.open('a') as pf, preds_path.open('a') as nf:
             for chunk_start in range(0, len(pieces), args.chunk_pieces):
-                chunk = pieces[chunk_start:chunk_start + args.chunk_pieces]
+                chunk = pieces[chunk_start : chunk_start + args.chunk_pieces]
 
                 # Phase 1: tokenize all pieces in chunk; collect sub-sequences
                 #          along with which (chunk_idx, subseq_idx) they came from.
@@ -405,8 +434,12 @@ def main():
                 # Phase 2: batched generation across the entire chunk
                 if flat_subseqs:
                     flat_outputs = generate_tabs_batched(
-                        model, vocab, flat_subseqs, device,
-                        max_seq_len=args.max_seq_len, batch_size=args.batch_size,
+                        model,
+                        vocab,
+                        flat_subseqs,
+                        device,
+                        max_seq_len=args.max_seq_len,
+                        batch_size=args.batch_size,
                     )
                 else:
                     flat_outputs = []
@@ -441,9 +474,11 @@ def main():
                 eta = elapsed / max(1, n_done) * (len(pieces) - n_done)
                 raw_acc = total_correct_raw / max(1, total_notes)
                 pp_acc = total_correct_pp / max(1, total_notes)
-                print(f'  [{n_done:>4d}/{len(pieces)}] {elapsed:.0f}s '
-                      f'(~{eta:.0f}s ETA)  notes={total_notes:,}  '
-                      f'tab_raw={raw_acc:.3f}  tab_pp={pp_acc:.3f}')
+                print(
+                    f'  [{n_done:>4d}/{len(pieces)}] {elapsed:.0f}s '
+                    f'(~{eta:.0f}s ETA)  notes={total_notes:,}  '
+                    f'tab_raw={raw_acc:.3f}  tab_pp={pp_acc:.3f}'
+                )
 
     print(f'\nWrote {pieces_path}')
     print(f'Wrote {preds_path}')

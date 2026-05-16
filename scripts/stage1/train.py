@@ -14,6 +14,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from gtp import REPO_ROOT
+from gtp.device import auto_device
 from gtp.stage1.data import build_dataset
 from gtp.log import set_verbose, trace
 from gtp.stage1.model.kong import Regress_onset_offset_frame_velocity_CRNN
@@ -42,14 +43,6 @@ def collate_fn(batch):
         arrays = [item[key] for item in batch]
         result[key] = torch.from_numpy(np.stack(arrays, axis=0))
     return result
-
-
-def auto_device():
-    if torch.backends.mps.is_available():
-        return 'mps'
-    if torch.cuda.is_available():
-        return 'cuda'
-    return 'cpu'
 
 
 def load_note_model(checkpoint_path):

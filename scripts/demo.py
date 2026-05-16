@@ -25,6 +25,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
 from gtp import REPO_ROOT
+from gtp.device import auto_device
 from gtp.stage1.inference import PianoTranscription
 from gtp.stage2.inference import (
     build_anchor_prefix,
@@ -42,14 +43,6 @@ STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_baseline' / 'checkpoints' / 'step_
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
 SR = 16000
-
-
-def auto_device():
-    if torch.cuda.is_available():
-        return 'cuda'
-    if torch.backends.mps.is_available():
-        return 'mps'
-    return 'cpu'
 
 
 # ---------------------------------------------------------------------------

@@ -222,63 +222,59 @@ def compute_sampling_weights(
     ]
 
 
-def build_datasets(vocab: Vocabulary, datasets=None, max_seq_len=512, augment_train=True, genre_dropout: float = 0.0):
-    """Build train, validation, and test TabDatasets from the augmented JSONLs.
+def build_datasets(
+    vocab: Vocabulary,
+    splits: tuple[str, ...] = ('train', 'val', 'test'),
+    max_seq_len: int = 512,
+    augment_train: bool = True,
+    genre_dropout: float = 0.0,
+) -> tuple[dict[str, 'TabDataset'], dict]:
+    """Build TabDatasets for the requested splits from the augmented JSONLs.
 
-    Requires that scripts/stage2/build_aug_dataset.py has already been run and
-    populated AUG_DATA_DIR. Raises FileNotFoundError otherwise — there is no
-    on-the-fly fallback.
+    Requires that scripts/stage2/build_aug_dataset.py has been run. Only the
+    splits in `splits` are loaded — pass e.g. `splits=('val', 'test')` from
+    eval.py to skip the 3 GB train.jsonl.
 
-    augment_train controls whether train applies online tuning augmentation per __getitem__.
+    `augment_train` and `genre_dropout` only apply to the 'train' split.
 
-    Returns (train_dataset, val_dataset, test_dataset, stats_dict).
+    Returns ({split: TabDataset}, stats_dict).
     """
-    train_path = AUG_DATA_DIR / 'train.jsonl'
-    val_path = AUG_DATA_DIR / 'val.jsonl'
-    test_path = AUG_DATA_DIR / 'test.jsonl'
-    if not train_path.exists():
-        raise FileNotFoundError(
-            f'Augmented JSONLs not found at {AUG_DATA_DIR}. Run scripts/stage2/build_aug_dataset.py first.'
-        )
+    valid = {'train', 'val', 'test'}
+    bad = set(splits) - valid
+    if bad:
+        raise ValueError(f'Unknown split(s): {sorted(bad)}. Allowed: {sorted(valid)}')
 
-    info(f'Loading augmented JSONLs from {AUG_DATA_DIR}')
-    train_pieces = load_jsonl_pieces(train_path)
-    val_pieces = load_jsonl_pieces(val_path)
-    test_pieces = load_jsonl_pieces(test_path)
+    info(f'Loading augmented JSONLs from {AUG_DATA_DIR}: {list(splits)}')
+    pieces: dict[str, list[dict]] = {}
+    for split in splits:
+        path = AUG_DATA_DIR / f'{split}.jsonl'
+        if not path.exists():
+            raise FileNotFoundError(
+                f'Augmented JSONL not found: {path}. Run scripts/stage2/build_aug_dataset.py first.'
+            )
+        pieces[split] = load_jsonl_pieces(path)
 
-    if datasets:
-        wanted = set(datasets)
-        train_pieces = [p for p in train_pieces if p['source'] in wanted]
-        val_pieces = [p for p in val_pieces if p['source'] in wanted]
-        test_pieces = [p for p in test_pieces if p['source'] in wanted]
-
-    train_ds = TabDataset(
-        train_pieces, vocab, max_seq_len=max_seq_len, augment=augment_train, genre_dropout=genre_dropout
-    )
-    val_ds = TabDataset(val_pieces, vocab, max_seq_len=max_seq_len, augment=False)
-    test_ds = TabDataset(test_pieces, vocab, max_seq_len=max_seq_len, augment=False)
+    datasets: dict[str, TabDataset] = {}
+    for split, ps in pieces.items():
+        augment = augment_train and split == 'train'
+        dropout = genre_dropout if split == 'train' else 0.0
+        datasets[split] = TabDataset(ps, vocab, max_seq_len=max_seq_len, augment=augment, genre_dropout=dropout)
 
     def count_by_source(piece_list):
-        counts = defaultdict(int)
+        counts: dict = defaultdict(int)
         for p in piece_list:
             counts[p['source']] += 1
         return dict(counts)
 
+    all_pieces = [p for ps in pieces.values() for p in ps]
     stats = {
-        'total_pieces': len(train_pieces) + len(val_pieces) + len(test_pieces),
-        'train_pieces': len(train_pieces),
-        'val_pieces': len(val_pieces),
-        'test_pieces': len(test_pieces),
-        'train_sequences': len(train_ds),
-        'val_sequences': len(val_ds),
-        'test_sequences': len(test_ds),
         'vocab_size': len(vocab),
         'max_seq_len': max_seq_len,
-        'sources_total': count_by_source(train_pieces + val_pieces + test_pieces),
-        'sources_train': count_by_source(train_pieces),
-        'sources_val': count_by_source(val_pieces),
-        'sources_test': count_by_source(test_pieces),
         'augment_train': augment_train,
+        'total_pieces': len(all_pieces),
+        'sources_total': count_by_source(all_pieces),
+        **{f'{split}_pieces': len(pieces[split]) for split in splits},
+        **{f'{split}_sequences': len(datasets[split]) for split in splits},
+        **{f'sources_{split}': count_by_source(pieces[split]) for split in splits},
     }
-
-    return train_ds, val_ds, test_ds, stats
+    return datasets, stats

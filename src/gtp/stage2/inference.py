@@ -8,94 +8,23 @@ The vocabulary is constructed by `load_checkpoint(...)` (from the sibling
 the `vocab` instance explicitly — no module-level globals.
 """
 
-from pathlib import Path
-
 import torch
 
 from gtp.stage2.config import RunConfig, find_run_config
 from gtp.stage2.model import build_model
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import (
-    EOS,
-    NOTE_ON,
-    PAD,
-    TAB,
-    TUNING_END,
-    TUNING_START,
     Vocabulary,
+    extract_tabs,
     notes_to_decoder_tokens,
-    parse_token_str,
     tokenize_piece,
 )
 
 
-def parse_tuning_from_enc(enc_ids, vocab: Vocabulary):
-    """Walk encoder IDs, return tuning as list of pitches. None if missing."""
-    in_tuning = False
-    tuning = []
-    for tid in enc_ids:
-        t, v = parse_token_str(vocab.decode(int(tid)))
-        if t == TUNING_START:
-            in_tuning = True
-            tuning = []
-        elif t == TUNING_END:
-            return tuning if tuning else None
-        elif t == NOTE_ON and in_tuning:
-            tuning.append(int(v))
-    return None
-
-
-def extract_input_pitches(enc_ids, vocab: Vocabulary):
-    """Walk encoder IDs, return body's NOTE_ON pitches in order (skips tuning block)."""
-    in_tuning = False
-    pitches = []
-    for tid in enc_ids:
-        t, v = parse_token_str(vocab.decode(int(tid)))
-        if t == TUNING_START:
-            in_tuning = True
-        elif t == TUNING_END:
-            in_tuning = False
-        elif t == NOTE_ON and not in_tuning:
-            pitches.append(int(v))
-        elif t == EOS:
-            break
-    return pitches
-
-
-def extract_tabs(token_ids, vocab: Vocabulary):
-    """Walk decoder IDs, return list of (string, fret) from TAB tokens. Stops at EOS."""
-    tabs = []
-    for tid in token_ids:
-        t, v = parse_token_str(vocab.decode(int(tid)))
-        if t == EOS:
-            break
-        if t == PAD:
-            continue
-        if t == TAB:
-            ss, ff = v.split(',')
-            tabs.append((int(ss), int(ff)))
-    return tabs
-
-
 def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
-    """Load Stage 2 checkpoint, return `(model, vocab, iteration)`.
-
-    Reads the sibling `config.json` (if present) to determine whether the
-    checkpoint was trained with genre conditioning, then constructs a
-    matching `Vocabulary` instance. Falls back to no-genre vocab for legacy
-    checkpoints. The returned `vocab` should be passed explicitly to
-    downstream helpers (`tokenize_piece`, `generate_tabs`, etc.).
-    """
-    include_genre = False
-    config_path = find_run_config(path)
-    if config_path is not None:
-        try:
-            cfg = RunConfig.load(config_path)
-            include_genre = cfg.conditioning.genre
-        except Exception as e:
-            print(f'  WARN: could not parse {config_path}: {e}. Assuming no genre conditioning.')
-
-    vocab = Vocabulary(include_genre=include_genre)
+    """Load Stage 2 checkpoint. Returns (model, vocab, iteration)."""
+    cfg = RunConfig.load(find_run_config(path))
+    vocab = Vocabulary(include_genre=cfg.conditioning.genre)
 
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
     meta = ckpt.get('tokenizer_meta', {})
@@ -150,8 +79,9 @@ def build_anchor_prefix(piece, vocab: Vocabulary, anchor_tabs):
     return [vocab.pad_id] + [vocab.encode(t) for t in dec_tokens]
 
 
-def generate_with_alternatives(model, vocab: Vocabulary, enc_ids, device, top_k=8,
-                               max_seq_len=512, decoder_prefix=None):
+def generate_with_alternatives(
+    model, vocab: Vocabulary, enc_ids, device, top_k=8, max_seq_len=512, decoder_prefix=None
+):
     """Generate one sub-sequence and capture top-K alternatives at each step.
 
     Returns a list of dicts, one per generation step:
@@ -194,17 +124,20 @@ def generate_with_alternatives(model, vocab: Vocabulary, enc_ids, device, top_k=
             (int(tid), vocab.decode(int(tid)), float(p))
             for tid, p in zip(top_ids.tolist(), top_probs.tolist(), strict=True)
         ]
-        results.append({
-            'step': step_i,
-            'chosen_id': chosen_id,
-            'chosen_str': vocab.decode(chosen_id),
-            'topk': topk,
-        })
+        results.append(
+            {
+                'step': step_i,
+                'chosen_id': chosen_id,
+                'chosen_str': vocab.decode(chosen_id),
+                'topk': topk,
+            }
+        )
     return results
 
 
-def generate_tabs(model, vocab: Vocabulary, enc_ids_list, device, max_seq_len=512,
-                  return_raw=False, decoder_prefix=None):
+def generate_tabs(
+    model, vocab: Vocabulary, enc_ids_list, device, max_seq_len=512, return_raw=False, decoder_prefix=None
+):
     """Run autoregressive greedy generation per sub-sequence; concatenate (string, fret) outputs.
 
     If `decoder_prefix` is provided (list of token IDs starting with decoder_start),
@@ -228,9 +161,7 @@ def generate_tabs(model, vocab: Vocabulary, enc_ids_list, device, max_seq_len=51
             'eos_token_id': vocab.eos_id,
         }
         if decoder_prefix is not None and sub_i == 0:
-            gen_kwargs['decoder_input_ids'] = torch.tensor(
-                [decoder_prefix], dtype=torch.long, device=device
-            )
+            gen_kwargs['decoder_input_ids'] = torch.tensor([decoder_prefix], dtype=torch.long, device=device)
 
         with torch.no_grad():
             generated = model.generate(**gen_kwargs)

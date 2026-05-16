@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import Adafactor
 
+from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage2.config import (
     ConditioningConfig,
@@ -40,14 +41,6 @@ from gtp.stage2.tokenizer import (
 )
 
 IGNORE_INDEX = -100
-
-
-def auto_device():
-    if torch.backends.mps.is_available():
-        return 'mps'
-    if torch.cuda.is_available():
-        return 'cuda'
-    return 'cpu'
 
 
 def make_t5_inputs(enc_ids, dec_ids, vocab, device):
@@ -92,21 +85,21 @@ def run_eval(model, val_loader, vocab, device):
             labels_cpu = labels.cpu().tolist()
             inputs_cpu = input_ids.cpu().tolist()
 
-            for b in range(input_ids.size(0)):
-                src = sources[b]
-                loss_totals[src][0] += seq_losses[b]
+            for seq_idx in range(input_ids.size(0)):
+                src = sources[seq_idx]
+                loss_totals[src][0] += seq_losses[seq_idx]
                 loss_totals[src][1] += 1
 
-                tuning = parse_tuning_from_enc(inputs_cpu[b], vocab)
+                tuning = parse_tuning_from_enc(inputs_cpu[seq_idx], vocab)
 
-                for t_idx, gt_id in enumerate(labels_cpu[b]):
+                for t_idx, gt_id in enumerate(labels_cpu[seq_idx]):
                     if gt_id < 0:  # PAD-as-loss-mask (IGNORE_INDEX), skip
                         continue
                     gt_type, gt_val = parse_token_str(vocab.decode(gt_id))
                     if gt_type != TAB:
                         continue
 
-                    pred_id = preds_cpu[b][t_idx]
+                    pred_id = preds_cpu[seq_idx][t_idx]
                     tab_totals[src][1] += 1
                     pitch_totals[src][1] += 1
 
@@ -246,10 +239,12 @@ def main():
 
     # Build datasets
     info('Building datasets...')
-    train_ds, val_ds, _test_ds, _stats = build_datasets(
+    datasets, _stats = build_datasets(
         vocab,
+        splits=('train', 'val'),
         genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
     )
+    train_ds, val_ds = datasets['train'], datasets['val']
     info(f'Train sequences: {len(train_ds)}\nValidation sequences: {len(val_ds)}')
 
     # Optional rebalancing

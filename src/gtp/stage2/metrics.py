@@ -48,7 +48,6 @@ def pitch_correct(pred_tab, gt_pitch, tuning) -> bool:
 
 
 def tab_correct(pred_tab, gt_tab) -> bool:
-    """True if pred_tab matches gt_tab as (string, fret) tuples."""
     if pred_tab is None or gt_tab is None:
         return False
     return tuple(pred_tab) == tuple(gt_tab)
@@ -102,9 +101,8 @@ def position_difficulty(prev_tab, curr_tab) -> float:
 
 def difficulty_score(tabs) -> float | None:
     """Mean position_difficulty across consecutive pairs in `tabs`.
-
-    Skips entries that are None. Returns None if fewer than 2 valid tabs
-    (difficulty is undefined for a 0- or 1-note sequence).
+    IMPORTANT: chords will inflate difficulty_score since they will be considered as N consecutive notes.
+               The same flaw is present in "Fretting Transformer" paper.
     """
     valid = [t for t in tabs if t is not None]
     if len(valid) < 2:
@@ -160,8 +158,12 @@ ERROR_TYPES = (
 
 
 def classify_error(
-    true_s: int, true_f: int, true_pitch: int | None,
-    pred_s: int | None, pred_f: int | None, pred_pitch: int | None,
+    true_s: int,
+    true_f: int,
+    true_pitch: int | None,
+    pred_s: int | None,
+    pred_f: int | None,
+    pred_pitch: int | None,
 ) -> str:
     """Categorize a (predicted vs true) tab into one of `ERROR_TYPES`.
 
@@ -223,9 +225,14 @@ def piece_drift_signature(
     """
     if not piece_records:
         return {
-            'n': 0, 'n_correct': 0, 'correct_rate': 0.0,
-            'modal_drift': None, 'n_modal_drift': 0, 'n_errors': 0,
-            'error_consistency': 0.0, 'bucket': 'inconsistent',
+            'n': 0,
+            'n_correct': 0,
+            'correct_rate': 0.0,
+            'modal_drift': None,
+            'n_modal_drift': 0,
+            'n_errors': 0,
+            'error_consistency': 0.0,
+            'bucket': 'inconsistent',
         }
 
     n = len(piece_records)
@@ -316,9 +323,7 @@ def aggregate_drift_buckets(
 
     # Tab-equivalent: a note is "equivalent-correct" if it's strictly correct
     # OR if its drift matches its piece's modal drift (consistent alternate).
-    piece_modal: dict[str, tuple[int, int] | None] = {
-        d['piece_id']: d['modal_drift'] for d in piece_drifts
-    }
+    piece_modal: dict[str, tuple[int, int] | None] = {d['piece_id']: d['modal_drift'] for d in piece_drifts}
     qualifying_pids = set(piece_modal)
     n_strict, n_alt, n_total = 0, 0, 0
     for r in records:
@@ -353,16 +358,9 @@ def aggregate_drift_buckets(
         'tab_strict_acc': n_strict / n_total if n_total else 0.0,
         'tab_equivalent_acc': (n_strict + n_alt) / n_total if n_total else 0.0,
         'recovered_by_alt': n_alt,
-        'consistent_alt_drift_histogram': {
-            f'{ds},{df}': c for (ds, df), c in consistent_alt_hist.most_common()
-        },
+        'consistent_alt_drift_histogram': {f'{ds},{df}': c for (ds, df), c in consistent_alt_hist.most_common()},
         'piece_drifts': piece_drifts,
     }
-
-
-# ---------------------------------------------------------------------------
-# Top-line summary across all per-note records
-# ---------------------------------------------------------------------------
 
 
 def compute_eval_summary(records: list[dict], min_notes_for_drift: int = 20) -> dict:

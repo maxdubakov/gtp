@@ -379,6 +379,38 @@ def parse_tuning_from_enc(enc_ids, vocab) -> list[int] | None:
     return None
 
 
+def extract_input_pitches(enc_ids, vocab) -> list[int]:
+    """Walk encoder IDs, return body's NOTE_ON pitches in order (skips tuning block)."""
+    in_tuning = False
+    pitches: list[int] = []
+    for tid in enc_ids:
+        t, v = parse_token_str(vocab.decode(int(tid)))
+        if t == TUNING_START:
+            in_tuning = True
+        elif t == TUNING_END:
+            in_tuning = False
+        elif t == NOTE_ON and not in_tuning:
+            pitches.append(int(v))
+        elif t == EOS:
+            break
+    return pitches
+
+
+def extract_tabs(token_ids, vocab) -> list[tuple[int, int]]:
+    """Walk decoder IDs, return list of (string, fret) from TAB tokens. Stops at EOS."""
+    tabs: list[tuple[int, int]] = []
+    for tid in token_ids:
+        t, v = parse_token_str(vocab.decode(int(tid)))
+        if t == EOS:
+            break
+        if t == PAD:
+            continue
+        if t == TAB:
+            ss, ff = v.split(',')
+            tabs.append((int(ss), int(ff)))
+    return tabs
+
+
 def encoder_tokens_to_notes(token_strs):
     """Reverse of notes_to_encoder_tokens.
 
