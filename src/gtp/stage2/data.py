@@ -28,7 +28,7 @@ STANDARD_TUNINGS = [
     [64, 59, 55, 50, 45, 40],  # standard E A D G B E
     [63, 58, 54, 49, 44, 39],  # half-step down
     [62, 57, 53, 48, 43, 38],  # full-step down (D)
-    [64, 59, 55, 50, 45, 40],  # drop-D
+    [64, 59, 55, 50, 45, 38],  # drop-D
 ]
 
 DEFAULT_REBALANCE_SOURCE = {
