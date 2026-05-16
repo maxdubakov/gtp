@@ -14,6 +14,7 @@ import pretty_midi
 
 from gtp import REPO_ROOT
 from gtp.stage2.genres import GENRE_RULES, UNKNOWN
+from gtp.stage2.metrics import pitch_of
 
 DADAGP_DIR = REPO_ROOT / 'data' / 'DadaGP-v1.1'
 CATALOG_CSV = REPO_ROOT / 'data' / 'dadagp' / 'acoustic_tracks.csv'
@@ -100,7 +101,7 @@ def parse_gp_track(gp_path, track_idx):
                 end_sec = (beat_tick + dur_ticks) / tps
 
                 for note in beat.notes:
-                    pitch = tuning[note.string - 1] + note.value
+                    pitch = pitch_of((note.string, note.value), tuning)
 
                     notes.append(
                         {

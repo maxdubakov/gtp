@@ -15,6 +15,7 @@ Two fallback strategies are available, selected by `correct_tabs(..., fallback=.
 """
 
 from gtp.stage2.data import MAX_FRET
+from gtp.stage2.metrics import pitch_of
 
 
 def first_viable_tab(pitch, tuning, max_fret=MAX_FRET):
@@ -109,10 +110,7 @@ def correct_tabs(
         raise ValueError(f"fallback must be 'first_viable' or 'nearest_viable', got {fallback!r}")
 
     m = len(predicted_tabs)
-    predicted_pitches = [
-        (tuning[s - 1] + f) if 1 <= s <= len(tuning) else None
-        for s, f in predicted_tabs
-    ]
+    predicted_pitches = [pitch_of(tab, tuning) for tab in predicted_tabs]
 
     corrected = []
     sources = []

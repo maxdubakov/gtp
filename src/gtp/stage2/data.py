@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import Dataset
 
 from gtp.log import info
+from gtp.stage2.metrics import pitch_of
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import MAX_FRET, Vocabulary, tokenize_piece
 
@@ -37,6 +38,7 @@ DEFAULT_REBALANCE_SOURCE = {
     'leduc': 5.0,
     'guitartoday': 1.0,
 }
+
 DEFAULT_REBALANCE_GENRE = {
     'classical': 1.5,
     'jazz': 1.5,
@@ -44,59 +46,8 @@ DEFAULT_REBALANCE_GENRE = {
 }
 
 
-def filter_notes(notes, tuning):
-    """Drop invalid notes; return (clean_notes, reason_counts)."""
-    clean = []
-    reasons = Counter()
-    for n in notes:
-        if n['fret'] < 0 or n['fret'] > MAX_FRET:
-            reasons['bad_fret'] += 1
-            continue
-        if n['end'] - n['start'] < MIN_NOTE_DURATION:
-            reasons['zero_dur'] += 1
-            continue
-        if n['string'] < 1 or n['string'] > len(tuning):
-            reasons['bad_string'] += 1
-            continue
-        expected_pitch = tuning[n['string'] - 1] + n['fret']
-        if expected_pitch != n['pitch']:
-            reasons['pitch_mismatch'] += 1
-            continue
-        clean.append(n)
-    return clean, reasons
-
-
-def random_tuning(piece, rng):
-    """Apply random tuning augmentation. Preserves capo, string, fret; replaces tuning.
-
-    Pieces with non-6-string tunings are returned unchanged.
-    """
-    if len(piece['tuning']) != 6:
-        return piece
-    base = rng.choice(STANDARD_TUNINGS)
-    capo = piece['capo']
-    new_tuning = [t + capo for t in base]
-    new_notes = [{**n, 'pitch': new_tuning[n['string'] - 1] + n['fret']} for n in piece['notes']]
-    return {**piece, 'tuning': new_tuning, 'notes': new_notes}
-
-
-def load_jsonl_pieces(path):
-    """Load pieces from a JSONL file (one piece dict per line)."""
-    pieces = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                pieces.append(json.loads(line))
-    return pieces
-
-
 def _piece_id(piece):
-    """Synthesize a stable piece identifier from source/filename/capo.
-
-    Mirrors the convention used by dump_eval_predictions.py so per-piece
-    metrics line up across the train-time and post-hoc analysis pipelines.
-    """
+    """Synthesize a stable piece identifier from source/filename/capo"""
     src = piece.get('source', '?')
     fname = piece.get('filename', piece.get('file', '?'))
     capo = piece.get('capo', 0)
@@ -107,17 +58,7 @@ class TabDataset(Dataset):
     """PyTorch Dataset for Stage 2 (MIDI → Tab) training.
 
     Each item is (encoder_ids, decoder_ids, source, piece_id), padded to max_seq_len.
-    `source` and `piece_id` travel with the sample so per-source / per-piece eval
-    work regardless of shuffling.
-
-    When augment=True, applies random tuning augmentation per __getitem__ and
-    re-tokenizes from the underlying piece. Capo is preserved (already varied
-    offline by build_aug_dataset.py for the train/val splits).
-
-    `genre_dropout` (training-side classifier-free guidance): when augment=True,
-    each sample's GENRE token is replaced with `GENRE<unknown>` with this
-    probability. 0.0 = always use ground-truth genre. Has no effect when
-    augment=False (val/test always use ground-truth genre).
+    Implements online augmentation for tuning.
     """
 
     def __init__(self, pieces, vocab: Vocabulary, max_seq_len=512, augment=False, genre_dropout: float = 0.0):
@@ -125,50 +66,46 @@ class TabDataset(Dataset):
         self.augment = augment
         self.genre_dropout = genre_dropout
         self.vocab = vocab
-        self._rng = random.Random()  # un-seeded → independent per DataLoader worker
+        self._rng = random.Random()
 
         if augment:
-            # Keep originals; tokenize on demand. Build flat index from cached
-            # num_subseqs annotations (written by build_aug_dataset.py). Fall back to
-            # tokenizing if the field is missing.
             self.pieces = pieces
             self._index = []
             self._sources = []
             self._genres = []
             self._piece_ids = []
-            for pi, piece in enumerate(pieces):
-                n = piece.get('num_subseqs')
-                if n is None:
-                    n = len(tokenize_piece(piece, vocab, max_seq_len=max_seq_len))
-                pid = _piece_id(piece)
+            for piece_idx, piece in enumerate(pieces):
+                n_seqs = piece.get('num_subseqs')
+                if n_seqs is None:
+                    n_seqs = len(tokenize_piece(piece, vocab, max_seq_len=max_seq_len))
+                piece_id = _piece_id(piece)
                 genre = piece.get('genre', 'unknown')
-                for si in range(n):
-                    self._index.append((pi, si))
+                for seq_idx in range(n_seqs):
+                    self._index.append((piece_idx, seq_idx))
                     self._sources.append(piece['source'])
                     self._genres.append(genre)
-                    self._piece_ids.append(pid)
+                    self._piece_ids.append(piece_id)
         else:
-            # Pre-tokenize and cache; pieces no longer needed.
             self.sequences = []
             self._sources = []
             self._genres = []
             self._piece_ids = []
             for piece in pieces:
                 seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
-                pid = _piece_id(piece)
+                piece_id = _piece_id(piece)
                 genre = piece.get('genre', 'unknown')
                 self.sequences.extend(seqs)
                 self._sources.extend([piece['source']] * len(seqs))
                 self._genres.extend([genre] * len(seqs))
-                self._piece_ids.extend([pid] * len(seqs))
+                self._piece_ids.extend([piece_id] * len(seqs))
 
     def __len__(self):
         return len(self._sources)
 
     def __getitem__(self, idx):
         if self.augment:
-            pi, si = self._index[idx]
-            piece = random_tuning(self.pieces[pi], self._rng)
+            piece_id, seq_id = self._index[idx]
+            piece = self._random_tuning(piece_id)
             genre_override = 'unknown' if self.genre_dropout > 0 and self._rng.random() < self.genre_dropout else None
             seqs = tokenize_piece(
                 piece,
@@ -176,7 +113,7 @@ class TabDataset(Dataset):
                 max_seq_len=self.max_seq_len,
                 genre_override=genre_override,
             )
-            enc_ids, dec_ids = seqs[min(si, len(seqs) - 1)]
+            enc_ids, dec_ids = seqs[min(seq_id, len(seqs) - 1)]
         else:
             enc_ids, dec_ids = self.sequences[idx]
         return (
@@ -185,6 +122,17 @@ class TabDataset(Dataset):
             self._sources[idx],
             self._piece_ids[idx],
         )
+
+    def _random_tuning(self, piece_id):
+        """Apply random tuning augmentation. Fixes capo, string, fret, and changes played pitch instead"""
+        piece = self.pieces[piece_id]
+        if len(piece['tuning']) != 6:
+            return piece
+        base = self._rng.choice(STANDARD_TUNINGS)
+        capo = piece['capo']
+        new_tuning = [t + capo for t in base]
+        new_notes = [{**n, 'pitch': pitch_of((n['string'], n['fret']), new_tuning)} for n in piece['notes']]
+        return {**piece, 'tuning': new_tuning, 'notes': new_notes}
 
     def _pad(self, ids):
         padded = ids + [self.vocab.pad_id] * (self.max_seq_len - len(ids))
@@ -199,22 +147,36 @@ class TabDataset(Dataset):
         return self._genres
 
 
-def compute_sampling_weights(
-    sources: list[str],
-    genres: list[str],
-) -> list[float]:
-    """Per-sample weight = source_weights[src] * genre_weights[genre].
+def filter_notes(notes, tuning):
+    """Drop invalid notes; return (clean_notes, reason_counts)"""
+    clean = []
+    reasons = Counter()
+    for n in notes:
+        if n['fret'] < 0 or n['fret'] > MAX_FRET:
+            reasons['bad_fret'] += 1
+            continue
+        if n['end'] - n['start'] < MIN_NOTE_DURATION:
+            reasons['zero_dur'] += 1
+            continue
+        if n['string'] < 1 or n['string'] > len(tuning):
+            reasons['bad_string'] += 1
+            continue
+        if pitch_of((n['string'], n['fret']), tuning) != n['pitch']:
+            reasons['pitch_mismatch'] += 1
+            continue
+        clean.append(n)
+    return clean, reasons
 
-    Both weight dicts default to 1.0 for any key not present. Used to feed
-    `torch.utils.data.WeightedRandomSampler` for per-source / per-genre
-    upsampling of the training mix.
-    """
-    if len(sources) != len(genres):
-        raise ValueError(f'sources/genres length mismatch: {len(sources)} vs {len(genres)}')
-    return [
-        DEFAULT_REBALANCE_SOURCE.get(src, 1.0) * DEFAULT_REBALANCE_GENRE.get(g, 1.0)
-        for src, g in zip(sources, genres, strict=True)
-    ]
+
+def load_jsonl_pieces(path):
+    """Load pieces from a JSONL file (one piece dict per line)."""
+    pieces = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                pieces.append(json.loads(line))
+    return pieces
 
 
 def build_datasets(
@@ -224,16 +186,7 @@ def build_datasets(
     augment_train: bool = True,
     genre_dropout: float = 0.0,
 ) -> tuple[dict[str, 'TabDataset'], dict]:
-    """Build TabDatasets for the requested splits from the augmented JSONLs.
-
-    Requires that scripts/stage2/build_aug_dataset.py has been run. Only the
-    splits in `splits` are loaded — pass e.g. `splits=('val', 'test')` from
-    eval.py to skip the 3 GB train.jsonl.
-
-    `augment_train` and `genre_dropout` only apply to the 'train' split.
-
-    Returns ({split: TabDataset}, stats_dict).
-    """
+    """Build TabDatasets from the augmented JSONLs. Returns ({split: TabDataset}, stats_dict)."""
     valid = {'train', 'val', 'test'}
     bad = set(splits) - valid
     if bad:
@@ -244,9 +197,7 @@ def build_datasets(
     for split in splits:
         path = AUG_DATA_DIR / f'{split}.jsonl'
         if not path.exists():
-            raise FileNotFoundError(
-                f'Augmented JSONL not found: {path}. Run scripts/stage2/build_aug_dataset.py first.'
-            )
+            raise FileNotFoundError(f'Augmented JSONL not found: {path}')
         pieces[split] = load_jsonl_pieces(path)
 
     datasets: dict[str, TabDataset] = {}
@@ -273,3 +224,21 @@ def build_datasets(
         **{f'sources_{split}': count_by_source(pieces[split]) for split in splits},
     }
     return datasets, stats
+
+
+def compute_sampling_weights(
+    sources: list[str],
+    genres: list[str],
+) -> list[float]:
+    """Per-sample weight = source_weights[src] * genre_weights[genre].
+
+    Both weight dicts default to 1.0 for any key not present. Used to feed
+    `torch.utils.data.WeightedRandomSampler` for per-source / per-genre
+    upsampling of the training mix.
+    """
+    if len(sources) != len(genres):
+        raise ValueError(f'sources/genres length mismatch: {len(sources)} vs {len(genres)}')
+    return [
+        DEFAULT_REBALANCE_SOURCE.get(src, 1.0) * DEFAULT_REBALANCE_GENRE.get(g, 1.0)
+        for src, g in zip(sources, genres, strict=True)
+    ]

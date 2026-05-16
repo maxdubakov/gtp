@@ -19,6 +19,7 @@ import numpy as np
 import seaborn as sns
 
 from gtp import REPO_ROOT
+from gtp.stage2.metrics import pitch_of
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -162,11 +163,10 @@ def analyse_dataset(dataset: str) -> dict:
                 piece_end = end
 
             # consistency: pitch should equal tuning[string-1] + fret
-            if 1 <= string <= len(tuning):
-                expected = tuning[string - 1] + fret
-                if pitch != expected:
-                    n_incon += 1
-                    diffs.append(pitch - expected)
+            expected = pitch_of((string, fret), tuning)
+            if expected is not None and pitch != expected:
+                n_incon += 1
+                diffs.append(pitch - expected)
 
         piece_durations.append(piece_end)
         total_inconsistent += n_incon

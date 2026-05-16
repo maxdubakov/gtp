@@ -24,6 +24,8 @@ import librosa
 import numpy as np
 import pretty_midi
 
+from gtp.stage2.metrics import pitch_of
+
 JAZZ_ARTIST_SUBSTRINGS: tuple[str, ...] = (
     'joe pass',
     'wes montgomery',
@@ -214,11 +216,7 @@ def main():
 
     # Sanity check: pieces where every note's pitch is inconsistent with (string, fret)
     # are corrupt — drop entirely (matches the existing behavior).
-    bad = sum(
-        1
-        for n in data['notes']
-        if n['string'] < 1 or n['string'] > len(tuning) or tuning[n['string'] - 1] + n['fret'] != n['pitch']
-    )
+    bad = sum(1 for n in data['notes'] if pitch_of((n['string'], n['fret']), tuning) != n['pitch'])
     if bad == len(data['notes']) and len(data['notes']) > 0:
         os.remove(json_path)
         sys.exit(1)

@@ -40,6 +40,7 @@ from gtp.stage2.inference import (
     load_checkpoint,
     tokenize_for_inference,
 )
+from gtp.stage2.metrics import pitch_of
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import extract_tabs
@@ -234,7 +235,7 @@ def finalize_piece(
 
         if raw is not None:
             rs, rf = int(raw[0]), int(raw[1])
-            r_pitch = tuning[rs - 1] + rf if 1 <= rs <= len(tuning) else None
+            r_pitch = pitch_of((rs, rf), tuning)
             if (rs, rf) == (true_s, true_f):
                 n_correct_raw += 1
             if r_pitch == true_pitch:
@@ -244,7 +245,7 @@ def finalize_piece(
 
         if pp is not None:
             ps, pf = int(pp[0]), int(pp[1])
-            p_pitch = tuning[ps - 1] + pf if 1 <= ps <= len(tuning) else None
+            p_pitch = pitch_of((ps, pf), tuning)
             if (ps, pf) == (true_s, true_f):
                 n_correct_pp += 1
             if p_pitch == true_pitch:

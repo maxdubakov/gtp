@@ -20,6 +20,7 @@ from gtp.stage2.metrics import (
     compute_eval_summary,
     difficulty_score,
     pitch_correct,
+    pitch_of,
     tab_correct,
 )
 from gtp.stage2.postprocess import correct_tabs
@@ -100,7 +101,7 @@ def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
 
                 for j in range(n):
                     true_s, true_f = gt_tabs[j]
-                    g_pitch = tuning[true_s - 1] + true_f if 1 <= true_s <= len(tuning) else None
+                    g_pitch = pitch_of((true_s, true_f), tuning)
 
                     raw = pred_tabs[j] if j < len(pred_tabs) else None
                     cor = corrected_tabs[j] if j < len(corrected_tabs) else None
@@ -117,9 +118,9 @@ def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
                             m['pitch_correct_pp'] += 1
 
                     raw_s, raw_f = raw if raw else (None, None)
-                    raw_pitch = tuning[raw_s - 1] + raw_f if raw_s is not None and 1 <= raw_s <= len(tuning) else None
+                    raw_pitch = pitch_of(raw, tuning)
                     pp_s, pp_f = cor if cor else (None, None)
-                    pp_pitch = tuning[pp_s - 1] + pp_f if pp_s is not None and 1 <= pp_s <= len(tuning) else None
+                    pp_pitch = pitch_of(cor, tuning)
 
                     note_records.append(
                         {

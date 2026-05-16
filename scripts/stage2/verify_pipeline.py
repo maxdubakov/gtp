@@ -26,6 +26,7 @@ import jams
 import pretty_midi
 
 from gtp import REPO_ROOT
+from gtp.stage2.metrics import pitch_of
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -382,7 +383,7 @@ def detect_capo_stems():
                 continue
             diffs = set()
             for n in notes:
-                diffs.add(n['pitch'] - (tuning[n['string'] - 1] + n['fret']))
+                diffs.add(n['pitch'] - pitch_of((n['string'], n['fret']), tuning))
                 if len(diffs) > 1:
                     break  # heterogeneous — not a uniform-offset file
             if len(diffs) == 1 and next(iter(diffs)) != 0:
