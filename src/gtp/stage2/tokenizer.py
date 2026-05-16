@@ -1,25 +1,11 @@
 """V3 tokenizer for the Fretting-Transformer.
 
-Converts note JSON → token sequences for encoder (MIDI) and decoder (TAB).
-
-Encoder input (conditioned):
+Example of encoder's input:
   [GENRE<rock>] [TEMPO<120>] CAPO<5> <TUNING_START> NOTE_ON<64> ... NOTE_ON<40> <TUNING_END>
-  NOTE_ON<55> TIME_SHIFT<120> NOTE_OFF<55> ...
+  NOTE_ON<55> TIME_SHIFT<120> NOTE_OFF<55>
 
-Decoder target:
-  TAB<3,0> TIME_SHIFT<120> ...
-
-TIME_SHIFT values are in MIDI ticks at PPQ=480.
-Simultaneous notes (chords) have no TIME_SHIFT between them.
-
-Genre conditioning is opt-in via `Vocabulary(include_genre=True)`. With it on,
-14 GENRE tokens are added to the vocab and `notes_to_encoder_tokens(...,
-genre=...)` emits a GENRE token at the very start of the conditioning prefix.
-With it off, the legacy 553-token vocab is preserved (old checkpoints load fine).
-
-The vocabulary is constructed by callers (train.py, demo.py, eval.py, etc.)
-and threaded explicitly through `tokenize_piece(...)`, `TabDataset(...)`,
-and the inference helpers — there is no module-level global.
+Example of decoder's output:
+  TAB<3,0> TIME_SHIFT<120>
 """
 
 from collections import defaultdict
@@ -27,8 +13,6 @@ from dataclasses import dataclass
 
 from gtp.stage2.genres import GENRES
 
-# Token type names — used as Token.type and as the bare identifier in vocab strings.
-# Standalone tokens (no value) are emitted as <TYPE>; parametric ones as TYPE<value>.
 PAD = 'PAD'
 EOS = 'EOS'
 TUNING_START = 'TUNING_START'
@@ -51,11 +35,7 @@ MAX_FRET = 24
 
 
 def quantize_ticks(ticks):
-    """Snap a tick delta to the nearest bin, or to 0 (suppresses TIME_SHIFT emission).
-
-    0 is a sentinel — it's not a vocab token. Any delta closer to 0 than to the
-    smallest bin (60 ticks ≈ 31ms at 120bpm) collapses to 'simultaneous'.
-    """
+    """Snap a tick delta to the nearest bin, or to 0 (suppresses TIME_SHIFT emission)"""
     if ticks <= 0:
         return 0
     if ticks > MAX_TIME_SHIFT:
@@ -85,12 +65,7 @@ def _bare(token_type):
 
 
 class Vocabulary:
-    """Stage 2 token vocabulary.
-
-    Pass `include_genre=True` to add `GENRE<X>` tokens for conditioning.
-    The flag is part of model config so old (no-genre) checkpoints continue
-    to load against a `Vocabulary(include_genre=False)`.
-    """
+    """Stage 2 token vocabulary"""
 
     def __init__(self, include_genre: bool = False):
         self.include_genre = include_genre
@@ -105,7 +80,6 @@ class Vocabulary:
             self.id_to_token[idx] = token_str
 
     def _build(self):
-        # T5 convention: no SOS — the decoder is seeded with PAD as decoder_start_token_id.
         for t in (PAD, EOS, TUNING_START, TUNING_END):
             self._add(_bare(t))
 
@@ -127,7 +101,7 @@ class Vocabulary:
             self._add(str(Token(TIME_SHIFT, str(ticks))))
 
         for string in range(1, 8):
-            for fret in range(0, 25):
+            for fret in range(0, MAX_FRET + 1):
                 self._add(str(Token(TAB, f'{string},{fret}')))
 
     def encode(self, token):
@@ -164,15 +138,13 @@ def _emit_time_shifts(delta_ticks):
 def notes_to_encoder_tokens(notes, tempo, tuning=None, capo=0, genre=None):
     """Convert note list to encoder token sequence.
 
-    Conditioning prefix order:
-        [GENRE<X>] [TEMPO<bpm>] CAPO<n> [<TUNING_START> NOTE_ON×6 <TUNING_END>]
-
     `genre` is one of the canonical buckets (see gtp.stage2.genres.GENRES);
     pass None to omit the GENRE token entirely (legacy / no-conditioning runs).
     `tempo` None → omits the TEMPO token (signal that tempo is unknown).
     Note times are still converted to ticks at 120 BPM density when tempo is None
     — the dataset is expected to have normalized timing to 120 BPM in that case.
     """
+    # TODO: add tempo unknown and ensure that every conditioning token stays in its place
     tempo_for_ticks = tempo if tempo is not None else 120
     ticks_per_sec = (tempo_for_ticks / 60) * PPQ
 
@@ -214,10 +186,7 @@ def notes_to_encoder_tokens(notes, tempo, tuning=None, capo=0, genre=None):
 def notes_to_decoder_tokens(notes, tempo):
     """Convert note list to decoder token sequence (TAB + TIME_SHIFT)."""
     ticks_per_sec = (tempo / 60) * PPQ
-
-    # Defensive sort — caller should sort but we don't rely on it.
     notes = sorted(notes, key=lambda n: (n['start'], n['pitch']))
-
     tokens = []
     current_tick = 0
 
@@ -229,24 +198,14 @@ def notes_to_decoder_tokens(notes, tempo):
             tokens.extend(_emit_time_shifts(delta))
             current_tick = on_tick
 
-        fret = max(0, min(24, note['fret']))
+        fret = max(0, min(MAX_FRET, note['fret']))
         tokens.append(Token(TAB, f'{note["string"]},{fret}'))
 
     return tokens
 
 
 def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
-    """Tokenize a full piece into encoder/decoder sequence pairs.
-
-    Returns list of (encoder_ids, decoder_ids) tuples. `data['tempo']` may be
-    None (TEMPO token omitted). `data['genre']` is emitted as a GENRE token
-    when present AND `vocab.include_genre` is True; otherwise the GENRE
-    token is silently dropped (so the same data layer works for both
-    legacy and conditioning models).
-
-    `genre_override` (e.g. 'unknown') replaces the piece's genre — used by
-    `TabDataset` for classifier-free training-time dropout.
-    """
+    """Tokenize a full piece into encoder/decoder sequence pairs. Returns list of (encoder_ids, decoder_ids) tuples."""
     notes = sorted(data['notes'], key=lambda n: (n['start'], n['pitch']))
     tempo = data.get('tempo', 120)
     tuning = data.get('tuning')
@@ -277,11 +236,8 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
         if t.type == TAB:
             note_boundaries_dec.append(i)
 
-    # Encoder must produce one NOTE_ON-outside-tuning per input note, and decoder must
-    # produce one TAB per input note. A mismatch is a tokenizer bug, not a data issue.
     assert len(note_boundaries_enc) == len(note_boundaries_dec), (
-        f'Note count mismatch: encoder={len(note_boundaries_enc)} decoder={len(note_boundaries_dec)} '
-        f'for piece with {len(notes)} notes'
+        f'Note count mismatch: {len(note_boundaries_enc)} vs {len(note_boundaries_dec)} for piece with {len(notes)} notes'
     )
 
     # The conditioning prefix (TEMPO + CAPO + TUNING) is repeated at the start of each sequence
@@ -291,7 +247,6 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
             prefix_end = i + 1
             break
         if t.type == NOTE_ON:
-            # No tuning block — prefix is just TEMPO/CAPO
             in_tuning_block = False
             for j in range(i):
                 if enc_tokens[j].type == TUNING_START:
@@ -412,8 +367,8 @@ def extract_tabs(token_ids, vocab) -> list[tuple[int, int]]:
     return tabs
 
 
-def encoder_tokens_to_notes(token_strs):
-    """Reverse of notes_to_encoder_tokens.
+def encoder_tokens_to_notes(ids: list[int], vocab: 'Vocabulary'):
+    """Reverse of notes_to_encoder_tokens. Detokenizes model encoder IDs.
 
     Returns (notes, tempo, capo, tuning). Notes is a list of {pitch, start, end} in seconds.
     Same-pitch overlapping notes are paired in FIFO order (the encoder representation
@@ -423,10 +378,10 @@ def encoder_tokens_to_notes(token_strs):
     capo = 0
     tuning = None
     in_tuning = False
-    body_start = len(token_strs)
+    body_start = len(ids)
 
-    for i, s in enumerate(token_strs):
-        t, v = parse_token_str(s)
+    for i, tid in enumerate(ids):
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == 'PAD':
             continue
         if t == 'TEMPO':
@@ -451,8 +406,8 @@ def encoder_tokens_to_notes(token_strs):
     active = defaultdict(list)
     current_tick = 0
 
-    for s in token_strs[body_start:]:
-        t, v = parse_token_str(s)
+    for tid in ids[body_start:]:
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == 'PAD':
             continue
         if t == 'EOS':
@@ -475,8 +430,8 @@ def encoder_tokens_to_notes(token_strs):
     return notes, tempo, capo, tuning
 
 
-def decoder_tokens_to_notes(token_strs, tempo, tuning):
-    """Reverse of notes_to_decoder_tokens.
+def decoder_tokens_to_notes(ids: list[int], vocab: 'Vocabulary', tempo, tuning):
+    """Reverse of notes_to_decoder_tokens. Detokenizes model decoder IDs.
 
     Decoder vocab has no NOTE_OFF, so the output has no `end` — only `start, pitch, string, fret`.
     Callers that need duration (MIDI render, JSON write) synthesize it themselves.
@@ -485,8 +440,8 @@ def decoder_tokens_to_notes(token_strs, tempo, tuning):
     notes = []
     current_tick = 0
 
-    for s in token_strs:
-        t, v = parse_token_str(s)
+    for tid in ids:
+        t, v = parse_token_str(vocab.decode(int(tid)))
         if t == 'PAD':
             continue
         if t == 'EOS':

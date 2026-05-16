@@ -1,13 +1,3 @@
-"""Stage 2 inference utilities.
-
-Token-stream parsing helpers, checkpoint loading, encoder-only tokenization,
-autoregressive generation, and end-to-end "piece → tabs" inference.
-
-The vocabulary is constructed by `load_checkpoint(...)` (from the sibling
-`config.json`) and returned alongside the model. All helper functions take
-the `vocab` instance explicitly — no module-level globals.
-"""
-
 import torch
 
 from gtp.stage2.config import RunConfig, find_run_config
@@ -29,10 +19,7 @@ def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
     meta = ckpt.get('tokenizer_meta', {})
     if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
-        raise ValueError(
-            f'Vocab mismatch: ckpt={meta["vocab_size"]}, current={len(vocab)}. '
-            f'Check sibling config.json or the --genre-conditioning flag at training time.'
-        )
+        raise ValueError(f'Vocab mismatch: ckpt={meta["vocab_size"]}, current={len(vocab)}')
     model = build_model(vocab).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
