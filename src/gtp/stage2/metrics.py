@@ -18,14 +18,6 @@ Three layers of metrics:
        * `compute_eval_summary`  — tab_strict, tab_equivalent, pitch acc,
          error-type breakdown, drift-bucket counts. Used by `eval.py`,
          training-time eval, and `analyze_errors.py`.
-
-Difficulty range per the paper: 0 (consecutive open strings on the same string)
-to 18.5 (lowest open string → highest fret on highest string, 24-fret guitar).
-
-NOTE on the difficulty formula: eq. (6) defines vertical_stretch as 0.25 whenever
-Δstring ≤ 1, which includes Δstring = 0 (same string). That makes the per-pair
-minimum 0.25, contradicting the paper's claim that the minimum is 0. We
-implement the formula strictly as written; treat 0.25 as the practical floor.
 """
 
 from collections import Counter, defaultdict
@@ -33,7 +25,6 @@ from itertools import pairwise
 
 
 def pitch_of(tab, tuning) -> int | None:
-    """Return MIDI pitch for (string, fret) on the given tuning, or None if invalid."""
     if tab is None:
         return None
     s, f = tab
@@ -43,7 +34,6 @@ def pitch_of(tab, tuning) -> int | None:
 
 
 def pitch_correct(pred_tab, gt_pitch, tuning) -> bool:
-    """True if pred_tab produces gt_pitch on the given tuning."""
     return pitch_of(pred_tab, tuning) == gt_pitch
 
 
@@ -53,9 +43,24 @@ def tab_correct(pred_tab, gt_tab) -> bool:
     return tuple(pred_tab) == tuple(gt_tab)
 
 
-# ---------------------------------------------------------------------------
-# Difficulty metric (Hamberger et al. §3.6, eqs. 1-6)
-# ---------------------------------------------------------------------------
+def pitch_accuracy(pred_tabs, gt_pitches, tuning) -> tuple[int, int]:
+    """Return (n_correct, n_total)"""
+    n_total = len(gt_pitches)
+    n_correct = 0
+    for i, gp in enumerate(gt_pitches):
+        if i < len(pred_tabs) and pitch_correct(pred_tabs[i], gp, tuning):
+            n_correct += 1
+    return n_correct, n_total
+
+
+def tab_accuracy(pred_tabs, gt_tabs) -> tuple[int, int]:
+    """Return (n_correct, n_total) over zip(pred_tabs, gt_tabs)"""
+    n_total = len(gt_tabs)
+    n_correct = 0
+    for i, gt in enumerate(gt_tabs):
+        if i < len(pred_tabs) and tab_correct(pred_tabs[i], gt):
+            n_correct += 1
+    return n_correct, n_total
 
 
 def _fret_stretch(prev_fret: int, curr_fret: int) -> float:
@@ -111,52 +116,6 @@ def difficulty_score(tabs) -> float | None:
     return sum(diffs) / len(diffs)
 
 
-# ---------------------------------------------------------------------------
-# Aggregation helpers
-# ---------------------------------------------------------------------------
-
-
-def pitch_accuracy(pred_tabs, gt_pitches, tuning) -> tuple[int, int]:
-    """Return (n_correct, n_total) over zip(pred_tabs, gt_pitches).
-
-    Pred entries beyond the gt length are ignored. Gt entries beyond pred count
-    as wrong (denominator = len(gt_pitches)).
-    """
-    n_total = len(gt_pitches)
-    n_correct = 0
-    for i, gp in enumerate(gt_pitches):
-        if i < len(pred_tabs) and pitch_correct(pred_tabs[i], gp, tuning):
-            n_correct += 1
-    return n_correct, n_total
-
-
-def tab_accuracy(pred_tabs, gt_tabs) -> tuple[int, int]:
-    """Return (n_correct, n_total) over zip(pred_tabs, gt_tabs).
-
-    Same denominator convention as pitch_accuracy.
-    """
-    n_total = len(gt_tabs)
-    n_correct = 0
-    for i, gt in enumerate(gt_tabs):
-        if i < len(pred_tabs) and tab_correct(pred_tabs[i], gt):
-            n_correct += 1
-    return n_correct, n_total
-
-
-# ---------------------------------------------------------------------------
-# Per-note error categorization
-# ---------------------------------------------------------------------------
-
-
-ERROR_TYPES = (
-    'correct',
-    'no_prediction',
-    'pitch_mismatch',
-    'same_pitch_adj_string',
-    'same_pitch_far_string',
-)
-
-
 def classify_error(
     true_s: int,
     true_f: int,
@@ -165,36 +124,15 @@ def classify_error(
     pred_f: int | None,
     pred_pitch: int | None,
 ) -> str:
-    """Categorize a (predicted vs true) tab into one of `ERROR_TYPES`.
-
-    Used by both the offline pipeline (`enrich_errors.py`) and the in-process
-    eval (`eval.py`). Behavior:
-
-      * pred is None              → 'no_prediction'
-      * (pred_s, pred_f) == truth → 'correct'
-      * pred_pitch != true_pitch  → 'pitch_mismatch'
-      * |Δstring| == 1            → 'same_pitch_adj_string'
-      * otherwise (same pitch, |Δstring| ≥ 2) → 'same_pitch_far_string'
-    """
     if pred_s is None or pred_f is None:
         return 'no_prediction'
     if (pred_s, pred_f) == (true_s, true_f):
         return 'correct'
     if pred_pitch is not None and true_pitch is not None and pred_pitch != true_pitch:
         return 'pitch_mismatch'
-    if abs(pred_s - true_s) == 1:
+    if pred_s is not None and abs(pred_s - true_s) == 1:
         return 'same_pitch_adj_string'
     return 'same_pitch_far_string'
-
-
-# ---------------------------------------------------------------------------
-# Per-piece drift signature
-#
-# Each per-note record (produced by enrich_errors / dump_eval_predictions / eval)
-# is expected to carry at minimum:
-#   piece_id, error_type_pp, delta_string_pp, delta_fret_pp,
-#   pitch, pred_raw_pitch, pred_pp_pitch, error_type_raw.
-# ---------------------------------------------------------------------------
 
 
 DRIFT_BUCKETS = ('perfect', 'consistent_alt', 'partial_alt', 'inconsistent')
@@ -208,20 +146,9 @@ def piece_drift_signature(
 ) -> dict:
     """Drift signature for a single piece's per-note records.
 
-    For all notes whose pp prediction differs from ground truth, take the
-    (Δstring, Δfret) shift. The piece's "modal drift" is the most common
-    non-zero shift among these error notes. error_consistency is the fraction
-    of error notes that share that modal shift.
-
-    Buckets:
-      'perfect'        — correct_rate ≥ perfect_threshold (default 95%).
-      'consistent_alt' — error_consistency ≥ consistent_threshold (default 80%).
-      'partial_alt'    — partial_threshold ≤ error_consistency < consistent_threshold.
-      'inconsistent'   — everything else (no dominant alt; genuinely confused).
-
     Returns dict with keys:
-      n, n_correct, correct_rate, modal_drift, n_modal_drift, n_errors,
-      error_consistency, bucket.
+      n (notes count), n_correct, correct_rate,
+      modal_drift, n_modal_drift, n_errors, error_consistency, bucket.
     """
     if not piece_records:
         return {
@@ -283,8 +210,6 @@ def aggregate_drift_buckets(
 ) -> dict:
     """Per-piece drift signatures + aggregate bucket counts + tab_equivalent.
 
-    `min_notes` skips tiny pieces where bucket assignments are too noisy.
-
     Returns dict with:
       n_pieces, n_notes (in qualifying pieces),
       bucket_counts: {bucket: int} — pieces per bucket.
@@ -297,13 +222,13 @@ def aggregate_drift_buckets(
     """
     by_piece: dict[str, list[dict]] = defaultdict(list)
     for r in records:
-        pid = r.get('piece_id')
-        if pid is None:
+        piece_id = r.get('piece_id')
+        if piece_id is None:
             continue
-        by_piece[pid].append(r)
+        by_piece[piece_id].append(r)
 
     piece_drifts = []
-    for pid, items in by_piece.items():
+    for piece_id, items in by_piece.items():
         if len(items) < min_notes:
             continue
         sig = piece_drift_signature(
@@ -312,7 +237,7 @@ def aggregate_drift_buckets(
             consistent_threshold=consistent_threshold,
             partial_threshold=partial_threshold,
         )
-        sig['piece_id'] = pid
+        sig['piece_id'] = piece_id
         piece_drifts.append(sig)
 
     bucket_counts = {b: 0 for b in DRIFT_BUCKETS}
@@ -327,14 +252,14 @@ def aggregate_drift_buckets(
     qualifying_pids = set(piece_modal)
     n_strict, n_alt, n_total = 0, 0, 0
     for r in records:
-        pid = r.get('piece_id')
-        if pid not in qualifying_pids:
+        piece_id = r.get('piece_id')
+        if piece_id not in qualifying_pids:
             continue
         n_total += 1
         if r.get('error_type_pp') == 'correct':
             n_strict += 1
             continue
-        md = piece_modal[pid]
+        md = piece_modal[piece_id]
         if md is None:
             continue
         ds, df = r.get('delta_string_pp'), r.get('delta_fret_pp')
@@ -364,22 +289,7 @@ def aggregate_drift_buckets(
 
 
 def compute_eval_summary(records: list[dict], min_notes_for_drift: int = 20) -> dict:
-    """Top-line summary: all key Stage 2 metrics in one dict.
-
-    Suitable for printing, JSON serialization, and downstream comparison
-    across runs. Produces:
-
-      n_notes, n_pieces,
-      tab_strict_acc, tab_equivalent_acc (overall),
-      pitch_raw_acc, pitch_pp_acc,
-      error_type_raw / error_type_pp (count breakdowns),
-      drift_buckets (piece counts), drift_buckets_notes (note counts),
-      recovered_by_alt (notes recovered by piece-modal drift),
-      consistent_alt_drift_histogram.
-
-    Per-source / per-genre slicing is left to callers (eval.py / analyze_errors.py)
-    since those slicing keys depend on which fields the caller has populated.
-    """
+    """Top-line summary: all key metrics in one dict"""
     n = len(records)
     if n == 0:
         return {'n_notes': 0}
