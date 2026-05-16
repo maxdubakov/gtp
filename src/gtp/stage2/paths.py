@@ -1,9 +1,4 @@
-"""Filesystem paths for Stage 2 data layout.
-
-Kept in its own module so that scripts (inspect_tokens, tokens_to_midi, analyze_tempo,
-build_aug_dataset) can import path constants without pulling in heavyweight
-runtime dependencies (torch, the Dataset class, the tokenizer) from data.py.
-"""
+"""Filesystem paths for Stage 2 data layout. Kept in its own module so that scripts can import path constants easily"""
 
 from gtp import REPO_ROOT
 
