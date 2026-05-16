@@ -36,14 +36,11 @@ import torch
 
 from gtp.device import auto_device
 from gtp.stage2.data import MIN_NOTES_PER_PIECE, filter_notes, load_jsonl_pieces
-from gtp.stage2.inference import (
-    load_checkpoint,
-    tokenize_for_inference,
-)
+from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.metrics import pitch_of
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.postprocess import correct_tabs
-from gtp.stage2.tokenizer import extract_tabs
+from gtp.stage2.tokenizer import extract_tabs, tokenize_piece_for_inference
 
 # Constants matching scripts/stage2/build_aug_dataset.py — kept here so we can
 # reproduce its train/val/test split deterministically without importing from
@@ -183,7 +180,7 @@ def prepare_piece(piece: dict, vocab, max_seq_len: int) -> dict:
         'piece_id': piece_id(piece),
         'piece': piece,
         'notes_sorted': notes_sorted,
-        'enc_subseqs': tokenize_for_inference(piece, vocab, max_seq_len=max_seq_len),
+        'enc_subseqs': tokenize_piece_for_inference(piece, vocab, max_seq_len=max_seq_len),
         'input_pitches': [int(n['pitch']) for n in notes_sorted],
     }
 

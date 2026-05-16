@@ -20,23 +20,21 @@ import librosa
 import numpy as np
 import pretty_midi
 import soundfile as sf
-import torch
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
 from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.stage1.inference import PianoTranscription
+from gtp.stage2.genres import GENRES, UNKNOWN
 from gtp.stage2.inference import (
     build_anchor_prefix,
     generate_tabs,
-    generate_with_alternatives,
     load_checkpoint,
-    tokenize_for_inference,
 )
-from gtp.stage2.genres import GENRES, UNKNOWN
 from gtp.stage2.metrics import difficulty_score
 from gtp.stage2.postprocess import correct_tabs
+from gtp.stage2.tokenizer import tokenize_piece_for_inference
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
 STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_baseline' / 'checkpoints' / 'step_0060000_final.pth'
@@ -119,18 +117,24 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
     model, vocab, iteration = load_checkpoint(str(checkpoint), device)
     print(f'  checkpoint iteration: {iteration}')
 
-    enc_subseqs = tokenize_for_inference(piece, vocab)
+    enc_subseqs = tokenize_piece_for_inference(piece, vocab)
 
     decoder_prefix = build_anchor_prefix(piece, vocab, anchor_tabs) if anchor_tabs else None
     if decoder_prefix is not None:
         print(f'  anchoring first {len(anchor_tabs)} notes ({len(decoder_prefix) - 1} prefix tokens)')
 
-    raw_tabs, dec_subseqs = generate_tabs(model, vocab, enc_subseqs, device, return_raw=True, decoder_prefix=decoder_prefix)
+    raw_tabs, dec_subseqs = generate_tabs(
+        model, vocab, enc_subseqs, device, return_raw=True, decoder_prefix=decoder_prefix
+    )
 
     sorted_notes = sorted(piece['notes'], key=lambda x: (x['start'], x['pitch']))
     input_pitches = [n['pitch'] for n in sorted_notes]
     corrected_tabs, sources = correct_tabs(
-        input_pitches, raw_tabs, piece['tuning'], return_sources=True, fallback=fallback,
+        input_pitches,
+        raw_tabs,
+        piece['tuning'],
+        return_sources=True,
+        fallback=fallback,
     )
 
     n_unchanged = sum(1 for s in sources if s == 'unchanged')
@@ -367,14 +371,18 @@ def main():
         help='Top-K alternatives at each generation step → .alternatives.txt',
     )
     ap.add_argument(
-        '--fallback', choices=['first_viable', 'nearest_viable'], default='first_viable',
+        '--fallback',
+        choices=['first_viable', 'nearest_viable'],
+        default='first_viable',
         help='Post-processing fallback strategy. first_viable = paper-faithful. '
-             'nearest_viable = deviation: Manhattan-nearest realization to model raw output.',
+        'nearest_viable = deviation: Manhattan-nearest realization to model raw output.',
     )
     ap.add_argument(
-        '--genre', choices=list(GENRES), default=UNKNOWN,
+        '--genre',
+        choices=list(GENRES),
+        default=UNKNOWN,
         help='Coarse genre conditioning hint for the model. Only used by genre-aware '
-             'checkpoints (the flag is silently ignored for legacy models). Default: unknown.',
+        'checkpoints (the flag is silently ignored for legacy models). Default: unknown.',
     )
     args = ap.parse_args()
 
@@ -428,30 +436,6 @@ def main():
     debug_path = out_dir / f'{stem}.debug.txt'
     write_debug_log(debug_path, vocab, note_events, piece, enc_subseqs, dec_subseqs, raw_tabs, tabs, sources)
     print(f'Wrote: {debug_path}')
-
-    # 4b) Optional: per-step alternatives (re-runs generation w/ scores; first sub-seq only)
-    if args.show_alternatives > 0:
-        alt_model, alt_vocab, _ = load_checkpoint(str(args.stage2_checkpoint), device)
-        alt_prefix = build_anchor_prefix(piece, alt_vocab, anchor_tabs) if anchor_tabs else None
-        steps = generate_with_alternatives(
-            alt_model,
-            alt_vocab,
-            enc_subseqs[0],
-            device,
-            top_k=args.show_alternatives,
-            decoder_prefix=alt_prefix,
-        )
-        alt_path = out_dir / f'{stem}.alternatives.txt'
-        lines = [f'top-{args.show_alternatives} alternatives at each generation step (sub-seq 0)']
-        lines.append('marker `*` = picked.  TIME_SHIFT/PAD/EOS rows shown for context.\n')
-        for s in steps:
-            lines.append(f'step {s["step"]:>3d}: chose {s["chosen_str"]}')
-            for tid, ts, p in s['topk']:
-                marker = ' *' if tid == s['chosen_id'] else '  '
-                lines.append(f'  {marker} {p:>6.3f}  {ts}')
-            lines.append('')
-        Path(alt_path).write_text('\n'.join(lines))
-        print(f'Wrote: {alt_path}')
 
     # 5) Output: ASCII tab + PDF
     ascii_tab = render_ascii_tab(tabs, notes=piece['notes'], columns_per_line=args.columns_per_line)

@@ -204,8 +204,8 @@ def notes_to_decoder_tokens(notes, tempo):
     return tokens
 
 
-def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
-    """Tokenize a full piece into encoder/decoder sequence pairs. Returns list of (encoder_ids, decoder_ids) tuples."""
+def _encoder_prep(data, vocab: 'Vocabulary', genre_override=None):
+    """Shared encoder-side prep for both training and inference tokenization"""
     notes = sorted(data['notes'], key=lambda n: (n['start'], n['pitch']))
     tempo = data.get('tempo', 120)
     tuning = data.get('tuning')
@@ -214,13 +214,10 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
         genre = genre_override if genre_override is not None else data.get('genre')
     else:
         genre = None
-    tempo_for_decoder = tempo if tempo is not None else 120
 
     enc_tokens = notes_to_encoder_tokens(notes, tempo, tuning, capo, genre=genre)
-    dec_tokens = notes_to_decoder_tokens(notes, tempo_for_decoder)
 
-    # Find note boundaries for aligned splitting
-    # Encoder: each NOTE_ON that isn't inside the tuning block starts a new note
+    # Each NOTE_ON outside the tuning block starts a new note.
     in_tuning = False
     note_boundaries_enc = []
     for i, t in enumerate(enc_tokens):
@@ -231,47 +228,48 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
         elif t.type == NOTE_ON and not in_tuning:
             note_boundaries_enc.append(i)
 
-    note_boundaries_dec = []
-    for i, t in enumerate(dec_tokens):
-        if t.type == TAB:
-            note_boundaries_dec.append(i)
+    # Prefix is everything before the first body NOTE_ON (i.e. before the body).
+    prefix_end = note_boundaries_enc[0] if note_boundaries_enc else len(enc_tokens)
+    prefix_ids = [vocab.encode(t) for t in enc_tokens[:prefix_end]]
 
+    return notes, tempo, enc_tokens, note_boundaries_enc, prefix_ids
+
+
+def _emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab):
+    """Build one encoder sub-sequence: prefix + body slice + EOS"""
+    ids = list(prefix_ids)
+    for t in enc_tokens[enc_start:enc_end]:
+        ids.append(vocab.encode(t))
+    ids.append(vocab.eos_id)
+    return ids
+
+
+def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
+    """Tokenize a full piece into aligned (encoder, decoder) sub-sequence pairs for training.
+
+    Returns list of (encoder_ids, decoder_ids) tuples. Sub-sequences are split at
+    note boundaries; each fits within max_seq_len on both encoder and decoder side.
+    """
+    notes, tempo, enc_tokens, note_boundaries_enc, prefix_ids = _encoder_prep(data, vocab, genre_override)
+    tempo_for_decoder = tempo if tempo is not None else 120
+    dec_tokens = notes_to_decoder_tokens(notes, tempo_for_decoder)
+
+    note_boundaries_dec = [i for i, t in enumerate(dec_tokens) if t.type == TAB]
     assert len(note_boundaries_enc) == len(note_boundaries_dec), (
         f'Note count mismatch: {len(note_boundaries_enc)} vs {len(note_boundaries_dec)} for piece with {len(notes)} notes'
     )
-
-    # The conditioning prefix (TEMPO + CAPO + TUNING) is repeated at the start of each sequence
-    prefix_end = 0
-    for i, t in enumerate(enc_tokens):
-        if t.type == TUNING_END:
-            prefix_end = i + 1
-            break
-        if t.type == NOTE_ON:
-            in_tuning_block = False
-            for j in range(i):
-                if enc_tokens[j].type == TUNING_START:
-                    in_tuning_block = True
-            if not in_tuning_block:
-                prefix_end = i
-                break
-
-    prefix_tokens = enc_tokens[:prefix_end]
-    prefix_ids = [vocab.encode(t) for t in prefix_tokens]
 
     sequences = []
     note_idx = 0
     n_notes = len(note_boundaries_enc)
 
-    # loop building multiple sequences out of a single track
     while note_idx < n_notes:
         enc_start = note_boundaries_enc[note_idx]
         dec_start = note_boundaries_dec[note_idx]
-
         enc_end = enc_start
         dec_end = dec_start
         notes_in_seq = 0
 
-        # loop building a single sequence
         while note_idx + notes_in_seq < n_notes:
             next_note = note_idx + notes_in_seq + 1
             if next_note < n_notes:
@@ -296,17 +294,42 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
             enc_end = note_boundaries_enc[note_idx + 1] if note_idx + 1 < n_notes else len(enc_tokens)
             dec_end = note_boundaries_dec[note_idx + 1] if note_idx + 1 < n_notes else len(dec_tokens)
 
-        enc_ids = list(prefix_ids)
-        for t in enc_tokens[enc_start:enc_end]:
-            enc_ids.append(vocab.encode(t))
-        enc_ids.append(vocab.eos_id)
-
-        dec_ids = []
-        for t in dec_tokens[dec_start:dec_end]:
-            dec_ids.append(vocab.encode(t))
-        dec_ids.append(vocab.eos_id)
-
+        enc_ids = _emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab)
+        dec_ids = [vocab.encode(t) for t in dec_tokens[dec_start:dec_end]] + [vocab.eos_id]
         sequences.append((enc_ids, dec_ids))
+        note_idx += notes_in_seq
+
+    return sequences
+
+
+def tokenize_piece_for_inference(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
+    """Tokenize a piece into encoder-only sub-sequences for inference"""
+    _, _, enc_tokens, note_boundaries_enc, prefix_ids = _encoder_prep(data, vocab, genre_override)
+
+    sequences = []
+    note_idx = 0
+    n_notes = len(note_boundaries_enc)
+
+    while note_idx < n_notes:
+        enc_start = note_boundaries_enc[note_idx]
+        enc_end = enc_start
+        notes_in_seq = 0
+
+        while note_idx + notes_in_seq < n_notes:
+            next_note = note_idx + notes_in_seq + 1
+            trial_enc_end = note_boundaries_enc[next_note] if next_note < n_notes else len(enc_tokens)
+
+            if (trial_enc_end - enc_start) + len(prefix_ids) + 2 > max_seq_len:
+                break
+
+            enc_end = trial_enc_end
+            notes_in_seq += 1
+
+        if notes_in_seq == 0:
+            notes_in_seq = 1
+            enc_end = note_boundaries_enc[note_idx + 1] if note_idx + 1 < n_notes else len(enc_tokens)
+
+        sequences.append(_emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab))
         note_idx += notes_in_seq
 
     return sequences
