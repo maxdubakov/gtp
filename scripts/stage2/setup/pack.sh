@@ -1,24 +1,13 @@
 #!/bin/bash
-# Single tarball for shipping to a fresh RunPod (or any remote training/eval host).
-# Output: gtp_stage2_runpod.tar.gz
-#
-# Contents:
-#   - Code: src/gtp/, scripts/stage2/, pyproject.toml, requirements.txt
-#   - Training data: data/stage2_aug/{train,val,test}.jsonl
-#   - Per-source processed JSONs (no MIDIs): data/{dadagp,guitartoday,guitarset,leduc}/processed/*.json
-#   - DadaGP metadata: data/DadaGP-v1.1/_DadaGP_all_metadata.json
-#
-# Covers training, autoregressive eval (eval.py + dump_eval_predictions.py),
-# and error analysis (enrich_errors.py + analyze_errors.py) on a single host.
-#
-# RunPod workflow:
-#   1. runpodctl send gtp_stage2_runpod.tar.gz   (then receive on pod)
-#   2. tar xzf gtp_stage2_runpod.tar.gz
-#   3. pip install -r requirements.txt
-#      (or: pip install torch==2.6.0 torchaudio==2.6.0 transformers numpy scipy librosa pretty_midi pyguitarpro jams soundfile mido pyfluidsynth)
-#   4. pip install -e .
-#   5. ulimit -n 65536
-#   6. python scripts/stage2/train.py --device cuda --num-workers 4 ...
+# Pack everything that's needed to train from scratch and evaluate.
+# On remote host (runpod):
+#   1. Send: runpodctl receive <uuid>
+#   2. Unpack: tar xzf gtp_stage2_runpod.tar.gz
+#   3. Install requirements:
+#       3.1. For Python 3.12: pip install -r requirements.txt
+#       3.2. For Python 3.10: pip install torch==2.6.0 torchaudio==2.6.0 transformers numpy scipy librosa pretty_midi pyguitarpro jams soundfile mido pyfluidsynth
+#   4. Install local gtp package: pip install -e .
+#   5. Increase ulimit: ulimit -n 65536
 
 set -euo pipefail
 
