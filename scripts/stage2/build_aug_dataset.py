@@ -24,13 +24,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from gtp.stage2.data import (
-    MAX_PLAYABLE_FRET,
     MIN_NOTES_PER_PIECE,
     filter_notes,
 )
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
 
+MAX_PLAYABLE_FRET = 22
 CAPO_RANGE = range(0, 8)
 MIDI_MIN = 0
 MIDI_MAX = 127
@@ -237,10 +237,7 @@ def print_split_stats(label, stats):
     print(f'    {"source":<12} {"pieces":>7} {"sub-seqs":>9} {"enc tokens":>13} {"dec tokens":>13}')
     tot_p = tot_s = tot_e = tot_d = 0
     for src, s in sorted(stats.items()):
-        print(
-            f'    {src:<12} {s["pieces"]:>7} {s["subseqs"]:>9} '
-            f'{s["enc_tokens"]:>13,} {s["dec_tokens"]:>13,}'
-        )
+        print(f'    {src:<12} {s["pieces"]:>7} {s["subseqs"]:>9} {s["enc_tokens"]:>13,} {s["dec_tokens"]:>13,}')
         tot_p += s['pieces']
         tot_s += s['subseqs']
         tot_e += s['enc_tokens']
@@ -300,13 +297,16 @@ def main():
     # if num_subseqs is missing.
     vocab = Vocabulary(include_genre=False)
     n_train = write_jsonl(
-        train_path, annotate_with_subseqs(expand_all(train_pieces), train_stats, vocab),
+        train_path,
+        annotate_with_subseqs(expand_all(train_pieces), train_stats, vocab),
     )
     n_val = write_jsonl(
-        val_path, annotate_with_subseqs(expand_all(val_pieces), val_stats, vocab),
+        val_path,
+        annotate_with_subseqs(expand_all(val_pieces), val_stats, vocab),
     )
     n_test = write_jsonl(
-        test_path, annotate_with_subseqs(rotate_capo(test_pieces), test_stats, vocab),
+        test_path,
+        annotate_with_subseqs(rotate_capo(test_pieces), test_stats, vocab),
     )
 
     print('\nWrote (post-capo-aug):')

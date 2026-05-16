@@ -1,29 +1,8 @@
-"""Run-config tracking for Stage 2 experiments.
-
-Each training run writes a config.json into its output directory, capturing:
-  * Model spec (params, layers, dims).
-  * Training hyperparameters (batch size, max steps, seed, optimizer).
-  * Data info (dataset directory, sub-sequence/token counts, source mix).
-  * Conditioning settings (genre/source tokens, dropout rates).
-  * Rebalancing settings (per-source/genre upsampling weights).
-  * Free-form metadata (experiment label, notes, git SHA, timestamp).
-
-Usage:
-
-    cfg = RunConfig(run_id='stage2_002_exp1_genre',
-                    experiment_label='Exp 1: GENRE conditioning + 15% dropout')
-    cfg.model.params = sum(p.numel() for p in model.parameters())
-    cfg.train.batch_size = args.batch_size
-    cfg.save(out_dir / 'config.json')
-
-    # Later, anywhere:
-    cfg = RunConfig.load(run_dir / 'config.json')
-"""
+"""Experiments config tracking for Stage 2."""
 
 import json
 import subprocess
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 from gtp import REPO_ROOT
@@ -90,13 +69,6 @@ class RebalancingConfig:
 
 @dataclass
 class DeviceConfig:
-    """Device snapshot at the start of a run.
-
-    Helps explain wall-clock differences across runs (e.g. A100 vs RTX 4090).
-    `type` is the resolved device string ('cpu' | 'mps' | 'cuda').
-    `cuda_name` and `cuda_memory_gib` are populated only when type=='cuda'.
-    """
-
     type: str = ''
     cuda_name: str = ''
     cuda_memory_gib: float = 0.0
@@ -117,14 +89,12 @@ class RunConfig:
     notes: str = ''
 
     def save(self, path) -> None:
-        """Write config.json. Creates parent directories if missing."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), indent=2, default=str))
 
     @classmethod
     def load(cls, path) -> 'RunConfig':
-        """Read config.json, reconstructing nested dataclasses."""
         data = json.loads(Path(path).read_text())
         return cls(
             run_id=data['run_id'],
@@ -141,21 +111,13 @@ class RunConfig:
         )
 
 
-# ---------------------------------------------------------------------------
-# Metadata helpers
-# ---------------------------------------------------------------------------
-
-
-def get_git_sha(short: bool = True) -> str:
+def get_git_sha() -> str:
     version_file = REPO_ROOT / 'VERSION'
     if version_file.exists():
         sha = version_file.read_text().strip()
         if sha:
             return sha
-    cmd = ['git', 'rev-parse']
-    if short:
-        cmd.append('--short')
-    cmd.append('HEAD')
+    cmd = ['git', 'rev-parse', '--short', 'HEAD']
     try:
         return subprocess.run(
             cmd,
@@ -168,40 +130,9 @@ def get_git_sha(short: bool = True) -> str:
         return 'unknown'
 
 
-def get_timestamp() -> str:
-    """ISO-8601 local time, second resolution."""
-    return datetime.now().isoformat(timespec='seconds')
-
-
 def find_run_config(checkpoint_path) -> Path:
-    """Locate the sibling config.json for a checkpoint. Expects layout:
-        <run-dir>/checkpoints/step_X.pth  →  <run-dir>/config.json
-
-    Raises FileNotFoundError if not found.
-    """
+    """Locate config.json for a checkpoint. Raises FileNotFoundError if not found."""
     candidate = Path(checkpoint_path).parent.parent / 'config.json'
     if not candidate.exists():
         raise FileNotFoundError(f'config.json not found at {candidate} (expected sibling of checkpoint dir)')
     return candidate
-
-
-def get_device_info(device: str) -> DeviceConfig:
-    """Snapshot device info for a run. `device` is 'cpu' | 'mps' | 'cuda'.
-
-    For 'cuda', queries torch for the GPU name and total memory (GiB,
-    1024^3, matching nvidia-smi). Silently leaves the optional fields
-    empty on any error so this is never a startup blocker.
-    """
-    info = DeviceConfig(type=device)
-    if device != 'cuda':
-        return info
-    try:
-        import torch  # local import — config.py stays usable without torch.
-
-        if torch.cuda.is_available():
-            info.cuda_name = torch.cuda.get_device_name(0)
-            props = torch.cuda.get_device_properties(0)
-            info.cuda_memory_gib = round(props.total_memory / (1024**3), 2)
-    except Exception:
-        pass
-    return info

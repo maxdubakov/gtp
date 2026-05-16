@@ -47,6 +47,7 @@ TIME_SHIFT_BINS = list(range(30, MAX_TIME_SHIFT + 1, 30))  # uniform ~31ms bins 
 TEMPO_MIN = 40
 TEMPO_MAX = 240
 TEMPO_STEP = 5
+MAX_FRET = 24
 
 
 def quantize_ticks(ticks):

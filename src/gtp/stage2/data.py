@@ -6,9 +6,6 @@ and capo augmentation; this module only handles:
   - reading pre-built JSONLs
   - online tuning augmentation in TabDataset.__getitem__ (when augment=True)
   - assembling padded torch tensors
-
-build_datasets() requires the JSONLs to exist — there is no fallback to processed/
-JSON loading at runtime. Run scripts/stage2/build_aug_dataset.py first.
 """
 
 import json
@@ -20,20 +17,18 @@ from torch.utils.data import Dataset
 
 from gtp.log import info
 from gtp.stage2.paths import AUG_DATA_DIR
-from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
+from gtp.stage2.tokenizer import MAX_FRET, Vocabulary, tokenize_piece
 
 MIN_NOTES_PER_PIECE = 10
-MAX_FRET = 24  # vocabulary / filter_notes upper bound (some 24-fret guitars exist in the data)
-MAX_PLAYABLE_FRET = 22  # most production guitars stop at 21-22; capo-aug playability check
 MIN_NOTE_DURATION = 0.001  # seconds
 
 # 6-string standard tunings used for online tuning augmentation in TabDataset.
-# Each entry is open-string pitches in our convention: string 1 = high E (index 0).
+# Each entry is open-string pitches in convention: string 1 = high E (index 0).
 STANDARD_TUNINGS = [
     [64, 59, 55, 50, 45, 40],  # standard E A D G B E
     [63, 58, 54, 49, 44, 39],  # half-step down
     [62, 57, 53, 48, 43, 38],  # full-step down (D)
-    [64, 59, 55, 50, 45, 38],  # drop-D
+    [64, 59, 55, 50, 45, 40],  # drop-D
 ]
 
 DEFAULT_REBALANCE_SOURCE = {
