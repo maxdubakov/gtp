@@ -1,15 +1,4 @@
-"""Round-trip a piece through encoder/decoder tokens and write MIDI files.
-
-Verifies tokenizer correctness by ear: enc.mid should sound nearly identical to orig.mid
-(modulo tick quantization). dec.mid uses a fixed sustain since decoder tokens carry no duration —
-expect it to sound rhythmically right but more 'plucky'.
-
-Usage:
-  python tokens_to_midi.py
-  python tokens_to_midi.py --source dadagp
-  python tokens_to_midi.py --file 00_BN3-154-E_comp.json
-  python tokens_to_midi.py --output-dir /tmp/midi_check
-"""
+"""Listen to tokenized piece to assess by ear that tokenizer works"""
 
 import argparse
 import json
