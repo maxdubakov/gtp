@@ -10,3 +10,6 @@ PROCESSED_DIRS = {
 }
 
 AUG_DATA_DIR = REPO_ROOT / 'data' / 'stage2_aug'
+
+SOUNDFONT_PATH = REPO_ROOT / 'models' / 'soundfonts' / 'ms_basic.sf3'
+# TODO: revisit common paths after scripts are refactored

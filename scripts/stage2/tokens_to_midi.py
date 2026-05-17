@@ -14,7 +14,6 @@ Usage:
 import argparse
 import json
 import os
-import random
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +22,7 @@ import soundfile as sf
 
 from gtp import REPO_ROOT
 from gtp.stage2.data import filter_notes
-from gtp.stage2.paths import PROCESSED_DIRS
+from gtp.stage2.paths import PROCESSED_DIRS, SOUNDFONT_PATH
 from gtp.stage2.tokenizer import (
     Vocabulary,
     decoder_tokens_to_notes,
@@ -33,8 +32,7 @@ from gtp.stage2.tokenizer import (
 )
 
 GUITAR_PROGRAM = 24
-DEFAULT_OUTPUT = REPO_ROOT / 'results' / 'tokenizer_roundtrip'
-SOUNDFONT_PATH = REPO_ROOT / 'models' / 'soundfonts' / 'ms_basic.sf3'
+DEFAULT_OUTPUT = REPO_ROOT / 'results' / 'tokenizer'
 WAV_SR = 22050
 
 
@@ -64,26 +62,15 @@ def synth_wav(midi, path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--source', default='guitarset', choices=list(PROCESSED_DIRS.keys()))
-    ap.add_argument('--file', default=None)
+    ap.add_argument('--source', required=True, choices=list(PROCESSED_DIRS.keys()))
+    ap.add_argument(
+        '--file',
+        required=True,
+    )
     ap.add_argument('--output-dir', default=str(DEFAULT_OUTPUT))
-    ap.add_argument('--default-dur', type=float, default=0.3, help='Decoder reconstruction note length (seconds)')
-    ap.add_argument('--no-wav', action='store_true', help='Skip WAV synthesis (MIDI only)')
-    ap.add_argument('--seed', type=int, default=None)
     args = ap.parse_args()
 
-    if args.seed is not None:
-        random.seed(args.seed)
-
-    src_dir = PROCESSED_DIRS[args.source]
-    if args.file:
-        path = src_dir / args.file
-    else:
-        candidates = sorted(src_dir.glob('*.json'))
-        if not candidates:
-            raise SystemExit(f'No JSON files in {src_dir}')
-        path = random.choice(candidates)
-
+    path = PROCESSED_DIRS[args.source] / args.file
     with open(path) as fh:
         data = json.load(fh)
 
@@ -91,9 +78,6 @@ def main():
     raw_notes = data.get('notes', [])
     notes, _ = filter_notes(raw_notes, tuning)
     tempo = data.get('tempo', 120)
-    # tempo may be None (unknown — e.g. Leduc files without backing-track MP3).
-    # Use 120 BPM as the rendering fallback so MIDI / WAV synthesis still works;
-    # the encoder prefix will still omit TEMPO when the value is None.
     tempo_fallback = tempo if tempo is not None else 120
     capo = data.get('capo', 0)
     notes = sorted(notes, key=lambda n: (n['start'], n['pitch']))
@@ -106,17 +90,17 @@ def main():
 
     enc_notes, enc_tempo, _enc_capo, _enc_tuning = encoder_tokens_to_notes(enc_ids, vocab)
     dec_notes = decoder_tokens_to_notes(dec_ids, vocab, tempo_fallback, tuning)
-    # decoder output has no `end` — synthesize a fixed sustain just for MIDI rendering
-    dec_notes_for_midi = [{**n, 'end': n['start'] + args.default_dur} for n in dec_notes]
+    # decoder output has no `end`, assume it's always 0.4s
+    dec_notes_for_midi = [{**n, 'end': n['start'] + 0.4} for n in dec_notes]
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = path.stem
 
     paths = {
-        'orig': out_dir / f'{stem}_orig.mid',
-        'enc': out_dir / f'{stem}_enc.mid',
-        'dec': out_dir / f'{stem}_dec.mid',
+        'orig': out_dir / f'{stem}_original.mid',
+        'enc': out_dir / f'{stem}_encoder.mid',
+        'dec': out_dir / f'{stem}_decoder.mid',
     }
 
     midis = {
@@ -125,24 +109,30 @@ def main():
         'dec': notes_to_midi(dec_notes_for_midi, paths['dec'], tempo_fallback),
     }
 
-    if not args.no_wav:
-        if not SOUNDFONT_PATH.exists():
-            print(f'Warning: soundfont missing at {SOUNDFONT_PATH}, skipping WAV')
-        else:
-            for tag, midi in midis.items():
-                wav_path = paths[tag].with_suffix('.wav')
-                synth_wav(midi, wav_path)
+    for tag, midi in midis.items():
+        wav_path = paths[tag].with_suffix('.wav')
+        synth_wav(midi, wav_path)
 
-    print(f'Piece: {args.source}/{path.name}')
-    print(f'  notes: {len(notes)}  tempo={tempo}  capo={capo}  tuning={tuning}')
-    print(f'  encoder: {len(enc_tokens)} tokens → {len(enc_notes)} notes back')
-    print(f'  decoder: {len(dec_tokens)} tokens → {len(dec_notes)} notes back  (default_dur={args.default_dur}s)')
+    fields = {
+        'Piece': f'{args.source}/{path.name}',
+        'Tempo': tempo,
+        'Capo': capo,
+        'Tuning': tuning,
+        'Notes': len(notes),
+        'Encoder': f'{len(enc_tokens)} tokens, got {len(enc_notes)} notes back',
+        'Decoder': f'{len(dec_tokens)} tokens, got {len(dec_notes)} notes back',
+    }
+    w = max(len(k) for k in fields)
+    for k, v in fields.items():
+        print(f'  {k:<{w}}  {v}')
+
     print()
     print(f'Output dir: {out_dir}')
+    tw = max(len(t) for t in paths)
     for tag, p in paths.items():
         wav_p = p.with_suffix('.wav')
-        line = f'  {tag}: {os.path.relpath(p, REPO_ROOT)}'
-        if not args.no_wav and wav_p.exists():
+        line = f'  {tag:<{tw}}  {os.path.relpath(p, REPO_ROOT)}'
+        if wav_p.exists():
             line += f'  +  {os.path.relpath(wav_p, REPO_ROOT)}'
         print(line)
 
