@@ -124,8 +124,7 @@ class TabDataset(Dataset):
                 max_seq_len=self.max_seq_len,
                 genre_override=genre_override,
             )
-            # TODO: seqs mismatch is possible (because we rely on num_subseqs..)
-            enc_ids, dec_ids = seqs[min(seq_id, len(seqs) - 1)]
+            enc_ids, dec_ids = seqs[seq_id]
         else:
             enc_ids, dec_ids = self.sequences[idx]
         return (
