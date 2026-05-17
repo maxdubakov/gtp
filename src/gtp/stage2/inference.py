@@ -3,14 +3,15 @@ import torch
 from gtp.stage2.config import RunConfig, find_run_config
 from gtp.stage2.model import build_model
 from gtp.stage2.tokenizer import (
+    MAX_SEQ_LEN,
     Vocabulary,
     extract_tabs,
     notes_to_decoder_tokens,
 )
 
 
-def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
-    """Load Stage 2 checkpoint. Returns (model, vocab, iteration)."""
+def load_checkpoint(path, device) -> tuple[object, Vocabulary, int, int]:
+    """Load Stage 2 checkpoint. Returns (model, vocab, iteration, max_seq_len)."""
     cfg = RunConfig.load(find_run_config(path))
     vocab = Vocabulary(include_genre=cfg.conditioning.genre)
 
@@ -21,7 +22,7 @@ def load_checkpoint(path, device) -> tuple[object, Vocabulary, int]:
     model = build_model(vocab).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
-    return model, vocab, ckpt.get('iteration')
+    return model, vocab, ckpt.get('iteration'), cfg.train.max_seq_len
 
 
 def build_anchor_prefix(piece, vocab: Vocabulary, anchor_tabs):
@@ -42,7 +43,7 @@ def build_anchor_prefix(piece, vocab: Vocabulary, anchor_tabs):
 
 
 def generate_tabs(
-    model, vocab: Vocabulary, enc_ids_list, device, max_seq_len=512, return_raw=False, decoder_prefix=None
+    model, vocab: Vocabulary, enc_ids_list, device, max_seq_len: int = MAX_SEQ_LEN, return_raw=False, decoder_prefix=None
 ):
     """Run autoregressive generation per sub-sequence; concatenate (string, fret) outputs"""
     all_tabs = []

@@ -21,6 +21,7 @@ from gtp.stage2.metrics import pitch_of
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
     MAX_FRET,
+    MAX_SEQ_LEN,
     MAX_TIME_SHIFT,
     TEMPO_MAX,
     TEMPO_MIN,
@@ -71,7 +72,7 @@ class TabDataset(Dataset):
     Implements online augmentation for tuning.
     """
 
-    def __init__(self, pieces, vocab: Vocabulary, max_seq_len=512, augment=False, genre_dropout: float = 0.0):
+    def __init__(self, pieces, vocab: Vocabulary, max_seq_len: int = MAX_SEQ_LEN, augment=False, genre_dropout: float = 0.0):
         self.max_seq_len = max_seq_len
         self.augment = augment
         self.genre_dropout = genre_dropout
@@ -221,7 +222,7 @@ def validate_aug_data_config(vocab: Vocabulary, max_seq_len: int):
 def build_datasets(
     vocab: Vocabulary,
     splits: tuple[str, ...] = ('train', 'val', 'test'),
-    max_seq_len: int = 512,
+    max_seq_len: int = MAX_SEQ_LEN,
     augment_train: bool = True,
     genre_dropout: float = 0.0,
 ) -> tuple[dict[str, 'TabDataset'], dict]:

@@ -305,7 +305,6 @@ def main():
     )
     ap.add_argument('--output-dir', required=True)
     ap.add_argument('--device', default=None)
-    ap.add_argument('--max-seq-len', type=int, default=512)
     ap.add_argument(
         '--pieces-per-source',
         type=int,
@@ -357,8 +356,8 @@ def main():
     print(f'Device: {device}')
 
     print(f'Loading checkpoint: {args.checkpoint}')
-    model, vocab, step = load_checkpoint(args.checkpoint, device)
-    print(f'  iteration: {step}')
+    model, vocab, step, max_seq_len = load_checkpoint(args.checkpoint, device)
+    print(f'  iteration: {step}  max_seq_len: {max_seq_len}')
 
     pieces_path = out_dir / 'pieces.jsonl'
     preds_path = out_dir / 'predictions.jsonl'
@@ -421,7 +420,7 @@ def main():
 
                 # Phase 1: tokenize all pieces in chunk; collect sub-sequences
                 #          along with which (chunk_idx, subseq_idx) they came from.
-                preps = [prepare_piece(p, vocab, args.max_seq_len) for p in chunk]
+                preps = [prepare_piece(p, vocab, max_seq_len) for p in chunk]
                 flat_subseqs: list[list[int]] = []
                 ownership: list[tuple[int, int]] = []  # (piece_idx_in_chunk, subseq_idx_in_piece)
                 for ci, prep in enumerate(preps):
@@ -436,7 +435,7 @@ def main():
                         vocab,
                         flat_subseqs,
                         device,
-                        max_seq_len=args.max_seq_len,
+                        max_seq_len=max_seq_len,
                         batch_size=args.batch_size,
                     )
                 else:

@@ -114,17 +114,17 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
     (paper-faithful) or 'nearest_viable' (deviation; Manhattan-nearest to raw).
     """
     print('Stage 2: notes → tabs...')
-    model, vocab, iteration = load_checkpoint(str(checkpoint), device)
-    print(f'  checkpoint iteration: {iteration}')
+    model, vocab, iteration, max_seq_len = load_checkpoint(str(checkpoint), device)
+    print(f'  checkpoint iteration: {iteration}  max_seq_len: {max_seq_len}')
 
-    enc_subseqs = tokenize_piece_for_inference(piece, vocab)
+    enc_subseqs = tokenize_piece_for_inference(piece, vocab, max_seq_len=max_seq_len)
 
     decoder_prefix = build_anchor_prefix(piece, vocab, anchor_tabs) if anchor_tabs else None
     if decoder_prefix is not None:
         print(f'  anchoring first {len(anchor_tabs)} notes ({len(decoder_prefix) - 1} prefix tokens)')
 
     raw_tabs, dec_subseqs = generate_tabs(
-        model, vocab, enc_subseqs, device, return_raw=True, decoder_prefix=decoder_prefix
+        model, vocab, enc_subseqs, device, max_seq_len=max_seq_len, return_raw=True, decoder_prefix=decoder_prefix
     )
 
     sorted_notes = sorted(piece['notes'], key=lambda x: (x['start'], x['pitch']))

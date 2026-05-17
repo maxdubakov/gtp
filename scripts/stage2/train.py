@@ -31,6 +31,7 @@ from gtp.stage2.metrics import pitch_of
 from gtp.stage2.model import build_model
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
+    MAX_SEQ_LEN,
     MAX_TIME_SHIFT,
     TAB,
     TIME_SHIFT_BINS,
@@ -301,6 +302,7 @@ def main():
         train=TrainConfig(
             batch_size=args.batch_size,
             max_steps=args.max_steps,
+            max_seq_len=MAX_SEQ_LEN,
             checkpoint_steps=args.checkpoint_steps,
             num_workers=args.num_workers,
             seed=args.seed,

@@ -32,6 +32,7 @@ TEMPO_MIN = 40
 TEMPO_MAX = 240
 TEMPO_STEP = 5
 MAX_FRET = 24
+MAX_SEQ_LEN = 512
 
 
 def quantize_ticks(ticks):
@@ -244,7 +245,7 @@ def _emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab):
     return ids
 
 
-def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
+def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len: int = MAX_SEQ_LEN, genre_override=None):
     """Tokenize a full piece into aligned (encoder, decoder) sub-sequence pairs for training.
 
     Returns list of (encoder_ids, decoder_ids) tuples. Sub-sequences are split at
@@ -302,7 +303,7 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=No
     return sequences
 
 
-def tokenize_piece_for_inference(data, vocab: 'Vocabulary', max_seq_len=512, genre_override=None):
+def tokenize_piece_for_inference(data, vocab: 'Vocabulary', max_seq_len: int = MAX_SEQ_LEN, genre_override=None):
     """Tokenize a piece into encoder-only sub-sequences for inference"""
     _, _, enc_tokens, note_boundaries_enc, prefix_ids = _encoder_prep(data, vocab, genre_override)
 

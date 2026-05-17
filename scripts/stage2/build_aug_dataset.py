@@ -16,6 +16,7 @@ from gtp.stage2.genres import GENRES
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
 from gtp.stage2.tokenizer import (
     MAX_FRET,
+    MAX_SEQ_LEN,
     MAX_TIME_SHIFT,
     TEMPO_MAX,
     TEMPO_MIN,
@@ -24,8 +25,6 @@ from gtp.stage2.tokenizer import (
     Vocabulary,
     tokenize_piece,
 )
-
-DEFAULT_MAX_SEQ_LEN = 512
 
 MAX_PLAYABLE_FRET = 22
 CAPO_RANGE = range(0, 8)
@@ -181,7 +180,7 @@ def rotate_capo(pieces):
             break  # one variant per piece
 
 
-def annotate_with_subseqs(pieces, stats, vocab: Vocabulary, max_seq_len=512):
+def annotate_with_subseqs(pieces, stats, vocab: Vocabulary, max_seq_len: int = MAX_SEQ_LEN):
     """Tokenize each piece once, stash sub-sequence count, and accumulate stats"""
     for piece in pieces:
         seqs = tokenize_piece(piece, vocab, max_seq_len=max_seq_len)
@@ -285,7 +284,7 @@ def main():
 
     data_config = {
         'include_genre': args.genre_conditioning,
-        'max_seq_len': DEFAULT_MAX_SEQ_LEN,
+        'max_seq_len': MAX_SEQ_LEN,
         'genres': list(GENRES),
         'tempo_min': TEMPO_MIN,
         'tempo_max': TEMPO_MAX,

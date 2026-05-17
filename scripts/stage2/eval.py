@@ -277,10 +277,11 @@ def main():
     info(f'Evaluating {len(ckpts)} checkpoint(s)')
     cfg = RunConfig.load(find_run_config(ckpts[0][1]))
     vocab = Vocabulary(include_genre=cfg.conditioning.genre)
-    info(f'Vocab: {len(vocab)} tokens (include_genre={cfg.conditioning.genre})')
+    max_seq_len = cfg.train.max_seq_len
+    info(f'Vocab: {len(vocab)} tokens (include_genre={cfg.conditioning.genre})  max_seq_len: {max_seq_len}')
 
     # Build datasets
-    datasets, _stats = build_datasets(vocab, splits=('val', 'test'))
+    datasets, _stats = build_datasets(vocab, splits=('val', 'test'), max_seq_len=max_seq_len)
     val_ds, test_ds = datasets['val'], datasets['test']
     info(f'Val sequences: {len(val_ds)}, test sequences: {len(test_ds)}')
 
@@ -304,7 +305,7 @@ def main():
     for label, path in ckpts:
         info('\n' + '-' * 20 + f' {label} ' + '-' * 20)
         t0 = time.time()
-        model, _vocab_ckpt, step = load_checkpoint(path, device)
+        model, _vocab_ckpt, step, _max_seq_len = load_checkpoint(path, device)
 
         record = {'checkpoint': str(path), 'label': label, 'step': step, 'splits': {}, 'fallback': args.fallback}
 
