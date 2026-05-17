@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +23,7 @@ class ModelConfig:
 class TrainConfig:
     batch_size: int = 16
     max_steps: int = 30000
+    max_seq_len: int = 512  # old default
     checkpoint_steps: int = 1000
     num_workers: int = 2
     seed: int = 42
@@ -97,17 +98,23 @@ class RunConfig:
     @classmethod
     def load(cls, path) -> 'RunConfig':
         data = json.loads(Path(path).read_text())
+
+        def _filter(cls_, d):
+            """Drop unknown keys so renamed/removed fields in older configs don't crash."""
+            known = {f.name for f in fields(cls_)}
+            return {k: v for k, v in d.items() if k in known}
+
         return cls(
             run_id=data['run_id'],
             experiment_label=data.get('experiment_label', ''),
             timestamp=data.get('timestamp', ''),
             git_sha=data.get('git_sha', ''),
-            model=ModelConfig(**data.get('model', {})),
-            train=TrainConfig(**data.get('train', {})),
-            data=DataConfig(**data.get('data', {})),
-            conditioning=ConditioningConfig(**data.get('conditioning', {})),
-            rebalancing=RebalancingConfig(**data.get('rebalancing', {})),
-            device=DeviceConfig(**data.get('device', {})),
+            model=ModelConfig(**_filter(ModelConfig, data.get('model', {}))),
+            train=TrainConfig(**_filter(TrainConfig, data.get('train', {}))),
+            data=DataConfig(**_filter(DataConfig, data.get('data', {}))),
+            conditioning=ConditioningConfig(**_filter(ConditioningConfig, data.get('conditioning', {}))),
+            rebalancing=RebalancingConfig(**_filter(RebalancingConfig, data.get('rebalancing', {}))),
+            device=DeviceConfig(**_filter(DeviceConfig, data.get('device', {}))),
             notes=data.get('notes', ''),
         )
 
