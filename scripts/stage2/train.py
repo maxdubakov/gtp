@@ -5,7 +5,6 @@ import json
 import os
 import time
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +24,7 @@ from gtp.stage2.config import (
     RunConfig,
     TrainConfig,
     get_git_sha,
+    get_timestamp,
 )
 from gtp.stage2.data import DEFAULT_REBALANCE_GENRE, DEFAULT_REBALANCE_SOURCE, build_datasets, compute_sampling_weights
 from gtp.stage2.metrics import pitch_of
@@ -287,7 +287,7 @@ def main():
     run_config = RunConfig(
         run_id=Path(args.output_dir).name,
         experiment_label=args.experiment_label,
-        timestamp=datetime.now().isoformat(timespec='seconds'),
+        timestamp=get_timestamp(),
         git_sha=get_git_sha(),
         notes=args.notes,
         model=ModelConfig(

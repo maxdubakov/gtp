@@ -7,12 +7,25 @@ import random
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from gtp.stage2.config import get_git_sha, get_timestamp
 from gtp.stage2.data import (
     MIN_NOTES_PER_PIECE,
     filter_notes,
 )
+from gtp.stage2.genres import GENRES
 from gtp.stage2.paths import AUG_DATA_DIR, PROCESSED_DIRS
-from gtp.stage2.tokenizer import Vocabulary, tokenize_piece
+from gtp.stage2.tokenizer import (
+    MAX_FRET,
+    MAX_TIME_SHIFT,
+    TEMPO_MAX,
+    TEMPO_MIN,
+    TEMPO_STEP,
+    TIME_SHIFT_BINS,
+    Vocabulary,
+    tokenize_piece,
+)
+
+DEFAULT_MAX_SEQ_LEN = 512
 
 MAX_PLAYABLE_FRET = 22
 CAPO_RANGE = range(0, 8)
@@ -269,6 +282,27 @@ def main():
     print_split_stats('train', train_stats)
     print_split_stats('val', val_stats)
     print_split_stats('test', test_stats)
+
+    data_config = {
+        'include_genre': args.genre_conditioning,
+        'max_seq_len': DEFAULT_MAX_SEQ_LEN,
+        'genres': list(GENRES),
+        'tempo_min': TEMPO_MIN,
+        'tempo_max': TEMPO_MAX,
+        'tempo_step': TEMPO_STEP,
+        'max_fret': MAX_FRET,
+        'time_shift_step': TIME_SHIFT_BINS[0],
+        'max_time_shift': MAX_TIME_SHIFT,
+        'capo_range': [CAPO_RANGE.start, CAPO_RANGE.stop],
+        'split_seed': args.seed,
+        'train_ratio': args.train_ratio,
+        'val_ratio': args.val_ratio,
+        'git_sha': get_git_sha(),
+        'timestamp': get_timestamp(),
+    }
+    config_path = out_dir / 'data_config.json'
+    config_path.write_text(json.dumps(data_config, indent=2))
+    print(f'\nWrote {config_path}')
 
 
 if __name__ == '__main__':

@@ -16,9 +16,19 @@ import torch
 from torch.utils.data import Dataset
 
 from gtp.log import info
+from gtp.stage2.genres import GENRES
 from gtp.stage2.metrics import pitch_of
 from gtp.stage2.paths import AUG_DATA_DIR
-from gtp.stage2.tokenizer import MAX_FRET, Vocabulary, tokenize_piece
+from gtp.stage2.tokenizer import (
+    MAX_FRET,
+    MAX_TIME_SHIFT,
+    TEMPO_MAX,
+    TEMPO_MIN,
+    TEMPO_STEP,
+    TIME_SHIFT_BINS,
+    Vocabulary,
+    tokenize_piece,
+)
 
 MIN_NOTES_PER_PIECE = 10
 MIN_NOTE_DURATION = 0.001  # seconds
@@ -180,6 +190,34 @@ def load_jsonl_pieces(path):
     return pieces
 
 
+def validate_aug_data_config(vocab: Vocabulary, max_seq_len: int):
+    """Check that script which generated augmented data has the same config"""
+    config_path = AUG_DATA_DIR / 'data_config.json'
+    if not config_path.exists():
+        raise FileNotFoundError(f'No configuration file found at {config_path}')
+    cfg = json.loads(config_path.read_text())
+
+    expected = {
+        'include_genre': vocab.include_genre,
+        'max_seq_len': max_seq_len,
+        'genres': list(GENRES),
+        'tempo_min': TEMPO_MIN,
+        'tempo_max': TEMPO_MAX,
+        'tempo_step': TEMPO_STEP,
+        'max_fret': MAX_FRET,
+        'time_shift_step': TIME_SHIFT_BINS[0],
+        'max_time_shift': MAX_TIME_SHIFT,
+    }
+    mismatches = []
+    for key, runtime_val in expected.items():
+        build_val = cfg.get(key)
+        if build_val != runtime_val:
+            mismatches.append(f'{key}: build={build_val!r}, runtime={runtime_val!r}')
+
+    if mismatches:
+        raise RuntimeError('Augmented dataset built differently. Mismatches:' + '\n  '.join(mismatches))
+
+
 def build_datasets(
     vocab: Vocabulary,
     splits: tuple[str, ...] = ('train', 'val', 'test'),
@@ -193,6 +231,7 @@ def build_datasets(
     if bad:
         raise ValueError(f'Unknown split(s): {sorted(bad)}. Allowed: {sorted(valid)}')
 
+    validate_aug_data_config(vocab, max_seq_len)
     info(f'Loading augmented JSONLs from {AUG_DATA_DIR}: {list(splits)}')
     pieces: dict[str, list[dict]] = {}
     for split in splits:

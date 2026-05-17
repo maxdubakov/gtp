@@ -3,6 +3,7 @@
 import json
 import subprocess
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from gtp import REPO_ROOT
@@ -136,3 +137,7 @@ def find_run_config(checkpoint_path) -> Path:
     if not candidate.exists():
         raise FileNotFoundError(f'config.json not found at {candidate} (expected sibling of checkpoint dir)')
     return candidate
+
+
+def get_timestamp() -> str:
+    return datetime.now().isoformat(timespec='seconds')
