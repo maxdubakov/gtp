@@ -15,11 +15,12 @@ from torch.utils.data import DataLoader
 
 from gtp import REPO_ROOT
 from gtp.device import auto_device
-from gtp.stage1.data import build_dataset
 from gtp.log import set_verbose, trace
+from gtp.stage1.data import build_dataset
 from gtp.stage1.model.kong import Regress_onset_offset_frame_velocity_CRNN
 from gtp.stage1.model.losses import regress_onset_offset_frame_velocity_bce
 from gtp.stage1.model.utils import move_data_to_device
+from gtp.utils import format_eta
 
 DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'pretrained', 'CRNN_note_F1=0.9677_pedal_F1=0.9186.pth')
 GAPS_DIR = os.path.join(REPO_ROOT, 'data', 'gaps_hf')
@@ -74,14 +75,6 @@ def save_checkpoint(path, step, model, optimizer, args):
         },
         path,
     )
-
-
-def format_eta(seconds):
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    if h > 0:
-        return f'~{h}h{m:02d}m left'
-    return f'~{m}m left'
 
 
 def run_eval(model, val_loader, device, max_batches=20):
@@ -236,7 +229,7 @@ def main():
             avg_step_time = np.mean(step_times[-log_interval:])
             current_lr = optimizer.param_groups[0]['lr']
             steps_left = args.max_steps - step
-            eta = format_eta(avg_step_time * steps_left)
+            eta = format_eta(avg_step_time * steps_left, suffix=' left')
             print(
                 f'[step {step}/{args.max_steps}] '
                 f'loss={avg_loss:.4f} '

@@ -9,6 +9,7 @@ import numpy as np
 from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage2.metrics import pitch_of
+from gtp.utils import pct
 
 DATASETS = ['dadagp', 'guitarset', 'guitartoday', 'leduc']
 DATA_ROOT = REPO_ROOT / 'data'
@@ -16,10 +17,6 @@ DATA_ROOT = REPO_ROOT / 'data'
 STANDARD_TUNING = [64, 59, 55, 50, 45, 40]
 DUR_BINS = np.logspace(-2, 2, 80)
 ONSET_GAP_BINS = np.logspace(-3, 2, 80)
-
-
-def pct(num, den):
-    return 100.0 * num / den if den else 0.0
 
 
 def json_files(dataset: str) -> list[Path]:

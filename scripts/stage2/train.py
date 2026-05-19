@@ -39,6 +39,7 @@ from gtp.stage2.tokenizer import (
     parse_token_str,
     parse_tuning_from_enc,
 )
+from gtp.utils import format_eta
 
 IGNORE_INDEX = -100
 
@@ -144,14 +145,6 @@ def run_eval(model, val_loader, vocab, device):
     overall_tab = sum_tab_c / sum_tab_n if sum_tab_n else 0.0
     overall_pitch = sum_pitch_c / sum_pitch_n if sum_pitch_n else 0.0
     return overall_loss, overall_tab, overall_pitch, per_source
-
-
-def format_eta(seconds):
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    if h > 0:
-        return f'~{h}h{m:02d}m'
-    return f'~{m}m'
 
 
 def save_checkpoint(path, step, model, optimizer, vocab, args):
