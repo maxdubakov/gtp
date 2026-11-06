@@ -41,6 +41,8 @@ def current_defaults():
 def config_label(run_cfg, defaults, pooled=POOLED_KEYS):
     """The run's differences from the *current* defaults, so labels stay right when defaults change."""
     diff = [f'{k}={v}' for k, v in run_cfg.items() if defaults.get(k) != v and not k.startswith(pooled + NAMING_KEYS)]
+    if 'test_player' not in pooled and 'test_player' in run_cfg:
+        diff = [d for d in diff if not d.startswith('test_player=')] + [f'test_player={run_cfg["test_player"]}']
     return ' '.join(sorted(diff)) or 'defaults'
 
 
