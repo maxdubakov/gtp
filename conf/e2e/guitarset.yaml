@@ -1,0 +1,29 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: e2e_guitarset
+test_player: 5
+stage1_checkpoint: models/finetuned/step_0070000_final.pth
+stage2_checkpoint: runs/stage2_baseline/checkpoints/step_0060000_final.pth
+strings_sweep: results/strings/sweeps/lopo
+inputs: [stage1, gt]
+lam: 1.0
+onset_tolerance: 0.05
+prob_floor: 1.0e-4
+batch: 64
+wandb:
+  project: gtp
+  entity: null
+  mode: online
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/e2e/runs/${now:%Y-%m-%d_%H-%M-%S}_${name}
+  sweep:
+    dir: ${repo_root:}/results/e2e/sweeps/${name}/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        exclude_keys: [name, wandb.mode, wandb.project, wandb.entity]

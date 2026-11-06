@@ -18,41 +18,24 @@ Usage:
 import glob
 import json
 import re
-from dataclasses import dataclass
 
 import hydra
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
 
 from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage2.data import load_jsonl_pieces
+from gtp.stage2.fusion import decode_structured, log_ratio, padded, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.postprocess import correct_tabs
-from gtp.stage2.tokenizer import MAX_FRET, TAB, Token, extract_input_pitches, extract_tabs, tokenize_piece
+from gtp.stage2.tokenizer import extract_input_pitches, extract_tabs
 from gtp.track import start_run
 
 N_STRINGS = 6
-
-
-@dataclass
-class Slot:
-    note: int
-    token_ids: np.ndarray
-    strings: np.ndarray
-    log_ratio: np.ndarray | None  # (n_seeds, n_valid): log p_audio - log p_prior
-
-
-@dataclass
-class Row:
-    enc: list[int]
-    dec: list[int]
-    tuning: list[int]
-    slots: dict[int, Slot]  # decoder position -> slot
 
 
 def load_distributions(sweep_dir, calibrated):
@@ -70,102 +53,38 @@ def load_distributions(sweep_dir, calibrated):
     return dists
 
 
-def floored(p, floor):
-    p = np.maximum(p, floor)
-    return p / p.sum(axis=-1, keepdims=True)
-
-
 def prepare(cfg, vocab, max_seq_len, dists):
-    """Tokenize GuitarSet pieces of the requested splits; one Slot per note, one table row per note."""
+    """Decoder rows for GuitarSet pieces of the requested splits, plus one table row per note."""
     table, rows = [], []
     for split in cfg.splits:
         for piece in load_jsonl_pieces(AUG_DATA_DIR / f'{split}.jsonl'):
             if piece['source'] != 'guitarset':
                 continue
             track, tuning, capo = piece['filename'].removesuffix('.json'), piece['tuning'], piece['capo']
-            notes = sorted(piece['notes'], key=lambda n: (n['start'], n['pitch']))
-            k = 0
-            for enc, dec in tokenize_piece(piece, vocab, max_seq_len=max_seq_len):
-                slots = {}
-                for t, tid in enumerate(dec):
-                    if not vocab.decode(tid).startswith(TAB):
-                        continue
-                    n = notes[k]
-                    k += 1
-                    strings = np.array(
-                        [s for s in range(1, len(tuning) + 1) if 0 <= n['pitch'] - tuning[s - 1] <= MAX_FRET]
-                    )
-                    token_ids = np.array(
-                        [vocab.encode(Token(TAB, f'{s},{n["pitch"] - tuning[s - 1]}')) for s in strings]
-                    )
-                    assert tid in token_ids and n['string'] in strings, (track, n)
-                    d = dists.get((track, round(n['start'], 4), n['pitch'] - capo))
-                    record = {
-                        'split': split,
-                        'piece': f'{track}:capo{capo}',
-                        'track': track,
-                        'pitch': n['pitch'],
-                        'true_string': n['string'],
-                        'n_cand': len(strings),
-                        'has_audio': d is not None and len(tuning) == N_STRINGS,
-                    }
-                    log_ratio = None
-                    if record['has_audio']:
-                        audio = floored(np.stack([d['audio'][s] for s in cfg.seeds])[:, strings - 1], cfg.prob_floor)
-                        prior = floored(d['prior'][strings - 1], cfg.prob_floor)
-                        log_ratio = np.log(audio) - np.log(prior)[None]
-                        for i, s in enumerate(cfg.seeds):
-                            record[f'audio_s{s}'] = int(strings[audio[i].argmax()])
-                    slots[t] = Slot(len(table), token_ids, strings, log_ratio)
-                    table.append(record)
-                rows.append(Row(enc, dec, tuning, slots))
-            assert k == len(notes), (track, k, len(notes))
+            note_ids, ratios = [], []
+            for n in sorted_notes(piece):
+                strings, _ = valid_tabs(n['pitch'], tuning, vocab)
+                d = dists.get((track, round(n['start'], 4), n['pitch'] - capo))
+                record = {
+                    'split': split,
+                    'piece': f'{track}:capo{capo}',
+                    'track': track,
+                    'pitch': n['pitch'],
+                    'true_string': n['string'],
+                    'n_cand': len(strings),
+                    'has_audio': d is not None and len(tuning) == N_STRINGS,
+                }
+                ratio = None
+                if record['has_audio']:
+                    audio = np.stack([d['audio'][s] for s in cfg.seeds])
+                    ratio = log_ratio(audio, d['prior'], strings, cfg.prob_floor)
+                    for i, s in enumerate(cfg.seeds):
+                        record[f'audio_s{s}'] = int(strings[audio[i, strings - 1].argmax()])
+                note_ids.append(len(table))
+                ratios.append(ratio)
+                table.append(record)
+            rows.extend(piece_rows(piece, vocab, max_seq_len, note_ids, ratios))
     return rows, pd.DataFrame(table)
-
-
-def padded(seqs, pad, device):
-    width = max(len(s) for s in seqs)
-    ids = torch.tensor([s + [pad] * (width - len(s)) for s in seqs], device=device)
-    return ids, (ids != pad).long()
-
-
-@torch.no_grad()
-def decode_structured(model, rows, device, batch, lam=0.0, seed_idx=0):
-    """Greedy decode along each row's reference skeleton; returns {note: chosen string}."""
-    pad = model.config.pad_token_id
-    picks = {}
-    for i in range(0, len(rows), batch):
-        chunk = rows[i : i + batch]
-        input_ids, mask = padded([r.enc for r in chunk], pad, device)
-        encoder_outputs = model.get_encoder()(input_ids=input_ids, attention_mask=mask)
-        cur = torch.full((len(chunk), 1), pad, device=device)
-        past = None
-        for t in range(max(len(r.dec) for r in chunk)):
-            out = model(
-                encoder_outputs=encoder_outputs,
-                attention_mask=mask,
-                decoder_input_ids=cur,
-                past_key_values=past,
-                use_cache=True,
-            )
-            past = out.past_key_values
-            logp = F.log_softmax(out.logits[:, -1].float(), dim=-1).cpu().numpy()
-            nxt = []
-            for b, r in enumerate(chunk):
-                slot = r.slots.get(t)
-                if t >= len(r.dec):
-                    nxt.append(pad)
-                elif slot is None:
-                    nxt.append(r.dec[t])
-                else:
-                    score = logp[b, slot.token_ids]
-                    if lam and slot.log_ratio is not None:
-                        score = score + lam * slot.log_ratio[seed_idx]
-                    j = int(score.argmax())
-                    picks[slot.note] = int(slot.strings[j])
-                    nxt.append(int(slot.token_ids[j]))
-            cur = torch.tensor(nxt, device=device)[:, None]
-    return picks
 
 
 @torch.no_grad()

@@ -16,6 +16,8 @@ import librosa
 import numpy as np
 import soundfile as sf
 import torch
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
 from torch import nn
 
 from gtp import REPO_ROOT
@@ -61,11 +63,16 @@ class Notes:
 
     @property
     def candidates(self):
-        fret = self.pitch[:, None] - OPEN_STRINGS[None, :]
-        return (fret >= 0) & (fret <= MAX_FRET)
+        return candidates(self.pitch)
 
     def split_mask(self, players):
         return np.isin(self.player, players)
+
+
+def candidates(pitch):
+    """(N,) MIDI pitches -> (N, 6) bool, True where the string can play the pitch."""
+    fret = np.asarray(pitch)[:, None] - OPEN_STRINGS[None, :]
+    return (fret >= 0) & (fret <= MAX_FRET)
 
 
 def load_notes():
@@ -125,6 +132,25 @@ def split_players(test_player):
     return {'train': tuple(p for p in PLAYERS if p not in (test, val)), 'val': (val,), 'test': (test,)}
 
 
+def post_frames(window_ms):
+    frames = round(window_ms / 1000 * SAMPLE_RATE / HOP)
+    if not 1 <= frames <= MAX_POST_FRAMES:
+        raise ValueError(f'window_ms={window_ms} gives {frames} frames, cache holds 1..{MAX_POST_FRAMES}')
+    return frames
+
+
+def freq_stats(x, idx, chunk=4096):
+    total, total_sq, n = 0.0, 0.0, 0
+    for i in range(0, len(idx), chunk):
+        b = torch.from_numpy(x[idx[i : i + chunk]]).float()
+        total += b.sum(dim=(0, 3))
+        total_sq += (b**2).sum(dim=(0, 3))
+        n += b.shape[0] * b.shape[3]
+    mean = total / n
+    std = (total_sq / n - mean**2).clamp_min(1e-6).sqrt()
+    return mean[None, :, :, None], std[None, :, :, None]
+
+
 def cache_path(source, feature):
     return CACHE_DIR / f'{source}_{feature}.npy'
 
@@ -178,12 +204,12 @@ class StringNet(nn.Module):
         return self.head(h).masked_fill(~candidates, float('-inf'))
 
 
-def pitch_prior(notes, train_mask, alpha=1.0):
-    """P(string | pitch) from train counts, add-alpha smoothed over each note's valid strings."""
+def pitch_prior(notes, train_mask, pitches=None, alpha=1.0):
+    """P(string | pitch) from train counts, add-alpha smoothed over valid strings, for `pitches` (default: every note)."""
     counts = np.zeros((128, N_STRINGS))
     np.add.at(counts, (notes.pitch[train_mask], notes.label[train_mask]), 1)
-    cand = notes.candidates
-    p = (counts[notes.pitch] + alpha) * cand
+    pitches = notes.pitch if pitches is None else np.asarray(pitches)
+    p = (counts[pitches] + alpha) * candidates(pitches)
     return p / p.sum(axis=1, keepdims=True)
 
 
@@ -201,3 +227,60 @@ def summarize(probs, labels):
         'nll_bits': float(-np.log2(np.clip(p_true, 1e-12, None)).mean()),
         'ece': float(ece),
     }
+
+
+@dataclass
+class StringClassifier:
+    """A trained string-classifier run, ready to score arbitrary (onset, pitch) notes."""
+
+    model: nn.Module
+    mean: torch.Tensor
+    std: torch.Tensor
+    temperature: float
+    n_frames: int
+    source: str
+    feature: str
+    prior_notes: Notes
+    prior_mask: np.ndarray
+    device: str
+
+    @classmethod
+    def from_run(cls, run_dir, device):
+        """Rebuild a run from its saved config; input normalization is recomputed from its training notes."""
+        cfg = OmegaConf.load(Path(run_dir) / '.hydra' / 'config.yaml')
+        notes = load_notes()
+        n_frames = PRE_FRAMES + post_frames(cfg.data.window_ms)
+        cache, _ = load_cache(cfg.data.source, cfg.data.feature, len(notes.pitch))
+        train_mask = notes.split_mask(split_players(cfg.test_player)['train'])
+        mean, std = freq_stats(cache[..., :n_frames], np.flatnonzero(train_mask))
+        model = instantiate(cfg.model, in_channels=cache.shape[1], n_freq=cache.shape[2], n_frames=n_frames)
+        model.load_state_dict(torch.load(Path(run_dir) / 'model.pt', map_location='cpu'))
+        temperature = json.loads((Path(run_dir) / 'metrics.json').read_text())['temperature']
+        return cls(
+            model.to(device).eval(),
+            mean.to(device),
+            std.to(device),
+            temperature,
+            n_frames,
+            cfg.data.source,
+            cfg.data.feature,
+            notes,
+            train_mask,
+            device,
+        )
+
+    def prior(self, pitches):
+        return pitch_prior(self.prior_notes, self.prior_mask, pitches)
+
+    @torch.no_grad()
+    def predict(self, spec, onsets, pitches, batch=512):
+        """Calibrated (N, 6) string probabilities for notes in one track's spectrogram."""
+        windows = note_windows(spec, np.asarray(onsets))[..., : self.n_frames]
+        pitch = torch.as_tensor(np.asarray(pitches), dtype=torch.long)
+        cand = torch.as_tensor(candidates(pitches))
+        out = []
+        for i in range(0, len(windows), batch):
+            x = (torch.from_numpy(windows[i : i + batch]).to(self.device).float() - self.mean) / self.std
+            logits = self.model(x, pitch[i : i + batch].to(self.device), cand[i : i + batch].to(self.device))
+            out.append(torch.softmax(logits / self.temperature, dim=1).cpu())
+        return torch.cat(out).numpy()

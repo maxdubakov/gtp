@@ -24,37 +24,17 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.strings import (
-    HOP,
-    MAX_POST_FRAMES,
     N_STRINGS,
     PRE_FRAMES,
-    SAMPLE_RATE,
+    freq_stats,
     load_cache,
     load_notes,
     pitch_prior,
+    post_frames,
     split_players,
     summarize,
 )
 from gtp.track import start_run
-
-
-def post_frames(window_ms):
-    frames = round(window_ms / 1000 * SAMPLE_RATE / HOP)
-    if not 1 <= frames <= MAX_POST_FRAMES:
-        raise ValueError(f'data.window_ms={window_ms} gives {frames} frames, cache holds 1..{MAX_POST_FRAMES}')
-    return frames
-
-
-def freq_stats(x, idx, chunk=4096):
-    total, total_sq, n = 0.0, 0.0, 0
-    for i in range(0, len(idx), chunk):
-        b = torch.from_numpy(x[idx[i : i + chunk]]).float()
-        total += b.sum(dim=(0, 3))
-        total_sq += (b**2).sum(dim=(0, 3))
-        n += b.shape[0] * b.shape[3]
-    mean = total / n
-    std = (total_sq / n - mean**2).clamp_min(1e-6).sqrt()
-    return mean[None, :, :, None], std[None, :, :, None]
 
 
 def predict_logits(model, batches):
