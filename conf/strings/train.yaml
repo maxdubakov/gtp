@@ -1,8 +1,8 @@
 defaults:
   - strings_schema
+  - _self_
   - experiment: null
   - override hydra/job_logging: none
-  - _self_
 
 hydra:
   run:
