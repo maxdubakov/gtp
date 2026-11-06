@@ -1,8 +1,15 @@
 defaults:
-  - strings_schema
+  - data: mic_logmel229
+  - model: stringnet
+  - optim: adamw_onecycle
+  - wandb: default
   - _self_
   - experiment: null
   - override hydra/job_logging: none
+
+name: adhoc
+test_player: 5
+seed: 0
 
 hydra:
   run:
@@ -13,4 +20,4 @@ hydra:
   job:
     config:
       override_dirname:
-        exclude_keys: [experiment, name, wandb.mode, wandb.project, wandb.entity]
+        exclude_keys: [experiment, name, wandb, wandb.mode, wandb.project, wandb.entity]

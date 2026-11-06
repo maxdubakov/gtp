@@ -24,13 +24,6 @@ from gtp.log import set_log_file
 OmegaConf.register_new_resolver('repo_root', lambda: str(REPO_ROOT), replace=True)
 
 
-@dataclass
-class WandbConfig:
-    project: str = 'gtp'
-    entity: str | None = None
-    mode: str = 'online'
-
-
 def _git(*args):
     return subprocess.run(['git', *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
 

@@ -1,13 +1,13 @@
 """Train and evaluate the per-note string classifier.
 
-Config: conf/strings/train.yaml + schema in gtp.stage1.strings_config. Split: `test_player`
+Config: conf/strings/train.yaml and its groups (data, model, optim, wandb, experiment). Split: `test_player`
 is test, the previous player is val (checkpoint selection), the rest train.
 Every metric, model and pitch-prior baseline alike, is computed on the same test notes.
 
 Usage:
-  uv run scripts/stage1/strings/train.py data.feature=cqt data.window_ms=200
+  uv run scripts/stage1/strings/train.py data=mic_cqt data.window_ms=200
   uv run scripts/stage1/strings/train.py -m experiment=v0_grid
-  uv run scripts/stage1/strings/train.py data.source=hex data.feature=logmel64 data.window_ms=100 wandb.mode=disabled
+  uv run scripts/stage1/strings/train.py data=hex_logmel64 wandb.mode=disabled
 """
 
 import json
@@ -23,7 +23,6 @@ from omegaconf import OmegaConf
 from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
-from gtp.stage1 import strings_config  # noqa: F401  (registers the schema)
 from gtp.stage1.strings import (
     HOP,
     MAX_POST_FRAMES,
