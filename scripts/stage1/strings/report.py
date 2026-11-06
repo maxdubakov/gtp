@@ -1,9 +1,11 @@
 """Tabulate string-classifier runs: one row per config, aggregated over seeds and folds.
 
-A config is the run's command-line overrides minus seed / test_player / naming keys, so
-seeds and leave-one-player-out folds of the same config share a row. Mean ± std is over
-runs; the 95% CI and the delta vs `--baseline` come from a bootstrap over test tracks on
-the pooled per-note predictions (paired on the notes both configs predicted).
+A config is labelled by how its saved config differs from the current defaults, minus
+seed / test_player / naming keys, so seeds and leave-one-player-out folds of the same config
+share a row (--by-fold splits folds). Mean ± std is over runs. T, bits+ (T) and ECE (T) are
+after temperature scaling fit on the val player. The 95% CI and the delta vs `--baseline`
+come from a bootstrap over test tracks on the pooled per-note predictions (paired on the
+notes both configs predicted).
 
 Usage:
   uv run scripts/stage1/strings/report.py
@@ -16,6 +18,7 @@ import json
 
 import numpy as np
 import pandas as pd
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from gtp import REPO_ROOT
@@ -23,15 +26,26 @@ from gtp.stage1.strings import MAX_FRET, OPEN_STRINGS
 
 RESULTS_DIR = REPO_ROOT / 'results' / 'strings'
 POOLED_KEYS = ('seed', 'test_player')
-NAMING_KEYS = ('experiment', 'name', 'wandb.')
+NAMING_KEYS = ('name', 'wandb.')
 
 
-def config_label(overrides):
-    kept = [o for o in overrides if not o.split('=')[0].startswith(POOLED_KEYS + NAMING_KEYS)]
-    return ' '.join(sorted(kept)) or 'defaults'
+def flatten(cfg):
+    return {k: v for k, v in pd.json_normalize(OmegaConf.to_container(cfg, resolve=True), sep='.').iloc[0].items()}
 
 
-def load_runs(experiments):
+def current_defaults():
+    with initialize_config_dir(version_base='1.3', config_dir=str(REPO_ROOT / 'conf' / 'strings')):
+        return flatten(compose('train'))
+
+
+def config_label(run_cfg, defaults, pooled=POOLED_KEYS):
+    """The run's differences from the *current* defaults, so labels stay right when defaults change."""
+    diff = [f'{k}={v}' for k, v in run_cfg.items() if defaults.get(k) != v and not k.startswith(pooled + NAMING_KEYS)]
+    return ' '.join(sorted(diff)) or 'defaults'
+
+
+def load_runs(experiments, pooled):
+    defaults = current_defaults()
     runs = []
     for metrics_path in sorted(
         [*RESULTS_DIR.glob('runs/*/metrics.json'), *RESULTS_DIR.glob('sweeps/*/*/*/metrics.json')]
@@ -40,12 +54,12 @@ def load_runs(experiments):
         provenance = json.loads((run_dir / 'provenance.json').read_text())
         if experiments and provenance['experiment'] not in experiments:
             continue
-        overrides = list(OmegaConf.load(run_dir / '.hydra' / 'overrides.yaml'))
+        run_cfg = flatten(OmegaConf.load(run_dir / '.hydra' / 'config.yaml'))
         runs.append(
             {
                 'dir': run_dir,
                 'experiment': provenance['experiment'],
-                'config': config_label(overrides),
+                'config': config_label(run_cfg, defaults, pooled),
                 'dirty': provenance['git_dirty'],
                 'metrics': json.loads(metrics_path.read_text()),
             }
@@ -104,6 +118,9 @@ def summarize_group(group, subset):
         'bits_gained': gained.mean(),
         'bits_std': gained.std(ddof=1) if len(gained) > 1 else np.nan,
         'ece': ece.mean(),
+        'bits_gained_cal': np.mean([t.get('bits_gained_calibrated', np.nan) for t in tests]),
+        'ece_cal': np.mean([t['calibrated']['ece'] if 'calibrated' in t else np.nan for t in tests]),
+        'temperature': np.mean([r['metrics'].get('temperature', np.nan) for r in group]),
         'comp_acc': np.mean([r['metrics']['test'][f'{subset}_comp']['model']['acc'] for r in group])
         if subset == 'multi'
         else np.nan,
@@ -141,6 +158,9 @@ def render(rows, baseline):
             'prior %': f'{r["prior_acc"] * 100:.1f}',
             'bits+': pm(r['bits_gained'], r['bits_std'], digits=2),
             'ECE': f'{r["ece"]:.3f}',
+            'T': f'{r["temperature"]:.2f}',
+            'bits+ (T)': f'{r["bits_gained_cal"]:.2f}',
+            'ECE (T)': f'{r["ece_cal"]:.3f}',
             'comp %': f'{r["comp_acc"] * 100:.1f}',
             'solo %': f'{r["solo_acc"] * 100:.1f}',
         }
@@ -165,10 +185,12 @@ def main():
     parser.add_argument('--subset', choices=('multi', 'all'), default='multi')
     parser.add_argument('--baseline', default=None, help='config label to compute paired deltas against')
     parser.add_argument('--format', choices=('text', 'md', 'latex'), default='text')
+    parser.add_argument('--by-fold', action='store_true', help='one row per test player instead of pooling folds')
     args = parser.parse_args()
 
     groups = {}
-    for run in load_runs(set(args.experiments)):
+    pooled = ('seed',) if args.by_fold else POOLED_KEYS
+    for run in load_runs(set(args.experiments), pooled):
         groups.setdefault((run['experiment'], run['config']), []).append(run)
     rows = [summarize_group(g, args.subset) for g in groups.values()]
     if not rows:

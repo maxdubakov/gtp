@@ -1,4 +1,5 @@
 _target_: gtp.stage1.strings.StringNet
 width: 1.0
 use_pitch: true
-pool_first: false
+# Exploration default (2x faster on MPS, same accuracy in speed_check); paper runs use pool_first=false optim.epochs=30.
+pool_first: true

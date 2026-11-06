@@ -57,10 +57,31 @@ def freq_stats(x, idx, chunk=4096):
     return mean[None, :, :, None], std[None, :, :, None]
 
 
-def predict(model, batches):
+def predict_logits(model, batches):
     model.eval()
     with torch.no_grad():
-        return torch.cat([F.softmax(model(*b[:3]), dim=1).cpu() for b in batches]).numpy()
+        return torch.cat([model(*b[:3]).cpu() for b in batches])
+
+
+def predict(model, batches):
+    return F.softmax(predict_logits(model, batches), dim=1).numpy()
+
+
+def fit_temperature(logits, labels):
+    """Single temperature minimizing NLL (Guo et al. 2017); masked strings stay at -inf."""
+    valid = torch.isfinite(logits)
+    finite = logits.masked_fill(~valid, 0.0)
+    log_t = torch.zeros((), requires_grad=True)
+    opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=200)
+
+    def closure():
+        opt.zero_grad()
+        loss = F.cross_entropy((finite / log_t.exp()).masked_fill(~valid, float('-inf')), labels)
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    return float(log_t.exp())
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'strings'), config_name='train')
@@ -127,8 +148,12 @@ def main(cfg):
 
     model.load_state_dict(best_state)
     torch.save(best_state, run.dir / 'model.pt')
+    temperature = fit_temperature(predict_logits(model, batches(split['val'])), label_t[split['val']].cpu())
     test = split['test']
-    probs = predict(model, batches(test))
+    test_logits = predict_logits(model, batches(test))
+    probs = F.softmax(test_logits, dim=1).numpy()
+    probs_cal = F.softmax(test_logits / temperature, dim=1).numpy()
+    info(f'temperature {temperature:.3f} (fit on val)')
     prior = pitch_prior(notes, notes.split_mask(players['train']))[test]
     labels = notes.label[test]
     multi = notes.candidates[test].sum(axis=1) > 1
@@ -141,8 +166,14 @@ def main(cfg):
         'multi_comp': multi & ~solo,
         'multi_solo': multi & solo,
     }.items():
-        m, p = summarize(probs[mask], labels[mask]), summarize(prior[mask], labels[mask])
-        report[subset] = {'model': m, 'prior': p, 'bits_gained': p['nll_bits'] - m['nll_bits']}
+        m, c, p = (summarize(q[mask], labels[mask]) for q in (probs, probs_cal, prior))
+        report[subset] = {
+            'model': m,
+            'calibrated': c,
+            'prior': p,
+            'bits_gained': p['nll_bits'] - m['nll_bits'],
+            'bits_gained_calibrated': p['nll_bits'] - c['nll_bits'],
+        }
 
     pitches = notes.pitch[test]
     per_pitch = {
@@ -163,6 +194,7 @@ def main(cfg):
                 'n_params': n_params,
                 'best_epoch': best_epoch,
                 'best_val_nll_bits': best_nll,
+                'temperature': temperature,
                 'test': report,
                 'per_pitch_multi': per_pitch,
                 'confusion_multi_true_by_pred': confusion.tolist(),
@@ -178,16 +210,25 @@ def main(cfg):
         pitch=pitches,
         string=notes.string[test],
         probs=probs,
+        probs_calibrated=probs_cal,
+        temperature=temperature,
         prior=prior,
     )
-    summary = {'n_params': n_params, 'best_epoch': best_epoch, 'best_val_nll_bits': best_nll}
+    summary = {
+        'n_params': n_params,
+        'best_epoch': best_epoch,
+        'best_val_nll_bits': best_nll,
+        'temperature': temperature,
+    }
     for subset, r in report.items():
         summary |= {f'test/{subset}/{k}': v for k, v in r['model'].items()}
+        summary |= {f'test/{subset}/calibrated_{k}': v for k, v in r['calibrated'].items() if k != 'n'}
         summary |= {f'test/{subset}/prior_acc': r['prior']['acc'], f'test/{subset}/bits_gained': r['bits_gained']}
+        summary |= {f'test/{subset}/bits_gained_calibrated': r['bits_gained_calibrated']}
         info(
             f'test {subset:10s} n={r["model"]["n"]:5d}  acc {r["model"]["acc"]:.3f} (prior {r["prior"]["acc"]:.3f})  '
             f'nll {r["model"]["nll_bits"]:.3f} bits (prior {r["prior"]["nll_bits"]:.3f}, gained {r["bits_gained"]:+.3f})  '
-            f'ece {r["model"]["ece"]:.3f}'
+            f'ece {r["model"]["ece"]:.3f}  | calibrated: gained {r["bits_gained_calibrated"]:+.3f} ece {r["calibrated"]["ece"]:.3f}'
         )
     info(f'Saved {run.dir}')
     run.finish(summary)
