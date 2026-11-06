@@ -2,7 +2,33 @@
 name = "gtp"
 version = "0.1.0"
 description = "Guitar Tab Predictor — Audio → MIDI → Tablature"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch==2.6.0",
+    "torchlibrosa==0.1.0",
+    "transformers==5.7.0",
+    "numpy==2.4.4",
+    "scipy==1.17.1",
+    "pandas==3.0.2",
+    "librosa==0.11.0",
+    "soundfile==0.13.1",
+    "pretty-midi==0.2.11",
+    "mido==1.3.3",
+    "pyfluidsynth==1.3.4",
+    "jams==0.3.5",
+    "mir-eval==0.8.2",
+    "pyguitarpro==0.6",
+    "matplotlib==3.10.9",
+    "hydra-core==1.3.8",
+    "wandb>=0.31.0",
+]
+
+[project.optional-dependencies]
+demo = ["sounddevice==0.5.5"]
+scrape = ["playwright==1.58.0"]
+
+[dependency-groups]
+dev = ["ruff==0.15.12"]
 
 [build-system]
 requires = ["setuptools>=64"]

@@ -1,4 +1,5 @@
 venv/
+.venv/
 /data/
 models/
 .idea/
@@ -17,4 +18,4 @@ node_modules/
 SESSION_NOTES.md
 TODO.md
 GS-Detector-main/
-physical_models_for_fast_estimation_guitar_string_fret_and_plucking_position-master/
+physical_models_for_fast_estimation_guitar_string_fret_and_plucking_position-master/*.egg-info/

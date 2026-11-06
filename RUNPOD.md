@@ -4,7 +4,7 @@
 
 - **GPU**: RTX 4000 Ada (24GB VRAM) is plenty — model is 2.24M params.
 - **Disk**: ~5 GB volume + ~15 GB container is enough; defaults (30+40) are way overkill but cheap.
-- **Image**: prefer Python 3.12 + PyTorch 2.6 templates if available. Python 3.10 also works (see install note below).
+- **Image**: any CUDA image; `uv sync` installs Python 3.12 and torch 2.6 from `uv.lock`.
 
 ## 1. Pack locally (Mac)
 
@@ -26,18 +26,11 @@ Upload both tarballs to the pod (RunPod web UI or `runpodctl send`).
 tar xzf code_stage2.tar.gz
 tar xzf data_stage2.tar.gz
 
-# Install third-party deps. If pod is Python 3.10, requirements.txt's strict
-# pins (numpy 2.4.x, contourpy 1.3.3) won't have wheels — install only the
-# top-level deps and let pip resolve the rest:
-pip install torch==2.6.0 torchaudio==2.6.0 \
-    transformers numpy scipy librosa pretty_midi \
-    pyguitarpro jams soundfile mido pyfluidsynth
-
-# If pod is Python 3.12, this works as-is:
-# pip install -r requirements.txt
-
-# Install the gtp package (relies on pyproject.toml allowing >=3.10)
-pip install -e .
+# Install uv, then the locked environment. uv fetches Python 3.12 itself,
+# so the pod's system Python version doesn't matter.
+curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+uv sync --frozen
+source .venv/bin/activate
 
 # Build the augmented dataset (~9 min one-time)
 python scripts/stage2/build_aug_dataset.py
@@ -110,16 +103,12 @@ runpodctl receive <code>
 
 2. **`UnicodeDecodeError: byte 0xa3` while loading JSONs** — caused by macOS BSD tar embedding `._*` AppleDouble sidecar files alongside real `.json` files. The new `pack_data.sh` prevents these. If you somehow have them: `find data -name "._*" -delete`.
 
-3. **`pip install -e .` fails with `Package 'gtp' requires a different Python: 3.10.x not in '>=3.12'`** — fixed by `requires-python = ">=3.10"` in pyproject.toml. If on an old code drop, patch with `sed -i 's/>=3.12/>=3.10/' pyproject.toml`.
-
-4. **`requirements.txt` Mac-path editable install fails** — line `-e /Users/max/...` is gone now. If still present: `sed -i '/^-e \|^# Editable/d' requirements.txt`.
-
-5. **Training crashes after long run with `OSError: ENOBUFS` or `DataLoader worker killed by signal: Aborted`** — multiprocessing IPC exhaustion. Already mitigated by:
+3. **Training crashes after long run with `OSError: ENOBUFS` or `DataLoader worker killed by signal: Aborted`** — multiprocessing IPC exhaustion. Already mitigated by:
    - `mp.set_sharing_strategy('file_system')` in train.py
    - `persistent_workers=True` in the DataLoader
    - Lower `--num-workers` (2 not 4)
    If still hits, try `--num-workers 0` (no workers, slower but bulletproof).
 
-6. **`tail -f` shows only `nohup: ignoring input` for a long time** — Python buffering. Fix: `PYTHONUNBUFFERED=1` (see flag note above) or run with `python -u`.
+4. **`tail -f` shows only `nohup: ignoring input` for a long time** — Python buffering. Fix: `PYTHONUNBUFFERED=1` (see flag note above) or run with `python -u`.
 
-7. **tmux `Ctrl+B`-then-`D` doesn't detach** - use `nohup` and be happy.
+5. **tmux `Ctrl+B`-then-`D` doesn't detach** - use `nohup` and be happy.

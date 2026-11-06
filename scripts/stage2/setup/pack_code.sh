@@ -16,8 +16,9 @@ COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT" \
     --exclude='*.egg-info' \
     src/gtp/ \
     scripts/stage2/ \
-    requirements.txt \
-    pyproject.toml
+    pyproject.toml \
+    uv.lock \
+    .python-version
 
 ls -lh "$OUT"
 echo "Code packed: $OUT"

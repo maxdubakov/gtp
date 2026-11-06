@@ -3,10 +3,8 @@
 # On remote host (runpod):
 #   1. Send: runpodctl receive <uuid>
 #   2. Unpack: tar xzf gtp_stage2_runpod.tar.gz
-#   3. Install requirements:
-#       3.1. For Python 3.12: pip install -r requirements.txt
-#       3.2. For Python 3.10: pip install torch==2.6.0 torchaudio==2.6.0 transformers numpy scipy librosa pretty_midi pyguitarpro jams soundfile mido pyfluidsynth
-#   4. Install local gtp package: pip install -e .
+#   3. Install env: curl -LsSf https://astral.sh/uv/install.sh | sh && uv sync --frozen
+#   4. Activate: source .venv/bin/activate
 #   5. Increase ulimit: ulimit -n 65536
 
 set -euo pipefail
@@ -21,7 +19,8 @@ REQUIRED=(
     src/gtp
     scripts/stage2
     pyproject.toml
-    requirements.txt
+    uv.lock
+    .python-version
     VERSION
     data/stage2_aug/train.jsonl
     data/stage2_aug/val.jsonl
