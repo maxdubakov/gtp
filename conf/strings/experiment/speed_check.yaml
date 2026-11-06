@@ -1,0 +1,6 @@
+# @package _global_
+name: speed_check
+hydra:
+  sweeper:
+    params:
+      seed: 0,1,2

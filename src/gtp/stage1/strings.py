@@ -148,14 +148,19 @@ def load_cache(source, feature, n_notes):
 
 
 class StringNet(nn.Module):
-    """TART-style per-note encoder (3 conv blocks) + pitch embedding -> logits over the 6 strings."""
+    """TART-style per-note encoder (3 conv blocks) + pitch embedding -> logits over the 6 strings.
 
-    def __init__(self, in_channels, n_freq, n_frames, width=1.0, use_pitch=True):
+    `pool_first` pools before BatchNorm/ReLU: about 1.4x faster on MPS, where BN/ReLU on the
+    full-resolution first block dominates step time; BN then normalizes pooled activations.
+    """
+
+    def __init__(self, in_channels, n_freq, n_frames, width=1.0, use_pitch=True, pool_first=False):
         super().__init__()
         chans = [max(4, round(c * width)) for c in (32, 64, 128)]
         layers, prev = [], in_channels
         for c in chans:
-            layers += [nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)]
+            conv, bn, relu, pool = nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)
+            layers += [conv, pool, bn, relu] if pool_first else [conv, bn, relu, pool]
             prev = c
         self.encoder = nn.Sequential(*layers, nn.Flatten())
         with torch.no_grad():

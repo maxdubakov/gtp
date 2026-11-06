@@ -80,17 +80,16 @@ def main(cfg):
 
     mean, std = freq_stats(x, split['train'])
     mean, std = mean.to(device), std.to(device)
-    x_t = torch.from_numpy(x)
-    pitch_t = torch.from_numpy(notes.pitch)
-    cand_t = torch.from_numpy(notes.candidates)
-    label_t = torch.from_numpy(notes.label)
+    x_t = torch.from_numpy(x).to(device)
+    pitch_t = torch.from_numpy(notes.pitch).to(device)
+    cand_t = torch.from_numpy(notes.candidates).to(device)
+    label_t = torch.from_numpy(notes.label).to(device)
 
     def batches(idx, shuffle=False):
         idx = np.random.permutation(idx) if shuffle else idx
         for i in range(0, len(idx), cfg.optim.batch):
-            b = torch.from_numpy(idx[i : i + cfg.optim.batch])
-            xb = (x_t[b].to(device).float() - mean) / std
-            yield xb, pitch_t[b].to(device), cand_t[b].to(device), label_t[b].to(device)
+            b = torch.from_numpy(idx[i : i + cfg.optim.batch]).to(device)
+            yield (x_t[b].float() - mean) / std, pitch_t[b], cand_t[b], label_t[b]
 
     model = instantiate(cfg.model, in_channels=x.shape[1], n_freq=x.shape[2], n_frames=n_frames).to(device)
     n_params = sum(p.numel() for p in model.parameters())

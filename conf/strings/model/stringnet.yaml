@@ -1,3 +1,4 @@
 _target_: gtp.stage1.strings.StringNet
 width: 1.0
 use_pitch: true
+pool_first: false
