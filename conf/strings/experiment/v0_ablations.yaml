@@ -1,0 +1,4 @@
+# @package _global_
+name: v0_ablations
+# One-off ablations against the defaults; pass the varied key on the command line, e.g.
+#   train.py -m experiment=v0_ablations model.width=0.5,2

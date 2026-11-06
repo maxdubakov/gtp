@@ -1,0 +1,7 @@
+# @package _global_
+name: v0_seeds
+hydra:
+  sweeper:
+    params:
+      data.window_ms: 200,400
+      seed: 0,1,2

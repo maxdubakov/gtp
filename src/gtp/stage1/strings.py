@@ -41,7 +41,7 @@ SOURCES = {
     'hex': ('audio_hex-pickup_debleeded', '_hex_cln.wav'),
 }
 FEATURES = ('logmel64', 'logmel229', 'cqt')
-SPLITS = {'train': ('00', '01', '02', '03'), 'val': ('04',), 'test': ('05',)}
+PLAYERS = ('00', '01', '02', '03', '04', '05')
 
 
 @dataclass
@@ -64,8 +64,8 @@ class Notes:
         fret = self.pitch[:, None] - OPEN_STRINGS[None, :]
         return (fret >= 0) & (fret <= MAX_FRET)
 
-    def split_mask(self, split):
-        return np.isin(self.player, SPLITS[split])
+    def split_mask(self, players):
+        return np.isin(self.player, players)
 
 
 def load_notes():
@@ -119,8 +119,32 @@ def note_windows(spec, onsets):
     return np.stack([padded[:, :, s + pad : s + pad + WINDOW_FRAMES] for s in starts])
 
 
+def split_players(test_player):
+    """Leave-one-player-out fold: `test_player` is test, the previous player (cyclically) is val."""
+    test, val = PLAYERS[test_player], PLAYERS[test_player - 1]
+    return {'train': tuple(p for p in PLAYERS if p not in (test, val)), 'val': (val,), 'test': (test,)}
+
+
 def cache_path(source, feature):
     return CACHE_DIR / f'{source}_{feature}.npy'
+
+
+def cache_layout():
+    """Constants a cache was built with; a cache built under different ones is stale."""
+    return {'sample_rate': SAMPLE_RATE, 'hop': HOP, 'pre_frames': PRE_FRAMES, 'max_post_frames': MAX_POST_FRAMES}
+
+
+def load_cache(source, feature, n_notes):
+    """Memmap of cached windows plus its build metadata, checked against the current notes and layout."""
+    path = cache_path(source, feature)
+    meta_path = path.with_suffix('.json')
+    if not meta_path.exists():
+        raise FileNotFoundError(f'{meta_path} missing: rebuild with scripts/stage1/strings/build_cache.py')
+    meta = json.loads(meta_path.read_text())
+    x = np.load(path, mmap_mode='r')
+    if len(x) != n_notes or meta['layout'] != cache_layout():
+        raise ValueError(f'{path} is stale ({len(x)} rows, layout {meta["layout"]}): rebuild it')
+    return x, meta
 
 
 class StringNet(nn.Module):

@@ -17,6 +17,7 @@ from datetime import datetime
 import numpy as np
 
 _verbose = False
+_log_file = None
 
 
 def set_verbose(enabled: bool):
@@ -28,6 +29,12 @@ def is_verbose() -> bool:
     return _verbose
 
 
+def set_log_file(path) -> None:
+    """Also append every `info` line to `path` (None stops it)."""
+    global _log_file
+    _log_file = path
+
+
 def _ts() -> str:
     """YYYY-MM-DD HH:MM:SS local-time stamp."""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -36,7 +43,11 @@ def _ts() -> str:
 def info(msg: str) -> None:
     """Print a timestamped log line. Always emitted. flush=True so logs are
     immediately visible on RunPod / tee'd files."""
-    print(f'[{_ts()}] {msg}', flush=True)
+    line = f'[{_ts()}] {msg}'
+    print(line, flush=True)
+    if _log_file is not None:
+        with open(_log_file, 'a') as f:
+            f.write(line + '\n')
 
 
 def trace(label: str, data=None, **kwargs):
