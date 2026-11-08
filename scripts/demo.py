@@ -1,10 +1,14 @@
 """End-to-end demo: record audio → transcribe → render tabs (ASCII + PDF).
 
+A Stage 2 trained with audio evidence also gets the string classifier's per-note
+distributions from the recording, and decodes along the skeleton fixed by the notes.
+
 Usage:
   python scripts/demo.py                           # record 10s, run pipeline
   python scripts/demo.py --duration 15
   python scripts/demo.py --audio path/to/take.wav  # skip recording
   python scripts/demo.py --capo 3 --tuning 64 59 55 50 45 38
+  python scripts/demo.py --no-evidence             # evidence model without the classifier
 
 Requires `sounddevice` for the recording path:
   pip install sounddevice
@@ -25,7 +29,11 @@ from matplotlib.figure import Figure
 
 from gtp import REPO_ROOT
 from gtp.device import auto_device
+from gtp.stage1 import strings
+from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
+from gtp.stage2.evidence import restrict, sweep_runs
+from gtp.stage2.fusion import decode_structured, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.genres import GENRES, UNKNOWN
 from gtp.stage2.inference import (
     build_anchor_prefix,
@@ -37,10 +45,13 @@ from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import tokenize_piece_for_inference
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
-STAGE2_DEFAULT = REPO_ROOT / 'runs' / 'stage2_baseline' / 'checkpoints' / 'step_0060000_final.pth'
+STAGE2_DEFAULT = (
+    REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_audio' / 'checkpoints' / 'step_0060000_final.pth'
+)
+STRINGS_SWEEP_DEFAULT = 'results/strings/sweeps/lopo'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
-SR = 16000
+SR = 44100
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +94,7 @@ def record_with_retry(duration, sr=SR):
 def stage1(audio, checkpoint, device):
     print('Stage 1: audio → MIDI...')
     transcriptor = PianoTranscription(checkpoint_path=str(checkpoint), device=device)
-    result = transcriptor.transcribe(audio)
+    result = transcriptor.transcribe(librosa.resample(audio, orig_sr=SR, target_sr=STAGE1_SR))
     note_events = result['note_events']
     print(f'  detected {len(note_events)} notes')
     return note_events
@@ -154,6 +165,42 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
     else:
         print('  difficulty: (need ≥2 valid tabs)')
     return corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab
+
+
+def string_evidence(audio, piece, sweep, test_player, device):
+    """(n_notes, 6) classifier string distributions for sorted_notes(piece), averaged over the fold's seeds."""
+    player = strings.PLAYERS[test_player]
+    runs = [run for (p, _), run in sorted(sweep_runs(sweep).items()) if p == player]
+    print(f'String classifier: {len(runs)} seeds of the fold holding out player {player}...')
+    classifiers = [strings.StringClassifier.from_run(run, device) for run in runs]
+    audio = librosa.resample(audio, orig_sr=SR, target_sr=strings.SAMPLE_RATE)[None]
+    spec = strings.spectrogram(audio, classifiers[0].feature)
+    notes = sorted_notes(piece)
+    onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
+    probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
+    return restrict(probs, pitches, piece['tuning'])
+
+
+def stage2_evidence(piece, model, vocab, max_seq_len, evidence, device):
+    """Choose each note's string along the skeleton its notes fix; returns tabs in sorted_notes(piece) order."""
+    print('Stage 2 (with string evidence): notes → tabs...')
+    tuning = piece['tuning']
+    # tokenize_piece needs a string/fret per note; these placeholders are replaced by the model's choices.
+    notes = []
+    for n in piece['notes']:
+        s = int(valid_tabs(n['pitch'], tuning, vocab)[0][0])
+        notes.append({**n, 'string': s, 'fret': n['pitch'] - tuning[s - 1]})
+    piece = {**piece, 'notes': notes}
+    n = len(notes)
+    rows = piece_rows(piece, vocab, max_seq_len, list(range(n)), [None] * n, evidence)
+    picks = decode_structured(model, rows, device, batch=64)
+    tabs = [(picks[i], note['pitch'] - tuning[picks[i] - 1]) for i, note in enumerate(sorted_notes(piece))]
+    with_audio = ~np.isnan(evidence[:, 0])
+    if with_audio.any():
+        chosen = np.array([s for s, _ in tabs])
+        agree = (chosen[with_audio] == evidence[with_audio].argmax(axis=1) + 1).mean()
+        print(f'  {with_audio.sum()}/{n} notes with evidence; model agrees with the classifier on {agree:.0%}')
+    return tabs, [r.enc for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +400,9 @@ def main():
     ap.add_argument('--output-dir', default=str(DEFAULT_OUT_DIR))
     ap.add_argument('--stage1-checkpoint', default=str(STAGE1_DEFAULT))
     ap.add_argument('--stage2-checkpoint', default=str(STAGE2_DEFAULT))
+    ap.add_argument('--strings-sweep', default=STRINGS_SWEEP_DEFAULT, help='String-classifier sweep (evidence model)')
+    ap.add_argument('--classifier-player', type=int, default=5, help='Use the classifier fold holding out this player')
+    ap.add_argument('--no-evidence', action='store_true', help='Run an evidence model without the classifier')
     ap.add_argument('--tuning', nargs=6, type=int, default=STD_TUNING, help='Open-string pitches (high E to low E)')
     ap.add_argument('--capo', type=int, default=0)
     ap.add_argument('--tempo', type=float, default=None, help='Override tempo (None = unknown, model handles)')
@@ -427,9 +477,27 @@ def main():
     tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
     piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo, genre=args.genre)
     t0 = time.time()
-    tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab = stage2(
-        piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs, fallback=args.fallback
-    )
+    model, vocab, _, max_seq_len = load_checkpoint(str(args.stage2_checkpoint), device)
+    if hasattr(model, 'embed'):
+        if anchor_tabs:
+            sys.exit('--anchor is not supported for a Stage 2 trained with evidence')
+        if args.capo or args.tuning != STD_TUNING:
+            print('  warning: the string classifier only saw standard tuning without a capo')
+        piece['notes'] = [
+            {**n, 'end': max(n['end'], n['start'] + 0.01)}
+            for n in piece['notes']
+            if len(valid_tabs(n['pitch'], piece['tuning'], vocab)[0])
+        ]
+        if args.no_evidence:
+            evidence = np.full((len(piece['notes']), 6), np.nan)
+        else:
+            evidence = string_evidence(audio, piece, args.strings_sweep, args.classifier_player, device)
+        tabs, enc_subseqs = stage2_evidence(piece, model, vocab, max_seq_len, evidence, device)
+        raw_tabs, dec_subseqs, sources = tabs, [], ['unchanged'] * len(tabs)
+    else:
+        tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab = stage2(
+            piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs, fallback=args.fallback
+        )
     print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
 
     # 4) Debug log
