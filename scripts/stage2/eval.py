@@ -56,7 +56,7 @@ def evaluate_split(model, loader, vocab, device, fallback='first_viable'):
 
     with torch.no_grad():
         for batch in loader:
-            enc, dec, sources, piece_ids = batch
+            enc, dec, _evidence, sources, piece_ids = batch
             input_ids = enc.to(device)
             attention_mask = (input_ids != vocab.pad_id).long()
 

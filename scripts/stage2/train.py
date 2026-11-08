@@ -1,19 +1,31 @@
-"""Train T5 model with self-adaptive Adafactor."""
+"""Train T5 model with self-adaptive Adafactor.
 
-import argparse
+Config: conf/stage2/train.yaml and its groups (evidence, experiment).
+
+Usage:
+  uv run scripts/stage2/train.py experiment=p05_audio
+  uv run scripts/stage2/train.py experiment=p05_baseline max_steps=200 wandb.mode=disabled
+Resume into the same run dir:
+  uv run scripts/stage2/train.py experiment=p05_audio hydra.run.dir=<run dir> resume=<run dir>/checkpoints/<ckpt>
+"""
+
 import json
 import os
 import time
 from collections import defaultdict
 from pathlib import Path
 
+import hydra
 import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import Adafactor
 
+from gtp import REPO_ROOT
 from gtp.device import auto_device, get_device_info
 from gtp.log import info
 from gtp.stage2.config import (
@@ -27,9 +39,9 @@ from gtp.stage2.config import (
     get_timestamp,
 )
 from gtp.stage2.data import DEFAULT_REBALANCE_GENRE, DEFAULT_REBALANCE_SOURCE, build_datasets, compute_sampling_weights
+from gtp.stage2.evidence import Perturbation, load_evidence
 from gtp.stage2.metrics import pitch_of
 from gtp.stage2.model import build_model
-from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.stage2.tokenizer import (
     MAX_SEQ_LEN,
     MAX_TIME_SHIFT,
@@ -39,6 +51,7 @@ from gtp.stage2.tokenizer import (
     parse_token_str,
     parse_tuning_from_enc,
 )
+from gtp.track import start_run
 from gtp.utils import format_eta
 
 IGNORE_INDEX = -100
@@ -53,6 +66,13 @@ def make_t5_inputs(enc_ids, dec_ids, vocab, device):
     return input_ids, attention_mask, labels
 
 
+def forward(model, batch, vocab, device, use_evidence):
+    enc, dec, evidence, _sources, _piece_ids = batch
+    input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
+    extra = {'evidence': evidence.to(device)} if use_evidence else {}
+    return model(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **extra), input_ids, labels
+
+
 def per_sequence_loss(logits, labels):
     """Mean cross-entropy per sequence. Returns (B,) tensor."""
     flat_loss = F.cross_entropy(
@@ -62,7 +82,7 @@ def per_sequence_loss(logits, labels):
     return (flat_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1)
 
 
-def run_eval(model, val_loader, vocab, device):
+def run_eval(model, val_loader, vocab, device, use_evidence):
     """Single forward pass over val: cross-entropy loss + teacher-forced tab/pitch accuracy.
 
     Returns (overall_loss, overall_tab_acc, overall_pitch_acc, per_source) where
@@ -75,9 +95,8 @@ def run_eval(model, val_loader, vocab, device):
 
     with torch.no_grad():
         for batch in val_loader:
-            enc, dec, sources, _piece_ids = batch
-            input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            sources = batch[3]
+            outputs, input_ids, labels = forward(model, batch, vocab, device, use_evidence)
 
             seq_losses = per_sequence_loss(outputs.logits, labels).tolist()
             preds = outputs.logits.argmax(-1)  # (B, T, V) -> (B, T) where we take max. probable token
@@ -147,13 +166,20 @@ def run_eval(model, val_loader, vocab, device):
     return overall_loss, overall_tab, overall_pitch, per_source
 
 
-def save_checkpoint(path, step, model, optimizer, vocab, args):
+def eval_log(record, prefix='val'):
+    out = {f'{prefix}/{k}': record[k] for k in ('val_loss', 'tab_acc_tf', 'pitch_acc_tf')}
+    for src, m in record['per_source'].items():
+        out |= {f'{prefix}/{src}/{k}': m[k] for k in ('loss', 'tab_acc', 'pitch_acc')}
+    return out
+
+
+def save_checkpoint(path, step, model, optimizer, vocab, cfg):
     torch.save(
         {
             'iteration': step,
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'config': vars(args),
+            'config': OmegaConf.to_container(cfg, resolve=True),
             'tokenizer_meta': {
                 'vocab_size': len(vocab),
                 'time_shift_max': MAX_TIME_SHIFT,
@@ -167,52 +193,15 @@ def save_checkpoint(path, step, model, optimizer, vocab, args):
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Train (MIDI → Tab) T5 model')
-    parser.add_argument(
-        '--output-dir',
-        required=True,
-        help='Required, output directory under runs/',
-    )
-    parser.add_argument('--resume', default=None, help='Resume from checkpoint (model + optimizer + step)')
-    parser.add_argument('--batch-size', required=True, type=int, default=16)
-    parser.add_argument('--max-steps', required=True, type=int, default=30000)
-    parser.add_argument(
-        '--checkpoint-steps',
-        type=int,
-        default=1000,
-        help='Interval (in steps) between paired eval + save events. Eval and save are coupled — every checkpoint event runs val and writes a .pth.',
-    )
-    parser.add_argument('--device', default=None, help='cpu / mps / cuda (default: auto)')
-    parser.add_argument('--num-workers', required=True, type=int, default=2, help='Number of dataLoader workers')
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument(
-        '--experiment-label', default='', help='Free-form label saved to config.json for run comparison'
-    )
-    parser.add_argument('--notes', default='', help='Free-form notes saved to config.json')
-    parser.add_argument(
-        '--genre-conditioning',
-        action='store_true',
-        help='Add a number of GENRE tokens to the encoder prefix to condition on. See genre.py for more info',
-    )
-    parser.add_argument(
-        '--genre-dropout',
-        type=float,
-        default=0.15,
-        help='Probability of replacing GENRE<X> token with GENRE<unknown> during training',
-    )
-    parser.add_argument(
-        '--rebalance',
-        action='store_true',
-        help='Use WeightedRandomSampler with default per-source / per-genre rates. See data.py for more info',
-    )
-    args = parser.parse_args()
-    os.makedirs(args.output_dir, exist_ok=True)
-    config_path = Path(args.output_dir) / 'config.json'
-    metrics_path = Path(args.output_dir) / 'metrics.jsonl'
+@hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'stage2'), config_name='train')
+def main(cfg):
+    output_dir = Path(HydraConfig.get().runtime.output_dir)
+    config_path = output_dir / 'config.json'
+    metrics_path = output_dir / 'metrics.jsonl'
+    use_evidence = cfg.evidence.enabled
 
     # Setup device
-    device = args.device or auto_device()
+    device = cfg.device or auto_device()
     device_info = get_device_info(device)
     if device_info.type == 'cuda' and device_info.cuda_name:
         info(f'Device: {device} ({device_info.cuda_name}, {device_info.cuda_memory_gib} GiB)')
@@ -220,29 +209,38 @@ def main():
         info(f'Device: {device}')
 
     # Set seed to replicate results
-    torch.manual_seed(args.seed)
+    torch.manual_seed(cfg.seed)
 
     # Initialize vocabulary
-    vocab = Vocabulary(include_genre=args.genre_conditioning)
-    if args.genre_conditioning:
-        info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. Genre dropout: {args.genre_dropout}')
+    vocab = Vocabulary(include_genre=cfg.genre_conditioning)
+    if cfg.genre_conditioning:
+        info(f'Genre conditioning enabled. Vocab size: {len(vocab)}. Genre dropout: {cfg.genre_dropout}')
 
     # Use file_system instead of default file_descriptor to make data loading more stable
     mp.set_sharing_strategy('file_system')
 
     # Build datasets
     info('Building datasets...')
-    datasets, _stats = build_datasets(
+    evidence = load_evidence(cfg.evidence) if use_evidence else None
+    perturbation = (
+        Perturbation(cfg.evidence.log_temperature, cfg.evidence.piece_drop, cfg.evidence.note_drop)
+        if use_evidence
+        else None
+    )
+    datasets, stats = build_datasets(
         vocab,
         splits=('train', 'val'),
-        genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
+        genre_dropout=cfg.genre_dropout if cfg.genre_conditioning else 0.0,
+        data_dir=REPO_ROOT / cfg.data_dir,
+        evidence=evidence,
+        perturbation=perturbation,
     )
     train_ds, val_ds = datasets['train'], datasets['val']
     info(f'Train sequences: {len(train_ds)}\nValidation sequences: {len(val_ds)}')
 
     # Optional rebalancing
     train_sampler = None
-    if args.rebalance:
+    if cfg.rebalance:
         weights = compute_sampling_weights(train_ds.sources, train_ds.genres)
         train_sampler = WeightedRandomSampler(
             weights,
@@ -251,39 +249,39 @@ def main():
         )
 
     pin_memory = device == 'cuda'  # load data batches to pinned memory of GPU (faster tensor.to operation)
-    persistent = args.num_workers > 0  # Utilize the same processes for workers
+    persistent = cfg.num_workers > 0  # Utilize the same processes for workers
     train_loader = DataLoader(
         train_ds,
-        batch_size=args.batch_size,
+        batch_size=cfg.batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         pin_memory=pin_memory,
         drop_last=True,
         persistent_workers=persistent,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=args.batch_size,
+        batch_size=cfg.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent,
     )
 
     # Initialize model
     info(f'Building model (vocab={len(vocab)})...')
-    model = build_model(vocab).to(device)
+    model = build_model(vocab, evidence=use_evidence).to(device)
     model.train()
     info(f'Done. Parameters: {sum(p.numel() for p in model.parameters()):,}')
 
     # Save run config to <output_dir>/config.json
     run_config = RunConfig(
-        run_id=Path(args.output_dir).name,
-        experiment_label=args.experiment_label,
+        run_id=output_dir.name,
+        experiment_label=cfg.name,
         timestamp=get_timestamp(),
         git_sha=get_git_sha(),
-        notes=args.notes,
+        notes=cfg.notes,
         model=ModelConfig(
             params=sum(p.numel() for p in model.parameters()),
             d_model=getattr(model.config, 'd_model', 0),
@@ -293,33 +291,35 @@ def main():
             vocab_size=len(vocab),
         ),
         train=TrainConfig(
-            batch_size=args.batch_size,
-            max_steps=args.max_steps,
+            batch_size=cfg.batch_size,
+            max_steps=cfg.max_steps,
             max_seq_len=MAX_SEQ_LEN,
-            checkpoint_steps=args.checkpoint_steps,
-            num_workers=args.num_workers,
-            seed=args.seed,
-            resumed_from=args.resume,
+            checkpoint_steps=cfg.checkpoint_steps,
+            num_workers=cfg.num_workers,
+            seed=cfg.seed,
+            resumed_from=cfg.resume,
         ),
         data=DataConfig(
-            dataset_dir=str(AUG_DATA_DIR),
-            sources=[],
+            dataset_dir=str(REPO_ROOT / cfg.data_dir),
+            sources=sorted(stats['sources_train']),
             train_subseqs=len(train_ds),
             val_subseqs=len(val_ds),
         ),
         conditioning=ConditioningConfig(
-            genre=args.genre_conditioning,
-            genre_dropout=args.genre_dropout if args.genre_conditioning else 0.0,
+            genre=cfg.genre_conditioning,
+            genre_dropout=cfg.genre_dropout if cfg.genre_conditioning else 0.0,
+            evidence=use_evidence,
         ),
         rebalancing=RebalancingConfig(
-            enabled=args.rebalance,
-            source_weights=DEFAULT_REBALANCE_SOURCE if args.rebalance else {},
-            genre_weights=DEFAULT_REBALANCE_GENRE if args.rebalance else {},
+            enabled=cfg.rebalance,
+            source_weights=DEFAULT_REBALANCE_SOURCE if cfg.rebalance else {},
+            genre_weights=DEFAULT_REBALANCE_GENRE if cfg.rebalance else {},
         ),
         device=device_info,
     )
     run_config.save(config_path)
     info(f'Config saved to {config_path}')
+    run = start_run(cfg, job_type='stage2', device=device, extra={'data_config': stats})
 
     # Initialize optimizer
     optimizer = Adafactor(
@@ -332,9 +332,9 @@ def main():
 
     # Optional resuming
     step = 0
-    if args.resume:
-        info(f'Resuming from {args.resume}')
-        ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
+    if cfg.resume:
+        info(f'Resuming from {cfg.resume}')
+        ckpt = torch.load(cfg.resume, map_location='cpu', weights_only=False)
         meta = ckpt.get('tokenizer_meta', {})
         if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
             raise SystemExit(
@@ -347,7 +347,7 @@ def main():
         step = ckpt.get('iteration', 0)
         info(f'Resumed at step {step}')
 
-    info(f'Training started: starting_step={step}, max_steps={args.max_steps}')
+    info(f'Training started: starting_step={step}, max_steps={cfg.max_steps}')
     recent_losses = []
     step_times = []
     losses_since_eval: list[float] = []
@@ -355,7 +355,7 @@ def main():
     start_time = time.time()
     time_start_step = step
 
-    while step < args.max_steps:
+    while step < cfg.max_steps:
         # try/except block to continue training even if epoch finished
         try:
             batch = next(train_iter)
@@ -364,10 +364,7 @@ def main():
             batch = next(train_iter)
 
         t0 = time.time()
-        enc, dec, _sources, _piece_ids = batch
-        input_ids, attention_mask, labels = make_t5_inputs(enc, dec, vocab, device)
-
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        outputs, _input_ids, _labels = forward(model, batch, vocab, device, use_evidence)
         loss = outputs.loss
 
         optimizer.zero_grad()
@@ -380,18 +377,19 @@ def main():
         losses_since_eval.append(loss_val)
         step_times.append(time.time() - t0)
 
-        log_interval = max(1, min(50, args.max_steps // 20))
+        log_interval = max(1, min(50, cfg.max_steps // 20))
         if step % log_interval == 0:
             avg_loss = float(np.mean(recent_losses[-log_interval:]))
             time_elapsed = time.time() - start_time
             steps_this_run = max(1, step - time_start_step)
             avg_elapsed_per_step = time_elapsed / steps_this_run
-            eta = format_eta(avg_elapsed_per_step * (args.max_steps - step))
-            info(f'[step {step}/{args.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
+            eta = format_eta(avg_elapsed_per_step * (cfg.max_steps - step))
+            info(f'[step {step}/{cfg.max_steps}] loss={avg_loss:.4f} ({avg_elapsed_per_step:.2f}s/step, {eta})')
+            run.log({'train/loss': avg_loss, 'train/s_per_step': avg_elapsed_per_step}, step=step)
 
         # Evaluate & Save
-        if step > 0 and step % args.checkpoint_steps == 0:
-            overall_loss, tab_acc, pitch_acc, per_src = run_eval(model, val_loader, vocab, device)
+        if step > 0 and step % cfg.checkpoint_steps == 0:
+            overall_loss, tab_acc, pitch_acc, per_src = run_eval(model, val_loader, vocab, device, use_evidence)
             info(
                 f'[eval @ step {step}] val_loss={overall_loss:.4f}  '
                 f'tab_acc={tab_acc:.3f}  pitch_acc={pitch_acc:.3f}  (teacher-forced)'
@@ -413,21 +411,22 @@ def main():
             }
             with metrics_path.open('a') as f:
                 f.write(json.dumps(metrics_record) + '\n')
+            run.log(eval_log(metrics_record), step=step)
             losses_since_eval.clear()
 
-            ckpt_dir = os.path.join(args.output_dir, 'checkpoints')
+            ckpt_dir = os.path.join(output_dir, 'checkpoints')
             os.makedirs(ckpt_dir, exist_ok=True)
             ckpt_path = os.path.join(ckpt_dir, f'step_{step:07d}.pth')
-            save_checkpoint(ckpt_path, step, model, optimizer, vocab, args)
+            save_checkpoint(ckpt_path, step, model, optimizer, vocab, cfg)
             info(f'[saved] {ckpt_path}')
 
-    final_dir = os.path.join(args.output_dir, 'checkpoints')
+    final_dir = os.path.join(output_dir, 'checkpoints')
     os.makedirs(final_dir, exist_ok=True)
     final_path = os.path.join(final_dir, f'step_{step:07d}_final.pth')
-    save_checkpoint(final_path, step, model, optimizer, vocab, args)
+    save_checkpoint(final_path, step, model, optimizer, vocab, cfg)
     info(f'\nTraining complete. Final checkpoint: {final_path}')
 
-    final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, vocab, device)
+    final_loss, final_tab, final_pitch, final_per_src = run_eval(model, val_loader, vocab, device, use_evidence)
     info(f'Final val: loss={final_loss:.4f}  tab_acc={final_tab:.3f}  pitch_acc={final_pitch:.3f}  (teacher-forced)')
     for src, m in sorted(final_per_src.items()):
         info(
@@ -441,9 +440,10 @@ def main():
         'pitch_acc_tf': final_pitch,
         'per_source': final_per_src,
     }
-    final_eval_path = Path(args.output_dir) / 'final_eval.json'
+    final_eval_path = output_dir / 'final_eval.json'
     final_eval_path.write_text(json.dumps(final_eval, indent=2))
     info(f'\nFinal eval: {final_eval_path}')
+    run.finish(eval_log(final_eval, prefix='final'))
 
 
 if __name__ == '__main__':

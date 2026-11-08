@@ -2,98 +2,92 @@
 
 ## 0. Pick a pod
 
-- **GPU**: RTX 4000 Ada (24GB VRAM) is plenty — model is 2.24M params.
-- **Disk**: ~5 GB volume + ~15 GB container is enough; defaults (30+40) are way overkill but cheap.
+- **CPU matters more than GPU.** Training is bound by data loading (~20-25 ms of tokenization per
+  sequence on one core), not by the 2.24M-param model. Pick a pod with **16+ vCPUs**; any CUDA GPU
+  works (RTX 4000 Ada / A4000 is plenty). Both runs of an experiment pair fit on one pod.
+- **Disk**: ~10 GB (the rebuilt dataset is 3.3 GB).
 - **Image**: any CUDA image; `uv sync` installs Python 3.12 and torch 2.6 from `uv.lock`.
 
 ## 1. Pack locally (Mac)
 
 ```bash
-bash scripts/stage2/setup/pack_code.sh   # → code_stage2.tar.gz (~64 KB)
-bash scripts/stage2/setup/pack_data.sh   # → data_stage2.tar.gz (~42 MB)
+bash scripts/stage2/setup/pack_code.sh   # → code_stage2.tar.gz (~200 KB): src, scripts/stage2, conf, uv.lock, VERSION, GIT_DIFF
+bash scripts/stage2/setup/pack_data.sh   # → data_stage2.tar.gz (~50 MB): processed JSONs + string-classifier outputs
 ```
 
-Both scripts use `COPYFILE_DISABLE=1 tar --no-xattrs` to avoid the macOS `._*`
-AppleDouble metadata files that otherwise pollute the tarball and break the
-JSON loader on Linux.
+The dataset itself is rebuilt on the pod (deterministic: same files, same seed, byte-identical
+JSONLs). `VERSION` and `GIT_DIFF` carry the commit and any uncommitted changes, so runs on the pod
+record the same provenance as local ones. Both scripts use `COPYFILE_DISABLE=1 tar --no-xattrs` to
+avoid macOS `._*` AppleDouble files, which break the JSON loader on Linux.
 
-Upload both tarballs to the pod (RunPod web UI or `runpodctl send`).
+Upload both tarballs to the pod (`runpodctl send`, or `scp` over the pod's SSH port).
 
 ## 2. Set up on RunPod
 
 ```bash
-# Extract
-tar xzf code_stage2.tar.gz
-tar xzf data_stage2.tar.gz
+tar xzf code_stage2.tar.gz && tar xzf data_stage2.tar.gz
 
-# Install uv, then the locked environment. uv fetches Python 3.12 itself,
-# so the pod's system Python version doesn't matter.
+# uv fetches Python 3.12 itself, so the pod's system Python version doesn't matter.
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
 uv sync --frozen
 source .venv/bin/activate
+ulimit -n 65536
 
-# Build the augmented dataset (~9 min one-time)
-python scripts/stage2/build_aug_dataset.py
+# Rebuild the player-05 split (~10 min), then compare against the Mac's checksums
+python scripts/stage2/build_aug_dataset.py --test-player 5 --output-dir data/stage2_p05
+sha256sum data/stage2_p05/*.jsonl
+
+# W&B (runs show up at forge.coreweave.com/wandb/max-dubakov/gtp)
+export WANDB_API_KEY=...
 ```
 
 ## 3. Train detached
 
-```bash
-mkdir -p runs/stage2_001
+Config lives in `conf/stage2/` (Hydra). Each run writes to `runs/stage2/<timestamp>_<name>/`
+(config.json, metrics.jsonl, provenance.json, train.log, checkpoints/) and logs to W&B.
 
-PYTHONUNBUFFERED=1 nohup python scripts/stage2/train.py \
-      --output-dir runs/stage2_002_exp1_genre \
-      --max-steps 60000 --batch-size 64 --device cuda \
-      --num-workers 4 \
-      --genre-conditioning --genre-dropout 0.10 \
-      --experiment-label "Exp 1: GENRE conditioning + 10% dropout" \
-      > runs/stage2_002_exp1_genre/train.log 2>&1 &
-disown
+```bash
+for exp in p05_baseline p05_audio; do
+  PYTHONUNBUFFERED=1 nohup python scripts/stage2/train.py experiment=$exp num_workers=6 \
+      > train_$exp.out 2>&1 &
+done
+disown -a
 ```
 
-Why these flags matter:
-- **`PYTHONUNBUFFERED=1`** — Python buffers stdout when redirected to a file (~4-8 KB). Without this, `train.log` appears empty for minutes; with it, lines flush immediately.
-- **`nohup`** — process ignores SIGHUP when SSH disconnects; survives the connection close.
-- **`& disown`** — runs in background, fully detaches from the shell's job table.
-- **`> ... 2>&1`** — redirects both stdout and stderr to the log file.
-- **`--num-workers 2`** (not 4) — fewer DataLoader workers = less IPC pressure on the container, avoids `ENOBUFS` and `SIGABRT` crashes after long runs. The script also sets `mp.set_sharing_strategy('file_system')` and `persistent_workers=True` for the same reason.
+- **`PYTHONUNBUFFERED=1`**: without it Python buffers redirected stdout and the log looks empty for minutes.
+- **`nohup` + `disown`**: the run survives the SSH session closing.
+- **`num_workers`**: data loading is the bottleneck, so more workers = faster steps (watch
+  `train/s_per_step` in W&B). Older runs hit `ENOBUFS` / `SIGABRT` with 4 workers before
+  `file_system` sharing and persistent workers were added; drop back to 2 if that returns.
 
 ## 4. Monitor
 
 ```bash
-# Live tail (Ctrl+C stops watching, doesn't kill training)
-tail -f runs/stage2_001/train.log
-
-# Confirm process alive
+tail -f runs/stage2/*_p05_audio/train.log
 ps -ef | grep "[s]tage2/train.py"
-
-# GPU activity
 nvidia-smi
 ```
 
-## 5. Stop training (if needed)
+## 5. Stop / resume
 
 ```bash
 pkill -f "scripts/stage2/train.py"
 ```
 
-To resume from the last checkpoint after a stop or crash:
+Resume into the same run dir from its last checkpoint:
 ```bash
-PYTHONUNBUFFERED=1 nohup python scripts/stage2/train.py \
-    [...same args...] \
-    --resume runs/stage2_001/step_<latest>.pth \
-    >> runs/stage2_001/train.log 2>&1 &
+RUN=runs/stage2/<timestamp>_p05_audio
+PYTHONUNBUFFERED=1 nohup python scripts/stage2/train.py experiment=p05_audio num_workers=6 \
+    hydra.run.dir=$RUN resume=$RUN/checkpoints/step_<latest>.pth >> train_p05_audio.out 2>&1 &
 disown
 ```
-(Note `>>` to append instead of overwrite.)
 
 ## 6. Pull results back
 
 ```bash
-# On RunPod
-runpodctl send runs/stage2_001/
-
-# On Mac (it'll print a one-time code)
+# On RunPod: ~540 MB per run (60 checkpoints of 9 MB); send the run dirs
+runpodctl send runs/stage2/
+# On Mac
 runpodctl receive <code>
 ```
 

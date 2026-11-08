@@ -50,10 +50,12 @@ class ConditioningConfig:
 
     `genre`: include `GENRE<X>` token. Dropped to `GENRE<unknown>`
     `genre_dropout`: Drop genre token with this rate during training
+    `evidence`: add each note's audio string distribution to its encoder embedding (EvidenceT5)
     """
 
     genre: bool = False
     genre_dropout: float = 0.0
+    evidence: bool = False
 
 
 @dataclass

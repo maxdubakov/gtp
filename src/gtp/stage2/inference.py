@@ -19,7 +19,7 @@ def load_checkpoint(path, device) -> tuple[object, Vocabulary, int, int]:
     meta = ckpt.get('tokenizer_meta', {})
     if meta.get('vocab_size') and meta['vocab_size'] != len(vocab):
         raise ValueError(f'Vocab mismatch: ckpt={meta["vocab_size"]}, current={len(vocab)}')
-    model = build_model(vocab).to(device)
+    model = build_model(vocab, evidence='evidence_proj.weight' in ckpt['model']).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
     return model, vocab, ckpt.get('iteration'), cfg.train.max_seq_len

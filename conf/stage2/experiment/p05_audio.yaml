@@ -1,0 +1,5 @@
+# @package _global_
+# Stage 2 with per-note audio string evidence on the player-05 split.
+defaults:
+  - override /evidence: audio
+name: p05_audio

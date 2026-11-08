@@ -1,0 +1,10 @@
+# Each note's audio string distribution (src/gtp/stage2/evidence.py): real for GuitarSet, simulated elsewhere.
+enabled: true
+test_player: 5
+heldin_sweep: results/strings/sweeps/nested05
+test_sweep: results/strings/sweeps/lopo
+calibrated: true
+# Training-time perturbation: piece temperature in [1/2, 2], whole-piece and per-note dropout.
+log_temperature: 0.693
+piece_drop: 0.1
+note_drop: 0.05

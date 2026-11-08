@@ -29,7 +29,10 @@ def _git(*args):
 
 
 def git_state():
-    """(HEAD sha, diff of tracked files against HEAD)."""
+    """(HEAD sha, diff of tracked files against HEAD); from VERSION / GIT_DIFF in a packed copy without .git."""
+    if not (REPO_ROOT / '.git').exists():
+        diff = REPO_ROOT / 'GIT_DIFF'
+        return (REPO_ROOT / 'VERSION').read_text().strip(), diff.read_text() if diff.exists() else ''
     return _git('rev-parse', 'HEAD').strip(), _git('diff', 'HEAD')
 
 

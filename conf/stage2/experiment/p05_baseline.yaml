@@ -1,0 +1,3 @@
+# @package _global_
+# Stage 2 without audio on the player-05 split: the control for p05_audio.
+name: p05_baseline

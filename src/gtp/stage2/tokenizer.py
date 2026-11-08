@@ -9,7 +9,9 @@ Example of decoder's output:
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import numpy as np
 
 from gtp.stage2.genres import GENRES
 
@@ -33,6 +35,8 @@ TEMPO_MAX = 240
 TEMPO_STEP = 5
 MAX_FRET = 24
 MAX_SEQ_LEN = 512
+N_STRINGS = 6
+EVIDENCE_DIM = N_STRINGS + 1  # string probabilities + "evidence present" flag
 
 
 def quantize_ticks(ticks):
@@ -54,6 +58,7 @@ def quantize_tempo(bpm):
 class Token:
     type: str
     value: str | None
+    evidence: np.ndarray | None = field(default=None, compare=False, repr=False)  # (6,) string probs of a NOTE_ON
 
     def __str__(self):
         if self.value is None:
@@ -167,19 +172,19 @@ def notes_to_encoder_tokens(notes, tempo, tuning=None, capo=0, genre=None):
     for note in notes:
         on_tick = round(note['start'] * ticks_per_sec)
         off_tick = round(note['end'] * ticks_per_sec)
-        events.append((on_tick, NOTE_ON, note['pitch']))
-        events.append((off_tick, NOTE_OFF, note['pitch']))
+        events.append((on_tick, NOTE_ON, note['pitch'], note.get('evidence')))
+        events.append((off_tick, NOTE_OFF, note['pitch'], None))
 
     # NOTE_OFF before NOTE_ON at the same tick so previous notes release before new ones start.
     events.sort(key=lambda e: (e[0], 0 if e[1] == NOTE_OFF else 1, e[2]))
 
     current_tick = 0
-    for tick, event_type, pitch in events:
+    for tick, event_type, pitch, evidence in events:
         delta = tick - current_tick
         if delta > 0:
             tokens.extend(_emit_time_shifts(delta))
             current_tick = tick
-        tokens.append(Token(event_type, str(pitch)))
+        tokens.append(Token(event_type, str(pitch), evidence))
 
     return tokens
 
@@ -245,11 +250,22 @@ def _emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab):
     return ids
 
 
-def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len: int = MAX_SEQ_LEN, genre_override=None):
+def _emit_enc_evidence(enc_tokens, enc_start, enc_end, n_prefix):
+    """(len(encoder ids), EVIDENCE_DIM) rows aligned with _emit_enc_ids; zero where a token has no evidence."""
+    rows = np.zeros((n_prefix + enc_end - enc_start + 1, EVIDENCE_DIM), dtype=np.float32)
+    for i, t in enumerate(enc_tokens[enc_start:enc_end], start=n_prefix):
+        if t.evidence is not None:
+            rows[i, :N_STRINGS] = t.evidence
+            rows[i, N_STRINGS] = 1.0
+    return rows
+
+
+def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len: int = MAX_SEQ_LEN, genre_override=None, with_evidence=False):
     """Tokenize a full piece into aligned (encoder, decoder) sub-sequence pairs for training.
 
-    Returns list of (encoder_ids, decoder_ids) tuples. Sub-sequences are split at
-    note boundaries; each fits within max_seq_len on both encoder and decoder side.
+    Returns list of (encoder_ids, decoder_ids) tuples, or (encoder_ids, decoder_ids, encoder_evidence)
+    with `with_evidence`, where notes may carry an 'evidence' (6,) string distribution. Sub-sequences
+    are split at note boundaries; each fits within max_seq_len on both encoder and decoder side.
     """
     notes, tempo, enc_tokens, note_boundaries_enc, prefix_ids = _encoder_prep(data, vocab, genre_override)
     tempo_for_decoder = tempo if tempo is not None else 120
@@ -297,7 +313,10 @@ def tokenize_piece(data, vocab: 'Vocabulary', max_seq_len: int = MAX_SEQ_LEN, ge
 
         enc_ids = _emit_enc_ids(enc_tokens, enc_start, enc_end, prefix_ids, vocab)
         dec_ids = [vocab.encode(t) for t in dec_tokens[dec_start:dec_end]] + [vocab.eos_id]
-        sequences.append((enc_ids, dec_ids))
+        if with_evidence:
+            sequences.append((enc_ids, dec_ids, _emit_enc_evidence(enc_tokens, enc_start, enc_end, len(prefix_ids))))
+        else:
+            sequences.append((enc_ids, dec_ids))
         note_idx += notes_in_seq
 
     return sequences
