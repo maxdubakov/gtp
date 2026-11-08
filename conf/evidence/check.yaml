@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: evidence_check
+test_player: 5
+# Classifiers that never saw test_player give the evidence for every other player (Stage 2 train and val).
+heldin_sweep: results/strings/sweeps/nested05
+# The leave-one-player-out classifiers give the test player's evidence.
+test_sweep: results/strings/sweeps/lopo
+data_dir: data/stage2_p05
+calibrated: true
+dadagp_pieces: 3000
+seed: 0
+wandb:
+  project: gtp
+  entity: null
+  mode: online
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/evidence/runs/${now:%Y-%m-%d_%H-%M-%S}_check

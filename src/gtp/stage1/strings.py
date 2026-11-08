@@ -126,10 +126,16 @@ def note_windows(spec, onsets):
     return np.stack([padded[:, :, s + pad : s + pad + WINDOW_FRAMES] for s in starts])
 
 
-def split_players(test_player):
-    """Leave-one-player-out fold: `test_player` is test, the previous player (cyclically) is val."""
-    test, val = PLAYERS[test_player], PLAYERS[test_player - 1]
-    return {'train': tuple(p for p in PLAYERS if p not in (test, val)), 'val': (val,), 'test': (test,)}
+def split_players(test_player, exclude=()):
+    """Leave-one-player-out fold: `test_player` is test, the previous remaining player (cyclically) is val.
+
+    `exclude` players are left out of every split (e.g. a downstream model's test player).
+    """
+    test = PLAYERS[test_player]
+    kept = [p for i, p in enumerate(PLAYERS) if i not in exclude]
+    assert test in kept, (test_player, exclude)
+    val = kept[kept.index(test) - 1]
+    return {'train': tuple(p for p in kept if p not in (test, val)), 'val': (val,), 'test': (test,)}
 
 
 def post_frames(window_ms):
@@ -251,7 +257,7 @@ class StringClassifier:
         notes = load_notes()
         n_frames = PRE_FRAMES + post_frames(cfg.data.window_ms)
         cache, _ = load_cache(cfg.data.source, cfg.data.feature, len(notes.pitch))
-        train_mask = notes.split_mask(split_players(cfg.test_player)['train'])
+        train_mask = notes.split_mask(split_players(cfg.test_player, cfg.get('exclude_players', ()))['train'])
         mean, std = freq_stats(cache[..., :n_frames], np.flatnonzero(train_mask))
         model = instantiate(cfg.model, in_channels=cache.shape[1], n_freq=cache.shape[2], n_frames=n_frames)
         model.load_state_dict(torch.load(Path(run_dir) / 'model.pt', map_location='cpu'))

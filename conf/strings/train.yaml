@@ -9,6 +9,7 @@ defaults:
 
 name: adhoc
 test_player: 5
+exclude_players: []
 seed: 0
 
 hydra:

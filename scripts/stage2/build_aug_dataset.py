@@ -7,6 +7,7 @@ import random
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from gtp.stage1.strings import split_players
 from gtp.stage2.config import get_git_sha, get_timestamp
 from gtp.stage2.data import (
     MIN_NOTES_PER_PIECE,
@@ -139,6 +140,18 @@ def stratified_split(pieces, train_ratio=0.90, val_ratio=0.05, seed=42):
     return train, val, test
 
 
+def split_guitarset_by_player(train, val, test, test_player):
+    """Re-split GuitarSet pieces by player (the string classifier's fold); other sources keep their split."""
+    players = split_players(test_player)
+    by_split = {name: [] for name in players}
+    for piece in train + val + test:
+        if piece['source'] == 'guitarset':
+            player = piece['filename'][:2]
+            by_split[next(name for name, ps in players.items() if player in ps)].append(piece)
+    others = [[p for p in split if p['source'] != 'guitarset'] for split in (train, val, test)]
+    return [o + by_split[name] for o, name in zip(others, ('train', 'val', 'test'), strict=True)]
+
+
 def expand_capo(piece, capos=CAPO_RANGE):
     """Generate capo variants of a piece (augmentation)
 
@@ -232,6 +245,12 @@ def main():
         help='Add a number of GENRE tokens to the encoder prefix to condition on. See genre.py for more info',
     )
     ap.add_argument('--seed', type=int, default=42)
+    ap.add_argument(
+        '--test-player',
+        type=int,
+        default=None,
+        help='Split GuitarSet by player: this player is test (at its recorded capo), the previous one is val',
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -247,6 +266,14 @@ def main():
         val_ratio=args.val_ratio,
         seed=args.seed,
     )
+    test_variants = list(rotate_capo(test_pieces))
+    if args.test_player is not None:
+        train_pieces, val_pieces, test_pieces = split_guitarset_by_player(
+            train_pieces, val_pieces, test_pieces, args.test_player
+        )
+        # Rotated before the re-split so other sources keep their test capos; GuitarSet keeps the recorded one.
+        test_variants = [p for p in test_variants if p['source'] != 'guitarset']
+        test_variants += [p for p in test_pieces if p['source'] == 'guitarset']
     print(f'Pre-augmented counts: train={len(train_pieces)}  val={len(val_pieces)}  test={len(test_pieces)}')
     print('Expanding capo variants and annotating sub-sequence counts...')
     train_path = out_dir / 'train.jsonl'
@@ -265,7 +292,7 @@ def main():
     )
     n_test = write_jsonl(
         test_path,
-        annotate_with_subseqs(rotate_capo(test_pieces), test_stats, vocab),
+        annotate_with_subseqs(test_variants, test_stats, vocab),
     )
 
     print('\nWrote (post-capo-aug):')
@@ -294,6 +321,7 @@ def main():
         'max_time_shift': MAX_TIME_SHIFT,
         'capo_range': [CAPO_RANGE.start, CAPO_RANGE.stop],
         'split_seed': args.seed,
+        'test_player': args.test_player,
         'train_ratio': args.train_ratio,
         'val_ratio': args.val_ratio,
         'git_sha': get_git_sha(),

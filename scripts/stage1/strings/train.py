@@ -74,7 +74,7 @@ def main(cfg):
     n_frames = PRE_FRAMES + post_frames(cfg.data.window_ms)
     cache, cache_meta = load_cache(cfg.data.source, cfg.data.feature, len(notes.pitch))
     x = np.ascontiguousarray(cache[..., :n_frames])
-    players = split_players(cfg.test_player)
+    players = split_players(cfg.test_player, cfg.exclude_players)
     split = {s: np.flatnonzero(notes.split_mask(p)) for s, p in players.items()}
     run = start_run(cfg, job_type='strings', device=device, extra={'cache': cache_meta, 'players': players})
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')

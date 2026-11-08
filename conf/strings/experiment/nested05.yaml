@@ -1,0 +1,9 @@
+# @package _global_
+# Out-of-fold string distributions for Stage 2's training players, from classifiers that never saw player 05.
+name: nested05
+exclude_players: [5]
+hydra:
+  sweeper:
+    params:
+      test_player: 0,1,2,3,4
+      seed: 0,1,2
