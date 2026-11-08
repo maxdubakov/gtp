@@ -25,7 +25,12 @@ Upload both tarballs to the pod (`runpodctl send`, or `scp` over the pod's SSH p
 ## 2. Set up on RunPod
 
 ```bash
-tar xzf code_stage2.tar.gz && tar xzf data_stage2.tar.gz
+# Repo on the container disk: the /workspace network volume refuses chown and some DadaGP filenames
+# ("Invalid argument"). Run outputs go to the volume through a symlink so checkpoints survive restarts.
+mkdir -p /root/gtp /workspace/runs && cd /root/gtp
+tar xzf /workspace/code_stage2.tar.gz --no-same-owner
+tar xzf /workspace/data_stage2.tar.gz --no-same-owner
+ln -s /workspace/runs runs
 
 # uv fetches Python 3.12 itself, so the pod's system Python version doesn't matter.
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env

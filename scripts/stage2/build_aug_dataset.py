@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import random
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -64,7 +65,8 @@ def load_all_pieces():
             'filter_reasons': Counter(),
         }
 
-        for f in sorted(os.listdir(path)):
+        # NFC: macOS tar stores names decomposed, so a pod's copy would otherwise sort and label differently.
+        for f in sorted(os.listdir(path), key=lambda name: unicodedata.normalize('NFC', name)):
             if not f.endswith('.json') or f.startswith('._'):
                 continue
             with open(path / f, encoding='utf-8', errors='replace') as fh:
@@ -84,7 +86,7 @@ def load_all_pieces():
             pieces.append(
                 {
                     'source': name,
-                    'filename': f,
+                    'filename': unicodedata.normalize('NFC', f),
                     'tuning': tuning,
                     'tempo': data.get('tempo', 120),
                     'capo': data.get('capo', 0),
