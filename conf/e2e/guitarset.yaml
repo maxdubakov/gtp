@@ -4,10 +4,15 @@ defaults:
 
 name: e2e_guitarset
 test_player: 5
+# Stage 2's split: its train tracks define the `clean` subset (all of test_player's tracks for data/stage2_p05).
+data_dir: data/stage2_p05
 stage1_checkpoint: models/finetuned/step_0070000_final.pth
-stage2_checkpoint: runs/stage2_baseline/checkpoints/step_0060000_final.pth
+stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
+# Stage 2 trained with audio evidence in its encoder (null to skip).
+evidence_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_audio/checkpoints/step_0060000_final.pth
 strings_sweep: results/strings/sweeps/lopo
 inputs: [stage1, gt]
+# Decode-time fusion weight for stage2_checkpoint (pick it on val with string_fusion.py).
 lam: 1.0
 onset_tolerance: 0.05
 prob_floor: 1.0e-4

@@ -3,12 +3,13 @@
 For every track of `test_player`:
   1. stage 1 transcribes the mic audio into notes (or the ground-truth notes are used, `inputs: gt`);
   2. the leave-one-player-out string classifiers for that player (one per seed) score each note;
-  3. stage 2 picks each note's string, alone (lam 0) and fused with the audio (lam = cfg.lam).
+  3. stage 2 picks each note's string, alone (lam 0) and fused with the audio (lam = cfg.lam);
+     a stage 2 trained with audio evidence (evidence_checkpoint) reads it in its encoder instead.
 Predicted notes are matched to the reference with mir_eval (onset tolerance, no offset). A tab
 note is correct when it is matched and its string (hence fret) is right; Tab P/R/F1 count those.
 
-Stage 2's split is by piece, so it trained on the tabs of most of this player's tracks; the
-`clean` subset keeps only tracks absent from its training set.
+The `clean` subset keeps only tracks absent from Stage 2's training set (data_dir); with a
+player split that is every track.
 
 Usage:
   uv run scripts/e2e/guitarset.py
@@ -31,15 +32,15 @@ from gtp.log import info
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
 from gtp.stage1.strings import GUITARSET_DIR, PLAYERS, SOURCES, StringClassifier, load_audio, spectrogram
+from gtp.stage2.evidence import restrict
 from gtp.stage2.fusion import decode_structured, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
-from gtp.stage2.paths import AUG_DATA_DIR
 from gtp.track import start_run
 
 
-def stage2_train_tracks():
+def stage2_train_tracks(data_dir):
     tracks = set()
-    with open(AUG_DATA_DIR / 'train.jsonl') as fh:
+    with open(REPO_ROOT / data_dir / 'train.jsonl') as fh:
         for line in fh:
             if '"source": "guitarset"' in line[:200]:
                 tracks.add(json.loads(line)['filename'].removesuffix('.json'))
@@ -94,8 +95,9 @@ def summarize(c, d, source, subset, methods, seeds):
         tp = (matched[m] == matched.ref_string).sum()
         row[f'{m}_string_acc'] = tp / max(len(matched), 1)
         row[f'{m}_tab_f1'] = prf(tp, row['est'], row['ref'])[2]
+    groups = sorted({m.rsplit('_s', 1)[0] for m in methods if '_s' in m})
     for kind in ('string_acc', 'tab_f1'):
-        for group in ('audio', 'fused'):
+        for group in groups:
             vals = [row[f'{group}_s{s}_{kind}'] for s in seeds]
             row[f'{group}_{kind}'], row[f'{group}_{kind}_std'] = np.mean(vals), np.std(vals, ddof=1)
     return row
@@ -105,8 +107,12 @@ def summarize(c, d, source, subset, methods, seeds):
 def main(cfg):
     device = auto_device()
     stage2, vocab, step, max_seq_len = load_checkpoint(REPO_ROOT / cfg.stage2_checkpoint, device)
+    evidence_model = None
+    if cfg.evidence_checkpoint:
+        evidence_model, _, ev_step, ev_max_seq_len = load_checkpoint(REPO_ROOT / cfg.evidence_checkpoint, device)
+        assert hasattr(evidence_model, 'embed'), f'{cfg.evidence_checkpoint} was not trained with evidence'
     clf_runs = classifier_runs(cfg.strings_sweep, cfg.test_player)
-    seen = stage2_train_tracks()
+    seen = stage2_train_tracks(cfg.data_dir)
     player = PLAYERS[cfg.test_player]
     tracks = sorted(p.stem for p in (GUITARSET_DIR / 'processed').glob(f'{player}_*.json'))
     run = start_run(
@@ -155,7 +161,9 @@ def main(cfg):
                 [c.predict(spec, [n['start'] for n in ordered], [n['pitch'] for n in ordered]) for c in classifiers],
                 axis=1,
             )
-            prior = classifiers[0].prior([n['pitch'] for n in ordered])
+            pitches = [n['pitch'] for n in ordered]
+            prior = classifiers[0].prior(pitches)
+            evidence = np.stack([restrict(probs[:, s], pitches, gt['tuning']) for s in seeds])
             note_ids, ratios = [], []
             for n, p, q in zip(ordered, probs, prior, strict=True):
                 strings, _ = valid_tabs(n['pitch'], gt['tuning'], vocab)
@@ -172,12 +180,19 @@ def main(cfg):
                     record[f'audio_s{s}'] = int(strings[p[s, strings - 1].argmax()]) if has_audio else None
                 note_ids.append(len(table))
                 ratios.append(log_ratio(p, q, strings, cfg.prob_floor) if has_audio else None)
+                if not has_audio:
+                    evidence[:, len(note_ids) - 1] = np.nan
                 table.append(record)
             track_rows.append(
                 {
                     'input': source,
                     'track': track,
                     'rows': piece_rows(piece, vocab, max_seq_len, note_ids, ratios),
+                    'evidence_rows': [
+                        piece_rows(piece, vocab, ev_max_seq_len, note_ids, ratios, evidence[s]) for s in seeds
+                    ]
+                    if evidence_model
+                    else None,
                     'n_ref': len(gt['notes']),
                     'n_est': len(est),
                     'n_matched': len(pairs),
@@ -188,6 +203,7 @@ def main(cfg):
             f'{track}: {len(gt["notes"])} ref, '
             + ', '.join(f'{r["input"]} {r["n_est"]} est {r["n_matched"]} matched' for r in done)
         )
+    info(f'stage 2 step {step}' + (f', evidence model step {ev_step}' if evidence_model else ''))
 
     df = pd.DataFrame(table)
     rows = [row for t in track_rows for row in t['rows']]
@@ -195,8 +211,13 @@ def main(cfg):
     for s in seeds:
         df[f'fused_s{s}'] = pd.Series(decode_structured(stage2, rows, device, cfg.batch, cfg.lam, s))
     methods = ['stage2', *[f'audio_s{s}' for s in seeds], *[f'fused_s{s}' for s in seeds]]
+    if evidence_model:
+        for s in seeds:
+            ev_rows = [row for t in track_rows for row in t['evidence_rows'][s]]
+            df[f'evidence_s{s}'] = pd.Series(decode_structured(evidence_model, ev_rows, device, cfg.batch))
+        methods += [f'evidence_s{s}' for s in seeds]
 
-    counts = pd.DataFrame([{k: v for k, v in t.items() if k != 'rows'} for t in track_rows])
+    counts = pd.DataFrame([{k: v for k, v in t.items() if k not in ('rows', 'evidence_rows')} for t in track_rows])
     counts['clean'] = ~counts.track.isin(seen)
     df['clean'] = ~df.track.isin(seen)
     summary = []
@@ -208,7 +229,8 @@ def main(cfg):
             summary.append(summarize(c, d, source, subset, methods, seeds))
     summary = pd.DataFrame(summary)
     cols = ['input', 'subset', 'tracks', 'ref', 'est', 'note_f1']
-    cols += [f'{m}_{k}' for k in ('string_acc', 'tab_f1') for m in ('stage2', 'audio', 'fused')]
+    groups = ['stage2', 'audio', 'fused'] + (['evidence'] if evidence_model else [])
+    cols += [f'{m}_{k}' for k in ('string_acc', 'tab_f1') for m in groups]
     info(f'\n{summary[cols].round(4).to_string(index=False)}')
 
     df.to_csv(run.dir / 'notes.csv.gz', index=False)

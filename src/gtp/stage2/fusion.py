@@ -5,6 +5,8 @@ both fixed by the input notes), so it only chooses each note's string among pitc
 tokens. The choice is rescored with an audio string distribution:
 
     score(s) = log p_stage2(TAB<s, f_s>) + lam * (log p_audio(s) - log p_prior(s))
+
+An EvidenceT5 also reads the audio distribution in its encoder (Row.evidence).
 """
 
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from gtp.stage2.tokenizer import MAX_FRET, TAB, Token, tokenize_piece
+from gtp.stage2.tokenizer import EVIDENCE_DIM, MAX_FRET, TAB, Token, tokenize_piece
 
 
 @dataclass
@@ -30,6 +32,7 @@ class Row:
     dec: list[int]
     tuning: list[int]
     slots: dict[int, Slot]  # decoder position -> slot
+    evidence: np.ndarray | None = None  # (len(enc), EVIDENCE_DIM) encoder evidence for an EvidenceT5
 
 
 def sorted_notes(piece):
@@ -53,11 +56,17 @@ def log_ratio(audio, prior, strings, floor):
     return np.log(floored(audio[:, strings - 1], floor)) - np.log(floored(prior[strings - 1], floor))[None]
 
 
-def piece_rows(piece, vocab, max_seq_len, note_ids, log_ratios):
-    """Decoder rows for one piece; `note_ids` and `log_ratios` align with sorted_notes(piece)."""
+def piece_rows(piece, vocab, max_seq_len, note_ids, log_ratios, evidence=None):
+    """Decoder rows for one piece; `note_ids`, `log_ratios` and `evidence` align with sorted_notes(piece).
+
+    `evidence`: (n_notes, 6) string distributions (NaN rows for none) for an EvidenceT5's encoder.
+    """
     notes, tuning = sorted_notes(piece), piece['tuning']
+    if evidence is not None:
+        notes = [{**n, 'evidence': None if np.isnan(e[0]) else e} for n, e in zip(notes, evidence, strict=True)]
+        piece = {**piece, 'notes': notes}
     rows, k = [], 0
-    for enc, dec in tokenize_piece(piece, vocab, max_seq_len=max_seq_len):
+    for enc, dec, *ev in tokenize_piece(piece, vocab, max_seq_len=max_seq_len, with_evidence=evidence is not None):
         slots = {}
         for t, tid in enumerate(dec):
             if not vocab.decode(tid).startswith(TAB):
@@ -66,7 +75,7 @@ def piece_rows(piece, vocab, max_seq_len, note_ids, log_ratios):
             assert tid in token_ids, (piece.get('filename'), notes[k])
             slots[t] = Slot(note_ids[k], token_ids, strings, log_ratios[k])
             k += 1
-        rows.append(Row(enc, dec, tuning, slots))
+        rows.append(Row(enc, dec, tuning, slots, ev[0] if ev else None))
     assert k == len(notes), (piece.get('filename'), k, len(notes))
     return rows
 
@@ -85,7 +94,14 @@ def decode_structured(model, rows, device, batch, lam=0.0, seed_idx=0):
     for i in range(0, len(rows), batch):
         chunk = rows[i : i + batch]
         input_ids, mask = padded([r.enc for r in chunk], pad, device)
-        encoder_outputs = model.get_encoder()(input_ids=input_ids, attention_mask=mask)
+        if chunk[0].evidence is None:
+            encoder_outputs = model.get_encoder()(input_ids=input_ids, attention_mask=mask)
+        else:
+            evidence = torch.zeros(*input_ids.shape, EVIDENCE_DIM, device=device)
+            for b, r in enumerate(chunk):
+                evidence[b, : len(r.evidence)] = torch.from_numpy(r.evidence)
+            embeds = model.embed(input_ids, evidence)
+            encoder_outputs = model.get_encoder()(inputs_embeds=embeds, attention_mask=mask)
         cur = torch.full((len(chunk), 1), pad, device=device)
         past = None
         for t in range(max(len(r.dec) for r in chunk)):

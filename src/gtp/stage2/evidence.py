@@ -176,10 +176,17 @@ def with_evidence(piece, evidence: StringEvidence, rng, perturbation: Perturbati
 
 def load_evidence(cfg):
     """StringEvidence from an evidence config: real outputs for every player, donors from Stage 2's train players."""
+    runs = evidence_runs(cfg)
+    train_players = split_players(cfg.test_player)['train']
+    donors = {k: v for k, v in runs.items() if k[0] in train_players}
+    return StringEvidence(Pool.load(runs, cfg.calibrated), Pool.load(donors, cfg.calibrated))
+
+
+def evidence_runs(cfg):
+    """{(player, seed): run_dir}: classifiers that never saw `test_player` for every other player, and the
+    leave-one-player-out classifiers for `test_player` itself."""
     test = PLAYERS[cfg.test_player]
     heldin = sweep_runs(cfg.heldin_sweep)
     test_runs = {k: v for k, v in sweep_runs(cfg.test_sweep).items() if k[0] == test}
     assert test_runs and not any(p == test for p, _ in heldin), (sorted(heldin), sorted(test_runs))
-    train_players = split_players(cfg.test_player)['train']
-    donors = {k: v for k, v in heldin.items() if k[0] in train_players}
-    return StringEvidence(Pool.load({**heldin, **test_runs}, cfg.calibrated), Pool.load(donors, cfg.calibrated))
+    return {**heldin, **test_runs}

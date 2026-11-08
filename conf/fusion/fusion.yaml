@@ -2,12 +2,28 @@ defaults:
   - _self_
   - override hydra/job_logging: none
 
-name: fusion
-checkpoint: runs/stage2_baseline/checkpoints/step_0060000_final.pth
-strings_sweep: results/strings/sweeps/lopo
-calibrated: true
+name: fusion_p05
+data_dir: data/stage2_p05
 splits: [val, test]
-lambdas: [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+# GuitarSet audio exists only at the recorded capo; the other capo variants would reuse it.
+capo0_only: true
+models:
+  baseline:
+    checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
+    lambdas: [0.0, 0.5, 1.0, 1.5, 2.0]
+  audio:
+    checkpoint: runs/stage2/2026-11-08_11-58-31_p05_audio/checkpoints/step_0060000_final.pth
+    lambdas: [0.0, 0.5, 1.0]
+# Paired gains (method a - method b) with piece-bootstrap CIs; <model>_best is its val-selected lam.
+comparisons:
+  audio_vs_baseline: [audio_lam0, baseline_lam0]
+  audio_vs_fusion: [audio_lam0, baseline_best]
+  fusion_vs_baseline: [baseline_best, baseline_lam0]
+evidence:
+  test_player: 5
+  heldin_sweep: results/strings/sweeps/nested05
+  test_sweep: results/strings/sweeps/lopo
+  calibrated: true
 seeds: [0, 1, 2]
 batch: 64
 prob_floor: 1.0e-4
