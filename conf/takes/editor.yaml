@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+takes_dir: data/takes
+host: 127.0.0.1
+port: 8765
+
+# A server writes nothing but take files: no Hydra run dir or saved config.
+hydra:
+  output_subdir: null
+  run:
+    dir: .

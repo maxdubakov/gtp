@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GTP takes</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/editor.css">
+</head>
+<body>
+  <main id="list-view" hidden>
+    <h1>Takes</h1>
+    <p class="hint">Recorded with <code>uv run scripts/demo.py</code>; folders under the editor's <code>takes_dir</code>.</p>
+    <table id="take-table">
+      <thead>
+        <tr><th>Take</th><th>Recorded</th><th>Guitar</th><th>Input</th><th>Status</th><th>Notes</th><th>Edited</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </main>
+
+  <main id="take-view" hidden>
+    <div id="toolbar">
+      <a href="#/" id="back">&larr; Takes</a>
+      <strong id="take-title"></strong>
+      <span class="group">
+        <button id="play" title="Play / pause (Space)">&#9654;</button>
+        <select id="rate" title="Playback speed">
+          <option value="0.5">0.5&times;</option>
+          <option value="0.75">0.75&times;</option>
+          <option value="1" selected>1&times;</option>
+        </select>
+        <button id="loop" title="Loop the selected region (L); drag on the waveform to select one">Loop</button>
+        <span id="time" class="mono"></span>
+      </span>
+      <span class="group">
+        <label title="Recording volume">Audio <input type="range" id="vol-audio" min="0" max="1" step="0.05" value="1"></label>
+        <label title="Synth playback of the edited tab (T switches audio / tab / both)">Tab <input type="range" id="vol-tab" min="0" max="1" step="0.05" value="0"></label>
+      </span>
+      <span class="group">
+        <button id="zoom-out" title="Zoom out (Ctrl/Cmd + wheel)">&minus;</button>
+        <button id="zoom-in" title="Zoom in (Ctrl/Cmd + wheel)">+</button>
+        <label><input type="checkbox" id="follow" checked> Follow</label>
+        <label title="Show the prediction under changed and deleted notes (G)"><input type="checkbox" id="ghost" checked> Prediction</label>
+      </span>
+      <span class="group">
+        <button id="undo" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+        <button id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">Redo</button>
+      </span>
+      <span class="group right">
+        <span id="counts"></span>
+        <select id="status" title="Verified = the whole take is checked; only verified takes count as ground truth">
+          <option value="draft">draft</option>
+          <option value="verified">verified</option>
+        </select>
+        <button id="save" title="Save edited.json (Ctrl/Cmd+S)">Save</button>
+        <span id="dirty"></span>
+      </span>
+    </div>
+
+    <canvas id="canvas" tabindex="0"></canvas>
+    <div id="hscroll"><div id="hspacer"></div></div>
+    <div id="message"></div>
+
+    <div id="panels">
+      <section id="note-panel">
+        <h2>Selected note</h2>
+        <div id="note-info" class="hint">Click a note or press &rarr;.</div>
+        <table id="evidence"></table>
+      </section>
+      <section id="keys">
+        <h2>Keys</h2>
+        <dl>
+          <dt>Space</dt><dd>play / pause</dd>
+          <dt>&larr; &rarr;</dt><dd>previous / next note</dd>
+          <dt>0&ndash;9</dt><dd>type the fret (same string, so the pitch changes)</dd>
+          <dt>&uarr; &darr;</dt><dd>move to the string above / below, same pitch</dd>
+          <dt>Shift+&uarr; &darr;, + &minus;</dt><dd>pitch up / down a semitone on the same string</dd>
+          <dt>Alt+&larr; &rarr;</dt><dd>nudge the onset 10 ms (with Shift: 50 ms)</dd>
+          <dt>Delete</dt><dd>delete the note</dd>
+          <dt>A, double-click</dt><dd>add a note at the playhead / at the clicked spot</dd>
+          <dt>R</dt><dd>revert the note (or a ghosted deleted one) to the prediction</dd>
+          <dt>P, O</dt><dd>hear the note on the synth / play the recording from it</dd>
+          <dt>L, drag on waveform</dt><dd>loop on / off, select the loop region</dd>
+          <dt>T, G</dt><dd>audio / tab / both; show the prediction</dd>
+          <dt>Ctrl/Cmd+Z, +Shift</dt><dd>undo, redo</dd>
+          <dt>Ctrl/Cmd+S</dt><dd>save</dd>
+        </dl>
+      </section>
+      <section id="meta-panel">
+        <h2>Recording</h2>
+        <form id="meta-form"></form>
+        <button id="meta-save">Save recording info</button>
+        <span id="meta-status" class="hint"></span>
+      </section>
+    </div>
+  </main>
+  <script src="/editor.js"></script>
+</body>
+</html>

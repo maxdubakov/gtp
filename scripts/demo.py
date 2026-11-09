@@ -3,12 +3,17 @@
 A Stage 2 trained with audio evidence also gets the string classifier's per-note
 distributions from the recording, and decodes along the skeleton fixed by the notes.
 
+Every run also writes a take folder (data/takes/<take_id>/, see gtp.takes) that the tab editor
+opens: scripts/takes/editor.py.
+
 Usage:
   python scripts/demo.py                           # record 10s, run pipeline
   python scripts/demo.py --duration 15
   python scripts/demo.py --audio path/to/take.wav  # skip recording
   python scripts/demo.py --capo 3 --tuning 64 59 55 50 45 38
   python scripts/demo.py --no-evidence             # evidence model without the classifier
+  python scripts/demo.py --slug strat-clean        # take id 20261109_101500_strat-clean
+  python scripts/demo.py --audio old.wav --take-id 20260917_095751  # take from an existing recording
 
 Requires `sounddevice` for the recording path:
   pip install sounddevice
@@ -27,7 +32,7 @@ import soundfile as sf
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
-from gtp import REPO_ROOT
+from gtp import REPO_ROOT, takes
 from gtp.device import auto_device
 from gtp.stage1 import strings
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
@@ -43,6 +48,7 @@ from gtp.stage2.inference import (
 from gtp.stage2.metrics import difficulty_score
 from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import tokenize_piece_for_inference
+from gtp.track import git_state
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
 STAGE2_DEFAULT = (
@@ -50,6 +56,7 @@ STAGE2_DEFAULT = (
 )
 STRINGS_SWEEP_DEFAULT = 'results/strings/sweeps/lopo'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
+DEFAULT_TAKES_DIR = REPO_ROOT / 'data' / 'takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
 SR = 44100
 
@@ -86,6 +93,12 @@ def record_with_retry(duration, sr=SR):
             sys.exit(0)
 
 
+def input_device_name():
+    import sounddevice as sd
+
+    return sd.query_devices(kind='input')['name']
+
+
 # ---------------------------------------------------------------------------
 # Stage 1 + 2 chain
 # ---------------------------------------------------------------------------
@@ -103,7 +116,12 @@ def stage1(audio, checkpoint, device):
 def notes_to_piece(note_events, tuning, capo, tempo, genre=UNKNOWN):
     notes = sorted(
         (
-            {'pitch': int(e['midi_note']), 'start': float(e['onset_time']), 'end': float(e['offset_time'])}
+            {
+                'pitch': int(e['midi_note']),
+                'start': float(e['onset_time']),
+                'end': float(e['offset_time']),
+                'velocity': int(e['velocity']),
+            }
             for e in note_events
         ),
         key=lambda n: (n['start'], n['pitch']),
@@ -168,7 +186,8 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
 
 
 def string_evidence(audio, piece, sweep, test_player, device):
-    """(n_notes, 6) classifier string distributions for sorted_notes(piece), averaged over the fold's seeds."""
+    """(n_notes, 6) classifier string distributions for sorted_notes(piece), averaged over the fold's seeds,
+    and the classifier runs used."""
     player = strings.PLAYERS[test_player]
     runs = [run for (p, _), run in sorted(sweep_runs(sweep).items()) if p == player]
     print(f'String classifier: {len(runs)} seeds of the fold holding out player {player}...')
@@ -178,7 +197,7 @@ def string_evidence(audio, piece, sweep, test_player, device):
     notes = sorted_notes(piece)
     onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
     probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
-    return restrict(probs, pitches, piece['tuning'])
+    return restrict(probs, pitches, piece['tuning']), runs
 
 
 def stage2_evidence(piece, model, vocab, max_seq_len, evidence, device):
@@ -388,6 +407,25 @@ def write_pdf_tab(ascii_tab, header, path, lines_per_page=42, line_width_chars=8
             pdf.savefig(fig)
 
 
+def repo_relative(path):
+    path = Path(path).resolve()
+    return str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
+
+
+def write_take(args, take_id, audio, sr, tuning, placed, unplaced, pipeline):
+    """Take folder for the editor: `placed` notes carry string/fret/evidence, `unplaced` got no tab."""
+    prediction = takes.prediction_doc(take_id, placed, tuning, args.capo, args.tempo, pipeline, unplaced)
+    meta = {
+        'input_device': '' if args.audio else input_device_name(),
+        'capo': str(args.capo),
+        'tuning_name': 'standard' if args.tuning == STD_TUNING else ' '.join(map(str, args.tuning)),
+        'style': '' if args.genre == UNKNOWN else args.genre,
+        'source': repo_relative(args.audio) if args.audio else 'mic',
+    }
+    d = takes.create(args.takes_dir, take_id, audio, sr, prediction, meta)
+    print(f'Wrote take: {d} ({len(placed)} notes, {len(unplaced)} without a tab)')
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -398,6 +436,9 @@ def main():
     ap.add_argument('--duration', type=int, default=10, help='Recording length in seconds')
     ap.add_argument('--audio', default=None, help='Audio file path (skips mic recording)')
     ap.add_argument('--output-dir', default=str(DEFAULT_OUT_DIR))
+    ap.add_argument('--takes-dir', default=str(DEFAULT_TAKES_DIR), help='Root of the take folders for the editor')
+    ap.add_argument('--take-id', default=None, help='Take folder name (default: timestamp, plus --slug)')
+    ap.add_argument('--slug', default=None, help='Suffix for the default take id, e.g. the guitar')
     ap.add_argument('--stage1-checkpoint', default=str(STAGE1_DEFAULT))
     ap.add_argument('--stage2-checkpoint', default=str(STAGE2_DEFAULT))
     ap.add_argument('--strings-sweep', default=STRINGS_SWEEP_DEFAULT, help='String-classifier sweep (evidence model)')
@@ -450,23 +491,47 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     stem = f'take_{stamp}'
+    take_id = args.take_id or takes.new_take_id(args.slug)
+    if takes.take_dir(args.takes_dir, take_id).exists():
+        sys.exit(f'Take {take_id} already exists in {args.takes_dir}')
 
     # 1) Audio
     if args.audio:
         print(f'Loading audio: {args.audio}')
-        audio, _ = librosa.load(args.audio, sr=SR, mono=True)
+        captured, captured_sr = librosa.load(args.audio, sr=None, mono=True)
+        audio = librosa.resample(captured, orig_sr=captured_sr, target_sr=SR) if captured_sr != SR else captured
         print(f'  duration={len(audio) / SR:.2f}s')
     else:
         audio = record_with_retry(args.duration, SR)
+        captured, captured_sr = audio, SR
 
     wav_path = out_dir / f'{stem}.wav'
     write_wav(audio, wav_path)
     print(f'Wrote: {wav_path}')
 
+    sha, diff = git_state()
+    pipeline = {
+        'stage1_checkpoint': repo_relative(args.stage1_checkpoint),
+        'stage2_checkpoint': repo_relative(args.stage2_checkpoint),
+        'stage2_evidence': None,
+        'no_evidence': args.no_evidence,
+        'strings_sweep': None,
+        'classifier_player': None,
+        'classifier_runs': [],
+        'genre': args.genre,
+        'anchor': args.anchor,
+        'fallback': None,
+        'device': device,
+        'git_sha': sha,
+        'git_dirty': bool(diff),
+    }
+    tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
+
     # 2) Stage 1: audio → MIDI
     note_events = stage1(audio, args.stage1_checkpoint, device)
     if not note_events:
         print('No notes detected, exiting.')
+        write_take(args, take_id, captured, captured_sr, tuning_with_capo, [], [], pipeline)
         return
 
     mid_path = out_dir / f'{stem}.mid'
@@ -474,7 +539,6 @@ def main():
     print(f'Wrote: {mid_path}')
 
     # 3) Stage 2: MIDI → tabs
-    tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
     piece = notes_to_piece(note_events, tuning_with_capo, args.capo, args.tempo, genre=args.genre)
     t0 = time.time()
     model, vocab, _, max_seq_len = load_checkpoint(str(args.stage2_checkpoint), device)
@@ -483,6 +547,7 @@ def main():
             sys.exit('--anchor is not supported for a Stage 2 trained with evidence')
         if args.capo or args.tuning != STD_TUNING:
             print('  warning: the string classifier only saw standard tuning without a capo')
+        unplaced = [n for n in piece['notes'] if not len(valid_tabs(n['pitch'], piece['tuning'], vocab)[0])]
         piece['notes'] = [
             {**n, 'end': max(n['end'], n['start'] + 0.01)}
             for n in piece['notes']
@@ -491,14 +556,30 @@ def main():
         if args.no_evidence:
             evidence = np.full((len(piece['notes']), 6), np.nan)
         else:
-            evidence = string_evidence(audio, piece, args.strings_sweep, args.classifier_player, device)
+            evidence, runs = string_evidence(audio, piece, args.strings_sweep, args.classifier_player, device)
+            pipeline |= {
+                'strings_sweep': args.strings_sweep,
+                'classifier_player': args.classifier_player,
+                'classifier_runs': [repo_relative(r) for r in runs],
+            }
         tabs, enc_subseqs = stage2_evidence(piece, model, vocab, max_seq_len, evidence, device)
         raw_tabs, dec_subseqs, sources = tabs, [], ['unchanged'] * len(tabs)
+        pipeline['stage2_evidence'] = True
+        placed = [
+            {**n, 'string': s, 'fret': f, 'evidence': None if np.isnan(e[0]) else e}
+            for n, (s, f), e in zip(sorted_notes(piece), tabs, evidence, strict=True)
+        ]
     else:
         tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab = stage2(
             piece, args.stage2_checkpoint, device, anchor_tabs=anchor_tabs, fallback=args.fallback
         )
+        pipeline |= {'stage2_evidence': False, 'fallback': args.fallback}
+        notes = sorted_notes(piece)
+        padded_tabs = list(tabs) + [None] * (len(notes) - len(tabs))
+        placed = [{**n, 'string': t[0], 'fret': t[1]} for n, t in zip(notes, padded_tabs, strict=True) if t]
+        unplaced = [n for n, t in zip(notes, padded_tabs, strict=True) if t is None]
     print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
+    write_take(args, take_id, captured, captured_sr, tuning_with_capo, placed, unplaced, pipeline)
 
     # 4) Debug log
     debug_path = out_dir / f'{stem}.debug.txt'

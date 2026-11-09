@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+takes_dir: data/takes
+# Only takes marked verified in the editor count as ground truth.
+verified_only: false
+# Note matching for Stage 1 P/R/F1, as in scripts/e2e/guitarset.py.
+onset_tolerance: 0.05
+out_dir: results/takes/report
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
