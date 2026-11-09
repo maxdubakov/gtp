@@ -1,0 +1,17 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+feature: logmel229
+# Augmented renders per training recording, on top of the real one.
+augment: 4
+# Recordings per dataset, for a quick check; 0 = all.
+limit: 0
+workers: 8
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

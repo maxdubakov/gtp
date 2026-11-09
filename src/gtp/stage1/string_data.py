@@ -1,0 +1,328 @@
+"""Real guitar recordings with per-note string labels, from several datasets, in one table.
+
+Every loader returns (recordings, notes) DataFrames:
+  recordings: rec, dataset, audio (repo-relative), player, guitar, chain, content, split
+  notes:      rec, onset, offset, pitch, string, fret
+
+String 1 = high e (MIDI 64) ... 6 = low E (MIDI 40), as in strings.py; each dataset's own numbering is
+converted on load. Splits go by player or guitar, never by clip, so no recording of a test player/guitar
+is ever trained on.
+"""
+
+import json
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import jams
+import numpy as np
+import pandas as pd
+import pretty_midi
+
+from gtp import REPO_ROOT
+
+DATA = Path(REPO_ROOT) / 'data'
+INDEX_DIR = DATA / 'string_index'
+OPEN_STRINGS = np.array([64, 59, 55, 50, 45, 40])
+REC_COLUMNS = ['rec', 'dataset', 'audio', 'player', 'guitar', 'chain', 'content', 'split']
+NOTE_COLUMNS = ['rec', 'onset', 'offset', 'pitch', 'string']
+
+
+DATASET_INFO = {
+    'guitarset': {
+        'name': 'GuitarSet',
+        'url': 'https://zenodo.org/records/3371780',
+        'license': 'CC BY 4.0',
+        'about': 'Acoustic guitar, 6 players, mic recording; string labels from a hexaphonic pickup.',
+    },
+    'guitar_techs': {
+        'name': 'Guitar-TECHS',
+        'url': 'https://zenodo.org/records/14963133',
+        'license': 'CC BY 4.0',
+        'about': "Electric guitar, 3 players each with own guitar/amp/mic, DI and mic'd amp; "
+        'labels from a Fishman Triple Play MIDI pickup.',
+    },
+    'egdb': {
+        'name': 'EGDB',
+        'url': 'https://ss12f32v.github.io/Guitar-Transcription',
+        'license': 'not stated',
+        'about': 'Electric guitar, 1 player, 1 Strat with hexaphonic pickup, DI; 240 tab performances.',
+    },
+    'egset12': {
+        'name': 'EGSet12',
+        'url': 'https://zenodo.org/records/11406378',
+        'license': 'CC BY 4.0',
+        'about': '12 original solo pieces, Sire T7 through a Yamaha amp, mic at 15 cm; GuitarSet-style JAMS.',
+    },
+    'idmt': {
+        'name': 'IDMT-SMT-Guitar',
+        'url': 'https://zenodo.org/records/7544110',
+        'license': 'CC BY-NC-ND 4.0',
+        'about': 'Electric guitars, DI; isolated notes, licks and short pieces with string/fret per note.',
+    },
+    'egfxset': {
+        'name': 'EGFxSet',
+        'url': 'https://zenodo.org/records/7044411',
+        'license': 'CC BY 4.0',
+        'about': 'Every string/fret on one Strat, 5 pickup positions, clean and through real pedals/reverbs.',
+    },
+}
+
+
+def rel(path):
+    return str(Path(path).relative_to(REPO_ROOT))
+
+
+def frame(recs, notes):
+    recs = pd.DataFrame(recs, columns=REC_COLUMNS)
+    notes = pd.DataFrame(notes, columns=NOTE_COLUMNS).astype(
+        {'onset': float, 'offset': float, 'pitch': int, 'string': int}
+    )
+    notes['fret'] = notes['pitch'] - OPEN_STRINGS[notes['string'] - 1]
+    return recs, notes
+
+
+def guitarset():
+    root = DATA / 'guitarset'
+    split = {'00': 'train', '01': 'train', '02': 'train', '03': 'train', '04': 'val', '05': 'test'}
+    recs, notes = [], []
+    for path in sorted((root / 'processed').glob('*.json')):
+        rec = f'guitarset/{path.stem}'
+        player = path.stem[:2]
+        content = 'solo' if path.stem.endswith('_solo') else 'comp'
+        audio = root / 'audio_mono-mic' / f'{path.stem}_mic.wav'
+        recs.append(
+            (rec, 'guitarset', rel(audio), f'gs{player}', f'gs{player}', 'acoustic-mic', content, split[player])
+        )
+        notes += [(rec, n['start'], n['end'], n['pitch'], n['string']) for n in json.loads(path.read_text())['notes']]
+    return frame(recs, notes)
+
+
+# Each Guitar-TECHS player brought one guitar, amp and mic, so player = guitar = chain.
+TECHS_GUITARS = {'P1': 'ibanez-pf300', 'P2': 'evh-wolfgang', 'P3': 'sire-t7'}
+TECHS_SPLIT = {'P1': 'train', 'P2': 'val', 'P3': 'test'}
+TECHS_TRACKS = {'e': 1, 'B': 2, 'G': 3, 'D': 4, 'A': 5, 'E': 6}
+
+
+def midi_notes(path, string_of_track):
+    pm = pretty_midi.PrettyMIDI(str(path))
+    return [
+        (n.start, n.end, n.pitch, string_of_track[inst.name.strip()])
+        for inst in pm.instruments
+        if inst.name.strip() in string_of_track
+        for n in inst.notes
+    ]
+
+
+def guitar_techs():
+    root = DATA / 'guitar_techs'
+    recs, notes = [], []
+    for midi in sorted(root.glob('P*_*/midi/*.mid')):
+        part = midi.parts[-3]
+        player, content = part.split('_', 1)
+        stem = midi.stem.removeprefix('midi_')
+        labelled = midi_notes(midi, TECHS_TRACKS)
+        for chain, sub in (('di', 'directinput'), ('amp-mic', 'micamp')):
+            audio = root / part / 'audio' / sub / f'{sub}_{stem}.wav'
+            if not audio.exists():
+                continue
+            rec = f'guitar_techs/{part}/{chain}/{stem}'
+            recs.append(
+                (rec, 'guitar_techs', rel(audio), player, TECHS_GUITARS[player], chain, content, TECHS_SPLIT[player])
+            )
+            notes += [(rec, *n) for n in labelled]
+    return frame(recs, notes)
+
+
+def egdb():
+    """One player, one guitar: training only. Track names '1'..'6' are strings, 1 = high e."""
+    root = DATA / 'egdb' / 'raw'
+    tracks = {str(s): s for s in range(1, 7)}
+    recs, notes = [], []
+    for midi in sorted((root / 'audio_label').glob('*.midi'), key=lambda p: int(p.stem)):
+        audio = root / 'audio_DI' / f'{midi.stem}.wav'
+        if not audio.exists():
+            continue
+        rec = f'egdb/{midi.stem}'
+        recs.append((rec, 'egdb', rel(audio), 'egdb', 'egdb-strat', 'di', 'pieces', 'train'))
+        notes += [(rec, *n) for n in midi_notes(midi, tracks)]
+    return frame(recs, notes)
+
+
+def egset12():
+    """Same player and rig as Guitar-TECHS P3, so it shares P3's test split. JAMS data_source 0 = low E."""
+    root = DATA / 'egset12' / 'raw'
+    recs, notes = [], []
+    for path in sorted(root.glob('*.jams')):
+        rec = f'egset12/{path.stem}'
+        recs.append((rec, 'egset12', rel(root / f'{path.stem}.wav'), 'P3', 'sire-t7', 'amp-mic', 'pieces', 'test'))
+        for ann in jams.load(str(path)).search(namespace='note_midi'):
+            string = 6 - int(ann.annotation_metadata.data_source)
+            notes += [(rec, o.time, o.time + o.duration, round(o.value), string) for o in ann.data]
+    return frame(recs, notes)
+
+
+IDMT_ROOT = DATA / 'idmt_smt_guitar' / 'IDMT-SMT-GUITAR_V2'
+IDMT_VAL_GUITAR = 'gibson-les-paul'
+# Dead notes have no pitch; bends, slides and harmonics don't sound at the fretted pitch.
+IDMT_UNFRETTED = {'DN', 'BE', 'SL', 'HA'}
+
+
+def slug(text):
+    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+
+
+def idmt():
+    """IDMT-SMT-Guitar datasets 1-3, DI; stringNumber 1 = low E. Dataset 4 has onsets only.
+
+    Dataset 2 is one player on three guitars; its Les Paul is held out as val. Dataset 1 (two players,
+    not identified per file) and dataset 3 train.
+    """
+    recs, notes = [], []
+    for xml in sorted(IDMT_ROOT.glob('dataset[123]/**/annotation/*.xml')):
+        audio = xml.parent.parent / 'audio' / f'{xml.stem}.wav'
+        if not audio.exists():
+            continue
+        g = ET.parse(xml).getroot()
+        params = g.find('globalParameter')
+        subset = xml.relative_to(IDMT_ROOT).parts[0]
+        if subset == 'dataset1':
+            folder = xml.parent.parent.name
+            guitar = 'fender-strat' if folder.startswith('Fender') else 'ibanez-power-strat'
+            player, content = 'idmt-ds1', 'chords' if folder.endswith('Chords') else 'notes'
+            rec = f'idmt/{subset}/{slug(folder)}/{xml.stem}'
+        else:
+            guitar = slug(params.findtext('instrumentModel'))
+            player = slug(params.findtext('recordingArtist'))
+            content = 'licks' if subset == 'dataset2' else 'pieces'
+            rec = f'idmt/{subset}/{xml.stem}'
+        split = 'val' if guitar == IDMT_VAL_GUITAR else 'train'
+        recs.append((rec, 'idmt', rel(audio), player, guitar, 'di', content, split))
+        for e in g.iter('event'):
+            if e.findtext('expressionStyle') in IDMT_UNFRETTED:
+                continue
+            onset = float(e.findtext('onsetSec'))
+            offset = float(e.findtext('offsetSec') or onset + 0.5)
+            notes.append((rec, onset, offset, int(e.findtext('pitch')), 7 - int(e.findtext('stringNumber'))))
+    return frame(recs, notes)
+
+
+EGFX_ROOT = DATA / 'egfxset'
+EGFX_CLEAN = 'Clean'
+
+
+def first_onset(path, threshold=0.1):
+    """Time where a single-note file first reaches `threshold` of its peak; alignment refines it."""
+    import soundfile as sf
+
+    y, sr = sf.read(path, dtype='float32', always_2d=True)
+    env = np.abs(y).max(axis=1)
+    return int(np.argmax(env >= threshold * env.max())) / sr, len(y) / sr
+
+
+def egfxset():
+    """One Strat, one player: training only. Files are <effect>/<pickup>/<string>-<fret>.wav, 1 = high e;
+    the onset isn't labelled, so it is read off the audio."""
+    recs, notes = [], []
+    for path in sorted(EGFX_ROOT.glob('*/*/*-*.wav')):
+        effect, pickup = path.parts[-3], path.parts[-2]
+        string, fret = (int(x) for x in path.stem.split('-'))
+        rec = f'egfxset/{slug(effect)}/{slug(pickup)}/{path.stem}'
+        chain = 'di' if effect == EGFX_CLEAN else 'fx'
+        recs.append((rec, 'egfxset', rel(path), 'egfxset', 'fender-strat', chain, slug(effect), 'train'))
+        onset, duration = first_onset(path)
+        notes.append((rec, onset, duration, int(OPEN_STRINGS[string - 1] + fret), string))
+    return frame(recs, notes)
+
+
+MAX_FRET = 22
+MIN_DURATION = 0.05
+RETRIGGER = 0.05
+# Their sounding pitch is not the fretted one, so the string label would teach the wrong timbre.
+UNFRETTED = re.compile(r'Bendings|Harmonics|PinchHarmonics', re.I)
+
+
+def clean(recs, notes):
+    """Drop labels a real pluck can't produce; returns kept notes and {rule: dropped count} per dataset.
+
+    Rules apply to every dataset; on GuitarSet they remove a handful of notes, on MIDI-pickup labels
+    (Guitar-TECHS) they remove the pickup's retriggers and glitches.
+    """
+    dataset = notes['rec'].map(recs.set_index('rec')['dataset'])
+    ordered = notes.sort_values(['rec', 'string', 'onset'])
+    gap = ordered.groupby(['rec', 'string'])['onset'].diff().reindex(notes.index)
+    rules = {
+        'unfretted technique': notes['rec'].str.contains(UNFRETTED),
+        'impossible fret': (notes['fret'] < 0) | (notes['fret'] > MAX_FRET),
+        f'shorter than {MIN_DURATION * 1000:.0f} ms': (notes['offset'] - notes['onset']) < MIN_DURATION,
+        f'same string re-plucked within {RETRIGGER * 1000:.0f} ms': gap < RETRIGGER,
+    }
+    drop = pd.Series(False, index=notes.index)
+    report = {}
+    for name, mask in rules.items():
+        new = mask & ~drop
+        report[name] = new.groupby(dataset).sum().to_dict()
+        drop |= mask
+    return notes[~drop].reset_index(drop=True), report
+
+
+ALIGN_SR = 22050
+ALIGN_HOP = 128
+# Guitar-TECHS documents up to 100 ms of misalignment; a wider search locks onto beat-shifted matches.
+MAX_LAG = 0.1
+NEAR = 0.1
+
+
+def onset_envelope(audio):
+    import librosa
+
+    env = librosa.onset.onset_strength(y=audio, sr=ALIGN_SR, hop_length=ALIGN_HOP)
+    return env / (env.max() + 1e-9)
+
+
+def alignment(audio, onsets):
+    """Global label lag (s, positive = labels late) from the onset envelope, and each note's distance to
+    the nearest detected onset after removing that lag (NaN when none within NEAR)."""
+    import librosa
+
+    env = onset_envelope(audio)
+    fps = ALIGN_SR / ALIGN_HOP
+    frames = np.round(np.asarray(onsets) * fps).astype(int)
+    frames = frames[(frames >= 0) & (frames < len(env))]
+    max_lag = int(MAX_LAG * fps)
+    lags = np.arange(-max_lag, max_lag + 1)
+    score = [env[np.clip(frames - lag, 0, len(env) - 1)].sum() for lag in lags]
+    lag = lags[int(np.argmax(score))] / fps
+    peaks = librosa.onset.onset_detect(onset_envelope=env, sr=ALIGN_SR, hop_length=ALIGN_HOP, units='time')
+    shifted = np.asarray(onsets) - lag
+    if len(peaks) == 0:
+        return lag, np.full(len(shifted), np.nan)
+    idx = np.clip(np.searchsorted(peaks, shifted), 1, len(peaks) - 1)
+    nearest = np.where(np.abs(peaks[idx - 1] - shifted) < np.abs(peaks[idx] - shifted), peaks[idx - 1], peaks[idx])
+    dist = nearest - shifted
+    return lag, np.where(np.abs(dist) <= NEAR, dist, np.nan)
+
+
+LOADERS = {
+    'guitarset': guitarset,
+    'guitar_techs': guitar_techs,
+    'egdb': egdb,
+    'egset12': egset12,
+    'idmt': idmt,
+    'egfxset': egfxset,
+}
+
+
+def build(datasets=tuple(LOADERS)):
+    parts = [LOADERS[d]() for d in datasets]
+    recs = pd.concat([r for r, _ in parts], ignore_index=True)
+    notes = pd.concat([n for _, n in parts], ignore_index=True).sort_values(['rec', 'onset', 'string'])
+    return recs, notes.reset_index(drop=True)
+
+
+def drop_empty(recs, notes):
+    return recs[recs['rec'].isin(notes['rec'])].reset_index(drop=True)
+
+
+def load_index():
+    return pd.read_csv(INDEX_DIR / 'recordings.csv'), pd.read_csv(INDEX_DIR / 'notes.csv.gz')
