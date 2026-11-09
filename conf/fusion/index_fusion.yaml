@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: index_fusion
+index_dir: data/string_index
+splits: [val, test]
+# Per-note string probabilities: an .npz with `note` (rows of notes.csv.gz) and one (N, 6) array per method.
+evidence: ???
+methods: [classifier, per_guitar]
+# A train_index.py run whose pitch prior the decode-time rescoring divides out.
+prior_run: results/strings/runs/2026-11-09_17-19-10_pool-flatten_w400_s0
+models:
+  baseline:
+    checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
+    lambdas: [1.0, 1.5]
+  audio:
+    checkpoint: runs/stage2/2026-11-08_11-58-31_p05_audio/checkpoints/step_0060000_final.pth
+# Tempo given to Stage 2 for recordings whose dataset doesn't state one (null = unknown).
+tempo: null
+batch: 64
+prob_floor: 1.0e-4
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/fusion/index/${now:%Y-%m-%d_%H-%M-%S}_${name}
