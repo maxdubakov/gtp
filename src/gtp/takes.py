@@ -35,6 +35,8 @@ META_FIELDS = (
     'guitar',
     'strings',
     'pickup',
+    'amp',
+    'effects',
     'mic',
     'input_device',
     'room',
