@@ -20,6 +20,7 @@ import pandas as pd
 import pretty_midi
 
 from gtp import REPO_ROOT
+from gtp.stage1.strings import MAX_FRET
 
 DATA = Path(REPO_ROOT) / 'data'
 INDEX_DIR = DATA / 'string_index'
@@ -235,7 +236,6 @@ def egfxset():
     return frame(recs, notes)
 
 
-MAX_FRET = 22
 MIN_DURATION = 0.05
 RETRIGGER = 0.05
 # Their sounding pitch is not the fretted one, so the string label would teach the wrong timbre.

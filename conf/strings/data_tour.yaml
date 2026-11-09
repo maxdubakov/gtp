@@ -10,6 +10,8 @@ samples_per_dataset: 3
 clip_seconds: 6
 # Zoomed alignment views are short so single onsets stay readable.
 align_seconds: 2
+# The recording followed through the alignment walkthrough; its labels ship ~35 ms early.
+walkthrough_rec: idmt/dataset2/FS_Lick2_MN
 # Per-note offsets re-run onset detection, so they use a sample of recordings per dataset.
 offset_recordings_per_dataset: 40
 n_chains: 3

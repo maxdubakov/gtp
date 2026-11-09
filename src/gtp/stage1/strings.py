@@ -26,7 +26,7 @@ GUITARSET_DIR = Path(REPO_ROOT) / 'data' / 'guitarset'
 CACHE_DIR = GUITARSET_DIR / 'string_cache'
 
 OPEN_STRINGS = np.array([64, 59, 55, 50, 45, 40])
-MAX_FRET = 19
+MAX_FRET = 24
 N_STRINGS = 6
 
 SAMPLE_RATE = 22050

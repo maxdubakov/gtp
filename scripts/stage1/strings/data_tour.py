@@ -774,6 +774,193 @@ def shift_examples(recs, notes):
     return picks
 
 
+def lag_scores(env, onsets):
+    """The score alignment() maximises, for every candidate lag in its search window (lags in ms)."""
+    fps = sd.ALIGN_SR / sd.ALIGN_HOP
+    frames = np.round(np.asarray(onsets) * fps).astype(int)
+    frames = frames[(frames >= 0) & (frames < len(env))]
+    lags = np.arange(-int(sd.MAX_LAG * fps), int(sd.MAX_LAG * fps) + 1)
+    score = np.array([env[np.clip(frames - lag, 0, len(env) - 1)].sum() for lag in lags])
+    return 1000 * lags / fps, score
+
+
+def walkthrough_section(recs, notes, report, cfg, assets):
+    bias, thr = report['detector_bias_ms'], report['shift_threshold_ms']
+    r = recs[recs['rec'] == cfg.walkthrough_rec].iloc[0]
+    rn = notes[notes['rec'] == cfg.walkthrough_rec]
+    shipped = rn.assign(onset=rn['onset'] - r['shift_ms'] / 1000, offset=rn['offset'] - r['shift_ms'] / 1000)
+    y = load_clip(r['audio'], 0, None, sr=sd.ALIGN_SR)
+    env = sd.onset_envelope(y)
+    t_env = np.arange(len(env)) * sd.ALIGN_HOP / sd.ALIGN_SR
+    w0 = densest_start(shipped['onset'], cfg.align_seconds)
+    w1 = w0 + cfg.align_seconds
+    view = in_window(shipped, w0, w1)
+
+    fig, (a, b) = plt.subplots(2, 1, figsize=(12, 4.8), sharex=True, gridspec_kw={'height_ratios': [2, 1.3]})
+    seg = y[int(max(w0 - 0.6, 0) * sd.ALIGN_SR) : int((w1 + 0.6) * sd.ALIGN_SR)]
+    draw_cqt(a, seg, max(w0 - 0.6, 0))
+    draw_boxes(a, view)
+    for n in view.itertuples():
+        a.text(
+            n.onset,
+            n.pitch + 1.2,
+            f'{STRING_NAMES[n.string - 1]}{n.fret}',
+            fontsize=7,
+            color=INK,
+            bbox={'boxstyle': 'round,pad=0.1', 'fc': 'white', 'ec': 'none', 'alpha': 0.8},
+        )
+    b.fill_between(t_env, env, color='#c3c2b7', lw=0)
+    b.plot(t_env, env, color=MUTED, lw=0.8)
+    for t in view['onset']:
+        b.axvline(t, color='#eb6834', lw=1.4, ls=(0, (3, 2)))
+    b.set_ylabel('onset strength')
+    b.set_xlabel('time in recording (s)')
+    b.set_xlim(w0, w1)
+    a.legend(handles=string_handles(), loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8)
+    b.legend(
+        handles=[Line2D([], [], color='#eb6834', lw=1.4, ls=(0, (3, 2)), label='label onset as shipped')],
+        loc='upper left',
+        bbox_to_anchor=(1.0, 1.0),
+        frameon=False,
+        fontsize=8,
+    )
+    fig.tight_layout(h_pad=0.4)
+    step1 = assets.fig(fig, 'walk_1_input')
+
+    lags, score = lag_scores(env, shipped['onset'])
+    best = lags[np.argmax(score)]
+    first = view['onset'].iloc[min(2, len(view) - 1)]
+    z0, z1 = first - 0.12, first + 0.38
+    tries = [0.0, -best / 2, -best, -best + 40]
+    fig, axes = plt.subplots(1, len(tries), figsize=(15, 2.7), sharey=True)
+    for ax, move in zip(axes, tries, strict=True):
+        moved = shipped['onset'].to_numpy() + move / 1000
+        idx = np.clip(np.round(moved * sd.ALIGN_SR / sd.ALIGN_HOP).astype(int), 0, len(env) - 1)
+        total = score[np.argmin(np.abs(lags + move))]
+        ax.fill_between(t_env, env, color='#c3c2b7', lw=0)
+        ax.plot(t_env, env, color=MUTED, lw=0.8)
+        inside = (moved >= z0) & (moved <= z1)
+        for t in moved[inside]:
+            ax.axvline(t, color='#2a78d6' if move == -best else '#eb6834', lw=1.3)
+        ax.plot(moved[inside], env[idx[inside]], 'o', color=INK, ms=5, zorder=4)
+        ax.set_xlim(z0, z1)
+        ax.set_title(
+            f'labels moved {move:+.0f} ms\nsum over all {len(moved)} labels = {total:.2f}', loc='left', fontsize=9
+        )
+        ax.set_xlabel('time (s)')
+    axes[0].set_ylabel('onset strength')
+    fig.tight_layout()
+    step3 = assets.fig(fig, 'walk_3_tries')
+
+    gs = recs.loc[recs['dataset'] == 'guitarset', 'lag_ms']
+    keys = ['dataset', 'player', 'chain', 'content']
+    grp = recs[(recs[keys] == r[keys]).all(axis=1)]
+    q = 1000 * sd.ALIGN_HOP / sd.ALIGN_SR
+    edges = np.arange(-1000 * sd.MAX_LAG - q / 2, 1000 * sd.MAX_LAG + q, q)
+    fig, (s, g, h) = plt.subplots(1, 3, figsize=(15, 3.2))
+    s.plot(-lags, score, color=INK, lw=1.2)
+    s.axvline(-best, color='#2a78d6', lw=1.2)
+    s.axvline(0, color='#eb6834', lw=1, ls=(0, (3, 2)))
+    s.set_title(f'This recording: best move {-best:+.1f} ms', loc='left', fontsize=10)
+    s.set_xlabel('labels moved by (ms, + = later)')
+    s.set_ylabel('sum of onset strength\nunder the labels')
+    g.hist(-gs, bins=-edges[::-1], color=MUTED, edgecolor='white', lw=0.4)
+    g.axvline(-bias, color=INK, lw=1.2, ls='--')
+    g.set_title(f'GuitarSet ({len(gs)} recordings): median best move {-bias:+.1f} ms', loc='left', fontsize=10)
+    g.set_xlabel('best move (ms)')
+    g.set_ylabel('recordings')
+    h.hist(-grp['lag_ms'], bins=-edges[::-1], color=MUTED, edgecolor='white', lw=0.4)
+    h.axvline(-r['lag_used_ms'], color='#2a78d6', lw=1.2)
+    h.axvline(-bias, color=INK, lw=1.2, ls='--')
+    h.set_title(f'Its group ({len(grp)} recordings): median {-r["lag_used_ms"]:+.1f} ms', loc='left', fontsize=10)
+    h.set_xlabel('best move (ms)')
+    for ax in (s, g, h):
+        ax.grid(axis='y', color=GRID, lw=0.6)
+        ax.set_axisbelow(True)
+        ax.set_xlim(-1000 * sd.MAX_LAG, 1000 * sd.MAX_LAG)
+    fig.tight_layout()
+    step4 = assets.fig(fig, 'walk_4_scores')
+
+    after = in_window(rn, w0, w1)
+    before = after.assign(onset=after['onset'] - r['shift_ms'] / 1000, offset=after['offset'] - r['shift_ms'] / 1000)
+    step6 = assets.fig(zoom_figure(y, w0, w1, after, before=before), 'walk_6_after')
+
+    group_name = f'{info_of(r["dataset"])["name"]} / {r["player"]} / {r["chain"]} / {r["content"]}'
+    body = (
+        '<p>One recording, followed through every step. It is '
+        f'<code>{esc(cfg.walkthrough_rec)}</code>, {len(rn)} notes, picked because its labels are visibly off.</p>'
+        + f'<p class="reclabel">{rec_label(r)}</p>'
+        '<h3>Step 1. What a dataset gives us</h3>'
+        '<p>An audio file and, for every note, an onset time, an offset time, a pitch and a string (the fret '
+        'follows from pitch and string). Nothing in the labels says how they were timed: a hexaphonic pickup '
+        '(GuitarSet), a MIDI pickup (Guitar-TECHS), or a person clicking in an editor (IDMT). Top: the '
+        "spectrogram with every label drawn as a box in its string's colour, at the time the dataset says. "
+        'The boxes start before the notes visibly do.</p>'
+        + figure(
+            step1,
+            'Audio and labels as shipped',
+            'Top: spectrogram, label boxes as the dataset ships them, '
+            'tagged string and fret. Bottom: the onset-strength curve of the same audio (step 2), with '
+            'the label onsets as dashed lines.',
+        )
+        + '<h3>Step 2. Turn the audio into an "a note starts here" curve</h3>'
+        f'<p>The tabs carry only times, so the audio must be turned into something comparable. '
+        f'<code>librosa.onset.onset_strength</code> computes, every {sd.ALIGN_HOP} samples ({q:.1f} ms), how much '
+        'the spectrum got louder than a moment ago, summed over frequencies. A pluck makes a sharp jump, '
+        'a sustained note makes almost nothing, so the curve is a row of spikes, one per attack (bottom panel '
+        'above). Pitch and string play no part here: only <i>when</i> things start.</p>'
+        '<h3>Step 3. Slide the labels and score each position</h3>'
+        f"<p>Move every label onset of the recording by the same amount, read the curve's height at each moved "
+        'onset (the dots), and add them up. Labels sitting on the spikes give a large sum; labels sitting in the '
+        f'quiet gaps give a small one. Do that for every move from {-1000 * sd.MAX_LAG:.0f} to '
+        f'+{1000 * sd.MAX_LAG:.0f} ms in {q:.1f} ms steps. One move for the whole recording, not one per note: '
+        "a dataset's timing error is a constant offset, while a per-note move would just snap each label to "
+        'whatever is nearby.</p>'
+        + figure(
+            step3,
+            'Trying moves',
+            'The same half second with the labels moved by four amounts. Blue is the '
+            'best move. The title gives the sum over every label in the recording, not just those in view.',
+        )
+        + '<h3>Step 4. Take the best move, minus what perfect labels get</h3>'
+        f'<p>Left: the sum for every move. It peaks at <b>{-best:+.1f} ms</b>, the labels are that much early. '
+        "But even perfect labels do not score best at 0, because the curve's spike comes a little after the "
+        "string is struck (the spectrum needs a few milliseconds of the attack to rise). GuitarSet's labels "
+        'come from a pickup under each string and are taken as correct; their best move has a median of '
+        f"<b>{-bias:+.1f} ms</b> (middle). That is the detector's own delay, so the correction is the "
+        f'difference: {-best:+.1f} &minus; ({-bias:+.1f}) = <b>{-best + bias:+.1f} ms</b>. Corrections smaller '
+        f'than {thr} ms are left alone, as noise.</p>'
+        '<h3>Step 5. Use the group, not the single recording</h3>'
+        '<p>With chords and fast runs the curve has several spikes within a few tens of ms, and one recording '
+        'can score best one note off. So every recording with more than one note takes the median best move '
+        f'of its group, same dataset, player, recording chain and kind of material (right; here '
+        f'<i>{esc(group_name)}</i>). The whole group was labelled the same way, so it shares one offset. '
+        f'This recording measured {-r["lag_ms"]:+.1f} ms itself, the group median is '
+        f'{-r["lag_used_ms"]:+.1f} ms, so its labels move by <b>{r["shift_ms"]:+.1f} ms</b>. '
+        'Single-note recordings (EGFxSet) keep their own value, as there is nothing to confuse.</p>'
+        + figure(
+            step4,
+            'Scores and references',
+            'Left: sum of onset strength under the labels for every move. '
+            "Middle: GuitarSet's best moves, the reference (dashed). Right: best moves of every recording "
+            "in this recording's group, the median (blue) is what is applied.",
+        )
+        + '<h3>Step 6. Result</h3>'
+        '<p>Every label onset and offset of the recording is moved by the same amount and written to the '
+        'index. Pitch and string are never touched. Labels moved before 0 s are dropped; recordings whose best '
+        f'move sits at the edge of the ±{1000 * sd.MAX_LAG:.0f} ms search are dropped too, since their real '
+        'offset is outside it.</p>'
+        + figure(
+            step6,
+            'Labels before and after',
+            'Dashed orange: label onsets as shipped. Solid blue: as stored '
+            'in the index. Triangles: onsets picked from the curve, used only to measure what is left over '
+            '(the per-note offsets below).',
+        )
+    )
+    return section('walkthrough', '5. Alignment, step by step', body)
+
+
 def alignment_section(recs, notes, report, datasets, cfg, assets):
     bias, thr = report['detector_bias_ms'], report['shift_threshold_ms']
     q = 1000 * sd.ALIGN_HOP / sd.ALIGN_SR
@@ -997,7 +1184,7 @@ def cleaning_section(recs, notes, report, datasets, cfg, assets):
     real = {d: sum(report['dropped'][r].get(d, 0) for r in rules[1:]) for d in datasets}
     d = max(real, key=real.get) if real else None
     if d is None or real[d] == 0 or d not in sd.LOADERS:
-        return section('cleaning', '6. Cleaning', body + '<p>No dropped labels to show.</p>')
+        return section('cleaning', '7. Cleaning', body + '<p>No dropped labels to show.</p>')
 
     raw_recs, raw = sd.LOADERS[d]()
     raw['nid'] = np.arange(len(raw))
@@ -1052,7 +1239,7 @@ def cleaning_section(recs, notes, report, datasets, cfg, assets):
             f'<p>{len(gone)} {esc(name)} recordings lost every label and are not in the index '
             f'(e.g. {examples}{" …" if len(gone) > 6 else ""}).</p>'
         )
-    return section('cleaning', '6. Cleaning', body)
+    return section('cleaning', '7. Cleaning', body)
 
 
 def model_window_frames():
@@ -1269,7 +1456,7 @@ def preprocessing_section(recs, notes, cfg, rng, assets):
             f'{cfg.n_chains + 1} different inputs.',
         )
     )
-    return section('preprocessing', '7. Preprocessing, step by step', body)
+    return section('preprocessing', '8. Preprocessing, step by step', body)
 
 
 CSS = """
@@ -1327,7 +1514,8 @@ TOC = [
     ('splits', 'Splits'),
     ('labels', 'Labels'),
     ('samples', 'Samples'),
-    ('alignment', 'Alignment'),
+    ('walkthrough', 'How alignment works'),
+    ('alignment', 'Alignment results'),
     ('cleaning', 'Cleaning'),
     ('preprocessing', 'Preprocessing'),
 ]
@@ -1362,6 +1550,7 @@ def main(cfg):
         ('splits', lambda: splits_section(recs, notes, datasets)),
         ('labels', lambda: labels_section(notes, datasets, assets)),
         ('samples', lambda: samples_section(recs, notes, datasets, cfg, rng, assets)),
+        ('walkthrough', lambda: walkthrough_section(recs, notes, report, cfg, assets)),
         ('alignment', lambda: alignment_section(recs, notes, report, datasets, cfg, assets)),
         ('cleaning', lambda: cleaning_section(recs, notes, report, datasets, cfg, assets)),
         ('preprocessing', lambda: preprocessing_section(recs, notes, cfg, rng, assets)),
