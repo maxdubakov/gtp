@@ -58,3 +58,51 @@ def calibrate(probs, implied, valid, iters=15, weight=1.0):
         const, scale = fit_strings(implied[valid], post[valid])
         post = fuse(probs, implied, valid, const, scale, weight)
     return post, const, scale
+
+
+# Likelihood profiles (bprofile.py) instead of point estimates: each note carries log p(spectrum | B) on a grid.
+
+CONSTANT_GRID = np.arange(-5.3, -3.2, 0.02)
+# Weak prior on a string's constant, so a string without notes keeps a plausible value.
+PRIOR_MEAN, PRIOR_SD = -4.1, 0.6
+
+
+def string_tables(profile, log_b, pitch, spread):
+    """(N, 6, len(CONSTANT_GRID)) log likelihood of each note on each string, for every value of that string's constant.
+
+    `profile` (N, G) is the tempered log likelihood over the log10(B) grid. A string with constant c predicts
+    log10(B) = c + fret * LOG_B_PER_FRET, blurred by a Laplace of scale `spread` (the within-guitar scatter).
+    """
+    kernel = -np.abs(log_b[None] - log_b[:, None]) / spread
+    kernel -= np.log(np.exp(kernel).sum(axis=1, keepdims=True))
+    peak = profile.max(axis=1, keepdims=True)
+    smooth = np.log(np.exp(profile - peak) @ np.exp(kernel).T + 1e-300) + peak
+    fret = np.asarray(pitch)[:, None] - OPEN_STRINGS[None]
+    u = CONSTANT_GRID[None, None] + fret[:, :, None] * LOG_B_PER_FRET
+    pos = np.clip((u - log_b[0]) / (log_b[1] - log_b[0]), 0, len(log_b) - 1.001)
+    lo = pos.astype(int)
+    frac = pos - lo
+    rows = np.arange(len(profile))[:, None, None]
+    return (1 - frac) * smooth[rows, lo] + frac * smooth[rows, lo + 1]
+
+
+def fit_constants(tables, resp):
+    """Index into CONSTANT_GRID of each string's most likely constant under the notes' string responsibilities."""
+    objective = np.einsum('is,isc->sc', resp, tables) - 0.5 * ((CONSTANT_GRID - PRIOR_MEAN) / PRIOR_SD) ** 2
+    return objective.argmax(axis=1)
+
+
+def fuse_tables(probs, tables, const_idx):
+    logp = np.log(probs + 1e-9) + tables[:, np.arange(6), const_idx]
+    logp[probs <= 0] = -np.inf
+    p = np.exp(logp - logp.max(axis=1, keepdims=True))
+    return p / p.sum(axis=1, keepdims=True)
+
+
+def calibrate_profiles(probs, tables, iters=15):
+    """Label-free EM over one guitar's notes with profile likelihoods; returns (fused probabilities, constants)."""
+    post = probs
+    for _ in range(iters):
+        const_idx = fit_constants(tables, post)
+        post = fuse_tables(probs, tables, const_idx)
+    return post, CONSTANT_GRID[const_idx]

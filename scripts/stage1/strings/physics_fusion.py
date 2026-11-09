@@ -20,7 +20,17 @@ from hydra.core.hydra_config import HydraConfig
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
 from gtp.log import info
-from gtp.stage1.inharmonicity import calibrate, fit_strings, fuse, implied_constants
+from gtp.stage1.inharmonicity import (
+    CONSTANT_GRID,
+    calibrate,
+    calibrate_profiles,
+    fit_constants,
+    fit_strings,
+    fuse,
+    fuse_tables,
+    implied_constants,
+    string_tables,
+)
 from gtp.stage1.strings import candidates
 
 
@@ -42,25 +52,50 @@ def main(cfg):
     d = d.assign(note=note)
     probs = np.mean([r['probs'] for r in runs], axis=0)
 
-    harm = np.load(index / 'cache' / cfg.features)
-    names = list(harm['names'])
-    log_b, resid = harm['x'][note, names.index('log10_b')], harm['x'][note, names.index('fit_resid_cents')]
-    valid = (log_b > cfg.min_log_b) & (resid < cfg.max_resid_cents)
-    implied = implied_constants(log_b, d['pitch'])
-
     fused = {k: probs.copy() for k in ('per_guitar', 'per_recording', 'oracle')}
+    labels = one_hot(d['string'])
+    if cfg.evidence == 'point':
+        harm = np.load(index / 'cache' / cfg.features)
+        names = list(harm['names'])
+        log_b, resid = harm['x'][note, names.index('log10_b')], harm['x'][note, names.index('fit_resid_cents')]
+        valid = (log_b > cfg.min_log_b) & (resid < cfg.max_resid_cents)
+        implied = implied_constants(log_b, d['pitch'])
+
+        def label_free(i):
+            return calibrate(probs[i], implied[i], valid[i], cfg.iters, cfg.weight)[:2]
+
+        def from_labels(fit, i):
+            fit = fit[valid[fit]]
+            const, scale = fit_strings(implied[fit], labels[fit])
+            return fuse(probs[i], implied[i], valid[i], const, scale, cfg.weight)
+    else:
+        prof = np.load(index / 'cache' / cfg.profiles)
+        frames = prof['x'][note].astype(np.float32)
+        valid = np.abs(frames).sum(axis=(1, 2)) > 0
+        total = frames.sum(axis=1)
+        tables = string_tables(cfg.temper * total, prof['log_b'], d['pitch'], cfg.spread)
+        sharp = string_tables(cfg.calibration_temper * total, prof['log_b'], d['pitch'], cfg.spread)
+
+        def label_free(i):
+            const = calibrate_profiles(probs[i], sharp[i], cfg.iters)[1]
+            return fuse_tables(probs[i], tables[i], np.searchsorted(CONSTANT_GRID, const - 1e-9)), const
+
+        def from_labels(fit, i):
+            return fuse_tables(probs[i], tables[i], fit_constants(tables[fit], labels[fit]))
+
+        for guitar, g in d.groupby('guitar').indices.items():
+            info(f'{guitar}: constants from labels {CONSTANT_GRID[fit_constants(tables[g], labels[g])].round(2)}')
+
     for guitar, g in d.groupby('guitar').indices.items():
-        fused['per_guitar'][g], const, _ = calibrate(probs[g], implied[g], valid[g], cfg.iters, cfg.weight)
+        fused['per_guitar'][g], const = label_free(g)
         info(f'{guitar}: constants {const.round(2)}')
         rec = d['rec'].to_numpy()[g]
         for r in np.unique(rec):
             i = g[rec == r]
-            fused['per_recording'][i], *_ = calibrate(probs[i], implied[i], valid[i], cfg.iters, cfg.weight)
+            fused['per_recording'][i] = label_free(i)[0]
         fold = pd.factorize(rec)[0] % 2
         for f in (0, 1):
-            fit, i = g[(fold != f) & valid[g]], g[fold == f]
-            const, scale = fit_strings(implied[fit], one_hot(d['string'].to_numpy()[fit]))
-            fused['oracle'][i] = fuse(probs[i], implied[i], valid[i], const, scale, cfg.weight)
+            fused['oracle'][g[fold == f]] = from_labels(g[fold != f], g[fold == f])
 
     multi = candidates(d['pitch'].to_numpy()).sum(axis=1) > 1
     label = d['string'].to_numpy() - 1

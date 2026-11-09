@@ -6,9 +6,17 @@ name: physics_fusion
 index_dir: data/string_index
 # Run directories (relative to the repo) with index_probs.npz (predict_index.py); their probabilities are averaged.
 runs: []
-# Partial features file in <index_dir>/cache (harmonic_features.py).
+# Inharmonicity evidence: `point` (one B estimate per note, harmonic_features.py) or `profile` (a likelihood curve
+# over B per note, b_profiles.py).
+evidence: profile
 features: harm.npz
-# A note's inharmonicity is used only if its fit found B above the floor and left a small residual.
+profiles: bprof.npz
+# Profile evidence: exponent on the raw likelihood curves, and the within-guitar scatter (decades) of a string's constant.
+temper: 0.3
+spread: 0.06
+# The label-free calibration of the string constants uses the curves at this (sharper) exponent.
+calibration_temper: 1.0
+# Point evidence: a note's inharmonicity is used only if its fit found B above the floor and left a small residual.
 min_log_b: -6.9
 max_resid_cents: 10
 iters: 15

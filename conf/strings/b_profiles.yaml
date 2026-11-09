@@ -1,0 +1,43 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+sample_rate: 44100
+# Frame length in samples (~93 ms) and consecutive frames from the onset; later frames are used while the note lasts.
+frame: 4096
+n_frames: 4
+n_fft: 32768
+f_max: 10000
+n_partials: 40
+# Grid of log10(B) hypotheses.
+log_b_min: -5.6
+log_b_max: -2.4
+log_b_step: 0.05
+# Tuning offset of the note's f0 from equal temperament: search range and step.
+tuning_cents: 30
+tuning_step_cents: 2
+# Bends and slides: offsets up to this many cents above nominal are also tried where one of the first few partials
+# has a peak.
+bend_cents: 260
+bend_partials: 3
+# A spectral peak must rise this far above its surroundings and lie within this range of the frame's maximum.
+peak_prominence_db: 8
+peak_floor_db: 70
+# Partial model: Laplace frequency noise (Hz) when observed, prior probability of being missing.
+noise_hz: 1.5
+missing: 0.5
+# Other sounding notes: assumed upper bound of their B, and how much overlap with a frame counts as sounding.
+other_b_max: 3.0e-4
+overlap_s: 0.01
+# A later frame is used if it ends no more than this long after the note's offset.
+tail_s: 0.03
+# Recordings per dataset, for a quick check; 0 = all.
+limit: 0
+workers: 9
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
