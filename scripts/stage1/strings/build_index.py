@@ -4,7 +4,7 @@ Writes data/string_index/{recordings.csv, notes.csv.gz, report.json}. Each recor
 measured against its onset envelope; GuitarSet's hex-pickup labels set the detector's own bias, and a
 recording whose lag departs from that bias by more than `shift_threshold_ms` has its labels shifted.
 One-note recordings keep their own lag; denser ones take their player/chain/content group median, since
-the search can lock one strum note off. Recordings whose lag hits the search edge are dropped.
+the search can lock one strum note off. Datasets whose onsets come from their own audio are never shifted. Recordings whose lag hits the search edge are dropped.
 
 Usage:
   uv run scripts/stage1/strings/build_index.py
@@ -53,9 +53,11 @@ def main(cfg):
         recs[key] = [s[key] for s in stats]
 
     # A lag at the edge of the search window means the true offset lies beyond it: unusable labels.
-    unresolved = recs['lag_ms'].abs() >= sd.MAX_LAG * 1000 - 1000 * sd.ALIGN_HOP / sd.ALIGN_SR
+    own = recs['dataset'].isin(sd.AUDIO_ONSETS)
+    unresolved = (recs['lag_ms'].abs() >= sd.MAX_LAG * 1000 - 1000 * sd.ALIGN_HOP / sd.ALIGN_SR) & ~own
     unresolved_counts = recs[unresolved].groupby('dataset').size().to_dict()
     recs = recs[~unresolved].reset_index(drop=True)
+    own = recs['dataset'].isin(sd.AUDIO_ONSETS)
     notes = notes[notes['rec'].isin(recs['rec'])].reset_index(drop=True)
 
     # On strummed or dense recordings the lag search can lock one note off (the DI and amp-mic copies of one
@@ -63,10 +65,10 @@ def main(cfg):
     # one-note recording keeps its own lag and the rest take their group's median.
     n_notes = recs['rec'].map(notes.groupby('rec').size())
     group = recs.groupby(['dataset', 'player', 'chain', 'content'])['lag_ms'].transform('median')
-    recs['lag_used_ms'] = np.where(n_notes == 1, recs['lag_ms'], group)
+    recs['lag_used_ms'] = np.where(own, np.nan, np.where(n_notes == 1, recs['lag_ms'], group))
     bias = float(recs.loc[recs['dataset'] == 'guitarset', 'lag_ms'].median())
     off = recs['lag_used_ms'] - bias
-    recs['shift_ms'] = np.where(off.abs() > cfg.shift_threshold_ms, -off, 0.0).round(1)
+    recs['shift_ms'] = np.where(~own & (off.abs() > cfg.shift_threshold_ms), -off, 0.0).round(1)
     shift = notes['rec'].map(recs.set_index('rec')['shift_ms']) / 1000
     notes['onset'] += shift
     notes['offset'] += shift

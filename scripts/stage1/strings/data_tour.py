@@ -977,7 +977,9 @@ def walkthrough_section(recs, notes, report, cfg, assets):
         f'<i>{esc(group_name)}</i>). The whole group was labelled the same way, so it shares one offset. '
         f'This recording measured {-r["lag_ms"]:+.1f} ms itself, the group median is '
         f'{-r["lag_used_ms"]:+.1f} ms, so its labels move by <b>{r["shift_ms"]:+.1f} ms</b>. '
-        'Single-note recordings (EGFxSet) keep their own value, as there is nothing to confuse.</p>'
+        'EGFxSet is never shifted: it ships no onset times, so its onsets are read off the audio itself (where '
+        'the file first reaches 10% of its peak), which makes them aligned by construction. The curve also '
+        'cannot judge them, since its first ~50 ms are zero padding and these notes start at ~4 ms.</p>'
         + figure(
             step4,
             'Scores and references',

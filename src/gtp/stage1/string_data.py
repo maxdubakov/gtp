@@ -210,6 +210,9 @@ def idmt():
 
 EGFX_ROOT = DATA / 'egfxset'
 EGFX_CLEAN = 'Clean'
+# Datasets whose onsets are read off their own audio: aligned by construction, so never shifted. The onset
+# envelope can't check them anyway, as librosa zero-pads its first ~50 ms and these notes start at ~4 ms.
+AUDIO_ONSETS = {'egfxset'}
 
 
 def first_onset(path, threshold=0.1):
