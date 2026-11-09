@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+out_dir: results/strings/data_tour
+seed: 0
+samples_per_dataset: 3
+clip_seconds: 6
+# Zoomed alignment views are short so single onsets stay readable.
+align_seconds: 2
+# Per-note offsets re-run onset detection, so they use a sample of recordings per dataset.
+offset_recordings_per_dataset: 40
+n_chains: 3
+n_windows: 6
+dpi: 110
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

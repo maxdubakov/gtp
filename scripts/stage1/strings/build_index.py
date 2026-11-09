@@ -3,7 +3,8 @@
 Writes data/string_index/{recordings.csv, notes.csv.gz, report.json}. Each recording's label lag is
 measured against its onset envelope; GuitarSet's hex-pickup labels set the detector's own bias, and a
 recording whose lag departs from that bias by more than `shift_threshold_ms` has its labels shifted.
-Recordings whose lag hits the edge of the search window are dropped.
+One-note recordings keep their own lag; denser ones take their player/chain/content group median, since
+the search can lock one strum note off. Recordings whose lag hits the search edge are dropped.
 
 Usage:
   uv run scripts/stage1/strings/build_index.py
@@ -57,13 +58,23 @@ def main(cfg):
     recs = recs[~unresolved].reset_index(drop=True)
     notes = notes[notes['rec'].isin(recs['rec'])].reset_index(drop=True)
 
+    # On strummed or dense recordings the lag search can lock one note off (the DI and amp-mic copies of one
+    # Guitar-TECHS take disagree by ~50 ms), while lags within a player/chain/content group agree; so only a
+    # one-note recording keeps its own lag and the rest take their group's median.
+    n_notes = recs['rec'].map(notes.groupby('rec').size())
+    group = recs.groupby(['dataset', 'player', 'chain', 'content'])['lag_ms'].transform('median')
+    recs['lag_used_ms'] = np.where(n_notes == 1, recs['lag_ms'], group)
     bias = float(recs.loc[recs['dataset'] == 'guitarset', 'lag_ms'].median())
-    recs['shift_ms'] = np.where(
-        (recs['lag_ms'] - bias).abs() > cfg.shift_threshold_ms, -(recs['lag_ms'] - bias), 0.0
-    ).round(1)
+    off = recs['lag_used_ms'] - bias
+    recs['shift_ms'] = np.where(off.abs() > cfg.shift_threshold_ms, -off, 0.0).round(1)
     shift = notes['rec'].map(recs.set_index('rec')['shift_ms']) / 1000
     notes['onset'] += shift
     notes['offset'] += shift
+    early = notes['onset'] < 0
+    dropped['starts before the audio'] = (
+        early.groupby(notes['rec'].map(recs.set_index('rec')['dataset'])).sum().to_dict()
+    )
+    notes = notes[~early].reset_index(drop=True)
 
     out = REPO_ROOT / cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
