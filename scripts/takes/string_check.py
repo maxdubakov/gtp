@@ -2,6 +2,7 @@
 
 Scores every edited note that more than one string can play, with the user's string as the truth, for
   * the classifier runs in `runs` (seeds averaged), run on the take's audio at the edited onsets and pitches,
+  * the same fused with inharmonicity evidence, self-calibrated over all takes of the same guitar (meta.json),
   * their pitch prior,
   * the evidence saved in the take's prediction (the classifier the demo used then), for notes whose pitch
     the user kept.
@@ -14,49 +15,75 @@ import hydra
 import librosa
 import numpy as np
 import pandas as pd
+from omegaconf import OmegaConf
 
 from gtp import REPO_ROOT, takes
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
+from gtp.stage1.inharmonicity import calibrate, implied_constants
+from gtp.stage1.partials import feature_names, note_features
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'takes'), config_name='string_check')
 def main(cfg):
     device = auto_device()
     classifiers = [st.StringClassifier.from_run(REPO_ROOT / r, device) for r in cfg.runs]
+    partials = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_features.yaml')
+    physics = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml')
+    names = feature_names(partials)
     root = REPO_ROOT / cfg.takes_dir
-    rows = []
+    rows, per_take = [], []
     for take_id in takes.take_ids(root):
         take = takes.load(root / take_id)
         edited = take['edited']
         if not edited:
             continue
-        notes = [n for n in edited['notes'] if st.candidates([n['pitch']])[0].sum() > 1]
+        notes = edited['notes']
         onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
+        multi = st.candidates(pitches).sum(axis=1) > 1
         truth = np.array([n['string'] - 1 for n in notes])
         y, _ = librosa.load(root / take_id / 'audio.wav', sr=st.SAMPLE_RATE, mono=True)
         spec = st.spectrogram(y[None], classifiers[0].feature)
         probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
         prior = classifiers[0].prior(pitches)
+        hi, sr = librosa.load(root / take_id / 'audio.wav', sr=partials.sample_rate, mono=True)
+        feats = np.stack([note_features(hi, sr, o, p, partials) for o, p in zip(onsets, pitches, strict=True)])
+        log_b, resid = feats[:, names.index('log10_b')], feats[:, names.index('fit_resid_cents')]
+        valid = (log_b > physics.min_log_b) & (resid < physics.max_resid_cents)
+        per_take.append((take['meta'].get('guitar', ''), probs, implied_constants(log_b, pitches), valid))
         before = {n['id']: n for n in take['prediction']['notes']}
         old = [
             (np.argmax(src['evidence']), t)
-            for n, t in zip(notes, truth, strict=True)
-            if (src := before.get(n.get('source_id'))) and src.get('evidence') and src['pitch'] == n['pitch']
+            for n, t, m in zip(notes, truth, multi, strict=True)
+            if m and (src := before.get(n.get('source_id'))) and src.get('evidence') and src['pitch'] == n['pitch']
         ]
         rows.append(
             {
                 'take': take_id,
-                'notes': len(notes),
-                'runs': float((probs.argmax(1) == truth).mean()),
-                'runs prior': float((prior.argmax(1) == truth).mean()),
+                'notes': int(multi.sum()),
+                'valid B': float(valid[multi].mean()),
+                'runs': float((probs.argmax(1) == truth)[multi].mean()),
+                'runs prior': float((prior.argmax(1) == truth)[multi].mean()),
                 'saved evidence': float(np.mean([p == t for p, t in old])) if old else np.nan,
                 'evidence scored': len(old),
+                'truth': truth,
+                'multi': multi,
             }
         )
+    for guitar in {g for g, *_ in per_take}:
+        group = [i for i, (g, *_) in enumerate(per_take) if g == guitar]
+        probs, implied, valid = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3))
+        fused, const, _ = calibrate(probs, implied, valid, physics.iters, physics.weight)
+        info(
+            f'{guitar or "unnamed guitar"}: {len(group)} takes, {int(valid.sum())} valid notes, constants {const.round(2)}'
+        )
+        for i, part in zip(group, np.split(fused, np.cumsum([len(per_take[i][1]) for i in group])[:-1]), strict=True):
+            r = rows[i]
+            r['runs + B'] = float((part.argmax(1) == r['truth'])[r['multi']].mean())
+    table = pd.DataFrame(rows).drop(columns=['truth', 'multi'])
     info(
-        f'{len(classifiers)} runs, string accuracy on edited multi-string notes\n{pd.DataFrame(rows).round(3).to_string(index=False)}'
+        f'{len(classifiers)} runs, string accuracy on edited multi-string notes\n{table.round(3).to_string(index=False)}'
     )
 
 
