@@ -233,7 +233,7 @@ def egfxset():
         string, fret = (int(x) for x in path.stem.split('-'))
         rec = f'egfxset/{slug(effect)}/{slug(pickup)}/{path.stem}'
         chain = 'di' if effect == EGFX_CLEAN else 'fx'
-        recs.append((rec, 'egfxset', rel(path), 'egfxset', 'fender-strat', chain, slug(effect), 'train'))
+        recs.append((rec, 'egfxset', rel(path), 'egfxset', 'egfx-stratocaster', chain, slug(effect), 'train'))
         onset, duration = first_onset(path)
         notes.append((rec, onset, duration, int(OPEN_STRINGS[string - 1] + fret), string))
     return frame(recs, notes)
@@ -336,7 +336,7 @@ def load_cached_index(index_dir, feature):
     index = REPO_ROOT / index_dir
     recs = pd.read_csv(index / 'recordings.csv')
     notes = pd.read_csv(index / 'notes.csv.gz').join(
-        recs.set_index('rec')[['dataset', 'player', 'chain', 'content', 'split']], on='rec'
+        recs.set_index('rec')[['dataset', 'player', 'guitar', 'chain', 'content', 'split']], on='rec'
     )
     cache = index / 'cache'
     meta = json.loads((cache / f'{feature}.json').read_text())

@@ -11,6 +11,8 @@ name: index
 index_dir: data/string_index
 # Train on a random subset of this many training windows (0 = all); for smoke tests.
 limit: 0
+# Guitars (recordings.csv `guitar`) to hold out as the test set; every other recording trains. Empty = index splits.
+holdout: []
 seed: 0
 
 # Paper recipe (see model/stringnet.yaml): standard conv-BN-ReLU-pool order, 30 epochs.

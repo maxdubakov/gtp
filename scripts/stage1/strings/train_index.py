@@ -5,10 +5,15 @@ training notes (the real recording plus its augmented renders); val and test use
 The checkpoint is chosen on the mean of the per-dataset val NLLs, so the largest val set doesn't decide alone.
 Test metrics are reported per (dataset, chain), each next to the pitch prior on the same notes.
 
+With `holdout` (a list of guitars), those guitars are the test set and every other recording trains, whatever its
+index split: a leave-guitars-out fold. Nothing is selected on the held-out guitars: the last epoch is kept, the
+temperature stays 1, and the raw logits go to holdout_logits.npz for calibration across folds.
+
 Usage:
   uv run scripts/stage1/strings/train_index.py
   uv run scripts/stage1/strings/train_index.py -m seed=0,1,2
   uv run scripts/stage1/strings/train_index.py optim.epochs=1 limit=20000 wandb.mode=disabled
+  uv run scripts/stage1/strings/train_index.py "holdout=[sire-t7]" optim.epochs=4 name=logo_sire-t7
 """
 
 import json
@@ -71,6 +76,10 @@ def main(cfg):
         'val': np.flatnonzero(real & (split == 'val')),
         'test': np.flatnonzero(real & (split == 'test')),
     }
+    if cfg.holdout:
+        held = rows['note'].map(notes['guitar']).isin(list(cfg.holdout))
+        idx = {'train': np.flatnonzero(~held), 'test': np.flatnonzero(real & held)}
+        idx['val'] = idx['test']
     if cfg.limit:
         idx['train'] = np.sort(np.random.permutation(idx['train'])[: cfg.limit])
     sizes = {k: len(v) for k, v in idx.items()}
@@ -156,7 +165,7 @@ def main(cfg):
         }
         history.append(record)
         run.log({**record, 'lr': sched.get_last_lr()[0], 'epoch_s': time.time() - t0}, step=epoch)
-        if macro < best:
+        if cfg.holdout or macro < best:
             best, best_epoch = macro, epoch
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         accs = ' '.join(f'{d} {m["acc"]:.3f}' for d, m in per.items())
@@ -167,8 +176,8 @@ def main(cfg):
 
     model.load_state_dict(best_state)
     torch.save(best_state, run.dir / 'model.pt')
-    temperature = fit_temperature(logits_of('val'), data['val'][3].cpu())
-    info(f'best epoch {best_epoch}, temperature {temperature:.3f} (fit on val)')
+    temperature = 1.0 if cfg.holdout else fit_temperature(logits_of('val'), data['val'][3].cpu())
+    info(f'best epoch {best_epoch}, temperature {temperature:.3f}')
 
     train_notes = np.unique(note_of['train'])
     counts = string_counts(pitch[train_notes], label[train_notes])
@@ -178,6 +187,8 @@ def main(cfg):
     test['label'] = test['string'] - 1
     test['n_cand'] = candidates(test['pitch'].to_numpy()).sum(axis=1)
     logits = logits_of('test')
+    if cfg.holdout:
+        np.savez(run.dir / 'holdout_logits.npz', note=note_of['test'], logits=logits.numpy())
     probs = F.softmax(logits, dim=1).numpy()
     probs_cal = F.softmax(logits / temperature, dim=1).numpy()
     prior = prior_from_counts(counts, test['pitch'].to_numpy())
