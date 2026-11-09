@@ -1,0 +1,20 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: physics_fusion
+index_dir: data/string_index
+# Run directories (relative to the repo) with index_probs.npz (predict_index.py); their probabilities are averaged.
+runs: []
+# Partial features file in <index_dir>/cache (harmonic_features.py).
+features: harm.npz
+# A note's inharmonicity is used only if its fit found B above the floor and left a small residual.
+min_log_b: -6.9
+max_resid_cents: 10
+iters: 15
+# Exponent on the inharmonicity likelihood when fused with the classifier.
+weight: 1.0
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/strings/physics/${now:%Y-%m-%d_%H-%M-%S}_${name}

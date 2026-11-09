@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+sample_rate: 44100
+# Frame length in samples (~93 ms) and consecutive frames from the onset.
+frame: 4096
+n_frames: 4
+# Frames whose partial frequency deviations are kept (the early ones, where partials are strongest).
+dev_frames: 2
+n_fft: 32768
+n_partials: 32
+# Upper clip on the tracked inharmonicity coefficient B, and the widest search tolerance per partial.
+b_max: 0.001
+tol_cents: 50
+# Recordings per dataset, for a quick check; 0 = all.
+limit: 0
+workers: 9
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

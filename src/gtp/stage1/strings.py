@@ -323,15 +323,19 @@ class StringClassifier:
     def prior(self, pitches):
         return prior_from_counts(self.prior_counts, pitches)
 
-    @torch.no_grad()
     def predict(self, spec, onsets, pitches, batch=512):
         """Calibrated (N, 6) string probabilities for notes in one track's spectrogram."""
-        windows = note_windows(spec, np.asarray(onsets))[..., : self.n_frames]
+        return self.predict_windows(note_windows(spec, np.asarray(onsets)), pitches, batch)
+
+    @torch.no_grad()
+    def predict_windows(self, windows, pitches, batch=512):
+        """Calibrated (N, 6) string probabilities for cached note windows (N, 1, freq, >= n_frames)."""
         pitch = torch.as_tensor(np.asarray(pitches), dtype=torch.long)
         cand = torch.as_tensor(candidates(pitches))
         out = []
         for i in range(0, len(windows), batch):
-            x = (torch.from_numpy(windows[i : i + batch]).to(self.device).float() - self.mean) / self.std
+            w = np.ascontiguousarray(windows[i : i + batch, ..., : self.n_frames])
+            x = (torch.from_numpy(w).to(self.device).float() - self.mean) / self.std
             logits = self.model(x, pitch[i : i + batch].to(self.device), cand[i : i + batch].to(self.device))
             out.append(torch.softmax(logits / self.temperature, dim=1).cpu())
         return torch.cat(out).numpy()

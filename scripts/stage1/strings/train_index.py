@@ -16,7 +16,6 @@ import time
 
 import hydra
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
@@ -25,9 +24,9 @@ from omegaconf import OmegaConf
 from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
+from gtp.stage1.string_data import load_cached_index
 from gtp.stage1.strings import (
     PRE_FRAMES,
-    cache_layout,
     candidates,
     fit_temperature,
     post_frames,
@@ -36,21 +35,6 @@ from gtp.stage1.strings import (
     summarize,
 )
 from gtp.track import start_run
-
-
-def load_index(index_dir, feature):
-    index = REPO_ROOT / index_dir
-    recs = pd.read_csv(index / 'recordings.csv')
-    notes = pd.read_csv(index / 'notes.csv.gz').join(
-        recs.set_index('rec')[['dataset', 'player', 'chain', 'content', 'split']], on='rec'
-    )
-    cache = index / 'cache'
-    meta = json.loads((cache / f'{feature}.json').read_text())
-    rows = pd.read_csv(cache / f'{feature}_rows.csv.gz')
-    if meta['layout'] != cache_layout() or rows['note'].max() >= len(notes):
-        raise ValueError(f'{cache} is stale against the index or the layout: rebuild it')
-    x = np.load(cache / f'{feature}.npy', mmap_mode='r')
-    return notes, rows, x, meta
 
 
 def to_device(x, idx, n_frames, device, chunk=8192):
@@ -79,7 +63,7 @@ def main(cfg):
     np.random.seed(cfg.seed)
     device = auto_device()
 
-    notes, rows, x, cache_meta = load_index(cfg.index_dir, cfg.data.feature)
+    notes, rows, x, cache_meta = load_cached_index(cfg.index_dir, cfg.data.feature)
     split = rows['note'].map(notes['split'])
     real = rows['variant'] == 0
     idx = {

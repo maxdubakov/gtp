@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+# Run directories (relative to the repo) of train_index.py.
+runs: []
+splits: [val, test]
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

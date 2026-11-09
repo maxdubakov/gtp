@@ -20,7 +20,7 @@ import pandas as pd
 import pretty_midi
 
 from gtp import REPO_ROOT
-from gtp.stage1.strings import MAX_FRET
+from gtp.stage1.strings import MAX_FRET, cache_layout
 
 DATA = Path(REPO_ROOT) / 'data'
 INDEX_DIR = DATA / 'string_index'
@@ -329,3 +329,19 @@ def drop_empty(recs, notes):
 
 def load_index():
     return pd.read_csv(INDEX_DIR / 'recordings.csv'), pd.read_csv(INDEX_DIR / 'notes.csv.gz')
+
+
+def load_cached_index(index_dir, feature):
+    """Notes joined with their recordings, plus the feature cache: its row table, windows (memmap) and metadata."""
+    index = REPO_ROOT / index_dir
+    recs = pd.read_csv(index / 'recordings.csv')
+    notes = pd.read_csv(index / 'notes.csv.gz').join(
+        recs.set_index('rec')[['dataset', 'player', 'chain', 'content', 'split']], on='rec'
+    )
+    cache = index / 'cache'
+    meta = json.loads((cache / f'{feature}.json').read_text())
+    rows = pd.read_csv(cache / f'{feature}_rows.csv.gz')
+    if meta['layout'] != cache_layout() or rows['note'].max() >= len(notes):
+        raise ValueError(f'{cache} is stale against the index or the layout: rebuild it')
+    x = np.load(cache / f'{feature}.npy', mmap_mode='r')
+    return notes, rows, x, meta
