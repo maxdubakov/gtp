@@ -1,0 +1,31 @@
+defaults:
+  - data: mic_logmel229
+  - model: stringnet
+  - optim: adamw_onecycle
+  - wandb: default
+  - _self_
+  - experiment: null
+  - override hydra/job_logging: none
+
+name: index
+index_dir: data/string_index
+# Train on a random subset of this many training windows (0 = all); for smoke tests.
+limit: 0
+seed: 0
+
+# Paper recipe (see model/stringnet.yaml): standard conv-BN-ReLU-pool order, 30 epochs.
+model:
+  pool_first: false
+optim:
+  epochs: 30
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/strings/runs/${now:%Y-%m-%d_%H-%M-%S}_${name}
+  sweep:
+    dir: ${repo_root:}/results/strings/sweeps/${name}/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        exclude_keys: [experiment, name, wandb, wandb.mode, wandb.project, wandb.entity]

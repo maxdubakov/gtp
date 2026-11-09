@@ -16,6 +16,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 import torch
+import torch.nn.functional as F
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
@@ -210,13 +211,24 @@ class StringNet(nn.Module):
         return self.head(h).masked_fill(~candidates, float('-inf'))
 
 
-def pitch_prior(notes, train_mask, pitches=None, alpha=1.0):
-    """P(string | pitch) from train counts, add-alpha smoothed over valid strings, for `pitches` (default: every note)."""
+def string_counts(pitch, label):
+    """(128, 6) training counts of each string per MIDI pitch."""
     counts = np.zeros((128, N_STRINGS))
-    np.add.at(counts, (notes.pitch[train_mask], notes.label[train_mask]), 1)
-    pitches = notes.pitch if pitches is None else np.asarray(pitches)
+    np.add.at(counts, (np.asarray(pitch), np.asarray(label)), 1)
+    return counts
+
+
+def prior_from_counts(counts, pitches, alpha=1.0):
+    """P(string | pitch), add-alpha smoothed over the strings that can play it."""
+    pitches = np.asarray(pitches)
     p = (counts[pitches] + alpha) * candidates(pitches)
     return p / p.sum(axis=1, keepdims=True)
+
+
+def pitch_prior(notes, train_mask, pitches=None, alpha=1.0):
+    """P(string | pitch) from train counts, for `pitches` (default: every note)."""
+    counts = string_counts(notes.pitch[train_mask], notes.label[train_mask])
+    return prior_from_counts(counts, notes.pitch if pitches is None else pitches, alpha)
 
 
 def summarize(probs, labels):
@@ -235,6 +247,23 @@ def summarize(probs, labels):
     }
 
 
+def fit_temperature(logits, labels):
+    """Single temperature minimizing NLL (Guo et al. 2017); masked strings stay at -inf."""
+    valid = torch.isfinite(logits)
+    finite = logits.masked_fill(~valid, 0.0)
+    log_t = torch.zeros((), requires_grad=True)
+    opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=200)
+
+    def closure():
+        opt.zero_grad()
+        loss = F.cross_entropy((finite / log_t.exp()).masked_fill(~valid, float('-inf')), labels)
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    return float(log_t.exp())
+
+
 @dataclass
 class StringClassifier:
     """A trained string-classifier run, ready to score arbitrary (onset, pitch) notes."""
@@ -246,22 +275,29 @@ class StringClassifier:
     n_frames: int
     source: str
     feature: str
-    prior_notes: Notes
-    prior_mask: np.ndarray
+    prior_counts: np.ndarray
     device: str
 
     @classmethod
     def from_run(cls, run_dir, device):
-        """Rebuild a run from its saved config; input normalization is recomputed from its training notes."""
-        cfg = OmegaConf.load(Path(run_dir) / '.hydra' / 'config.yaml')
-        notes = load_notes()
+        """Rebuild a run from its saved config. Index runs (train_index.py) saved their input normalization and
+        prior in classifier.npz; GuitarSet runs recompute them from their training notes."""
+        run_dir = Path(run_dir)
+        cfg = OmegaConf.load(run_dir / '.hydra' / 'config.yaml')
         n_frames = PRE_FRAMES + post_frames(cfg.data.window_ms)
-        cache, _ = load_cache(cfg.data.source, cfg.data.feature, len(notes.pitch))
-        train_mask = notes.split_mask(split_players(cfg.test_player, cfg.get('exclude_players', ()))['train'])
-        mean, std = freq_stats(cache[..., :n_frames], np.flatnonzero(train_mask))
-        model = instantiate(cfg.model, in_channels=cache.shape[1], n_freq=cache.shape[2], n_frames=n_frames)
-        model.load_state_dict(torch.load(Path(run_dir) / 'model.pt', map_location='cpu'))
-        temperature = json.loads((Path(run_dir) / 'metrics.json').read_text())['temperature']
+        saved = run_dir / 'classifier.npz'
+        if saved.exists():
+            z = np.load(saved)
+            mean, std, counts = torch.from_numpy(z['mean']), torch.from_numpy(z['std']), z['prior_counts']
+        else:
+            notes = load_notes()
+            cache, _ = load_cache(cfg.data.source, cfg.data.feature, len(notes.pitch))
+            train_mask = notes.split_mask(split_players(cfg.test_player, cfg.get('exclude_players', ()))['train'])
+            mean, std = freq_stats(cache[..., :n_frames], np.flatnonzero(train_mask))
+            counts = string_counts(notes.pitch[train_mask], notes.label[train_mask])
+        model = instantiate(cfg.model, in_channels=mean.shape[1], n_freq=mean.shape[2], n_frames=n_frames)
+        model.load_state_dict(torch.load(run_dir / 'model.pt', map_location='cpu'))
+        temperature = json.loads((run_dir / 'metrics.json').read_text())['temperature']
         return cls(
             model.to(device).eval(),
             mean.to(device),
@@ -270,13 +306,12 @@ class StringClassifier:
             n_frames,
             cfg.data.source,
             cfg.data.feature,
-            notes,
-            train_mask,
+            counts,
             device,
         )
 
     def prior(self, pitches):
-        return pitch_prior(self.prior_notes, self.prior_mask, pitches)
+        return prior_from_counts(self.prior_counts, pitches)
 
     @torch.no_grad()
     def predict(self, spec, onsets, pitches, batch=512):

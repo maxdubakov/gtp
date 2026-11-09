@@ -26,6 +26,7 @@ from gtp.log import info
 from gtp.stage1.strings import (
     N_STRINGS,
     PRE_FRAMES,
+    fit_temperature,
     freq_stats,
     load_cache,
     load_notes,
@@ -45,23 +46,6 @@ def predict_logits(model, batches):
 
 def predict(model, batches):
     return F.softmax(predict_logits(model, batches), dim=1).numpy()
-
-
-def fit_temperature(logits, labels):
-    """Single temperature minimizing NLL (Guo et al. 2017); masked strings stay at -inf."""
-    valid = torch.isfinite(logits)
-    finite = logits.masked_fill(~valid, 0.0)
-    log_t = torch.zeros((), requires_grad=True)
-    opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=200)
-
-    def closure():
-        opt.zero_grad()
-        loss = F.cross_entropy((finite / log_t.exp()).masked_fill(~valid, float('-inf')), labels)
-        loss.backward()
-        return loss
-
-    opt.step(closure)
-    return float(log_t.exp())
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'strings'), config_name='train')
