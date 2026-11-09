@@ -12,10 +12,12 @@ evidence: profile
 features: harm.npz
 profiles: bprof.npz
 # Profile evidence: exponent on the raw likelihood curves, and the within-guitar scatter (decades) of a string's constant.
-temper: 0.3
+temper: 0.2
 spread: 0.06
 # The label-free calibration of the string constants uses the curves at this (sharper) exponent.
 calibration_temper: 1.0
+# How far (decades) a guitar's string constants may sit from its string-set family's typical ones.
+prior_sd: 0.12
 # Point evidence: a note's inharmonicity is used only if its fit found B above the floor and left a small residual.
 min_log_b: -6.9
 max_resid_cents: 10

@@ -63,8 +63,16 @@ def calibrate(probs, implied, valid, iters=15, weight=1.0):
 # Likelihood profiles (bprofile.py) instead of point estimates: each note carries log p(spectrum | B) on a grid.
 
 CONSTANT_GRID = np.arange(-5.3, -3.2, 0.02)
-# Weak prior on a string's constant, so a string without notes keeps a plausible value.
-PRIOR_MEAN, PRIOR_SD = -4.1, 0.6
+# Typical constants (high e to low E) of the two string-set families, as medians over the index's training guitars:
+# plain G (four electrics: Aristides, two Stratocasters, Ibanez Power Strat) and wound G (GuitarSet's acoustic,
+# Ibanez PF300). Guitars of one family differ by well under 0.1, so the family is a strong prior for a new guitar.
+STRING_SETS = {
+    'plain_g': np.array([-4.93, -4.48, -4.00, -4.20, -4.00, -3.70]),
+    'wound_g': np.array([-4.66, -4.16, -4.56, -4.30, -4.00, -3.86]),
+}
+PRIOR_SD = 0.12
+HARMONIC_LOG_B = -5.3
+INFLUENCE_CAP = 4.0
 
 
 def string_tables(profile, log_b, pitch, spread):
@@ -83,12 +91,26 @@ def string_tables(profile, log_b, pitch, spread):
     lo = pos.astype(int)
     frac = pos - lo
     rows = np.arange(len(profile))[:, None, None]
-    return (1 - frac) * smooth[rows, lo] + frac * smooth[rows, lo + 1]
+    tables = (1 - frac) * smooth[rows, lo] + frac * smooth[rows, lo + 1]
+    # A curve that peaks below any real string's B is an exactly harmonic series: distortion products, not the string.
+    tables[log_b[profile.argmax(axis=1)] < HARMONIC_LOG_B] = 0.0
+    return tables
 
 
-def fit_constants(tables, resp):
-    """Index into CONSTANT_GRID of each string's most likely constant under the notes' string responsibilities."""
-    objective = np.einsum('is,isc->sc', resp, tables) - 0.5 * ((CONSTANT_GRID - PRIOR_MEAN) / PRIOR_SD) ** 2
+def bounded(tables, cap=INFLUENCE_CAP):
+    """Each note's curves cut off `cap` nats below its own maximum, so no note, however loud or long, outvotes the rest."""
+    return np.maximum(tables - tables.max(axis=(1, 2), keepdims=True), -cap)
+
+
+def fit_constants(tables, resp, prior_mean=None, prior_sd=PRIOR_SD):
+    """Index into CONSTANT_GRID of each string's most likely constant under the notes' string responsibilities.
+
+    Without `prior_mean` (constants from labels) only the notes speak; with it, each constant is pulled towards its
+    string-set family's typical value.
+    """
+    objective = np.einsum('is,isc->sc', resp, bounded(tables))
+    if prior_mean is not None:
+        objective = objective - 0.5 * ((CONSTANT_GRID[None] - prior_mean[:, None]) / prior_sd) ** 2
     return objective.argmax(axis=1)
 
 
@@ -99,10 +121,21 @@ def fuse_tables(probs, tables, const_idx):
     return p / p.sum(axis=1, keepdims=True)
 
 
-def calibrate_profiles(probs, tables, iters=15):
-    """Label-free EM over one guitar's notes with profile likelihoods; returns (fused probabilities, constants)."""
-    post = probs
-    for _ in range(iters):
-        const_idx = fit_constants(tables, post)
-        post = fuse_tables(probs, tables, const_idx)
-    return post, CONSTANT_GRID[const_idx]
+def calibrate_profiles(probs, tables, iters=15, prior_sd=PRIOR_SD):
+    """Label-free calibration of one guitar's string constants from its notes' profile tables.
+
+    EM is run once per string-set family, started at and regularised towards the family's typical constants; the
+    family that explains the notes better wins. Returns (fused probabilities, constants, family name).
+    """
+    best = None
+    cut = bounded(tables)
+    for name, mean in STRING_SETS.items():
+        const_idx = np.searchsorted(CONSTANT_GRID, mean - 1e-9)
+        for _ in range(iters):
+            post = fuse_tables(probs, tables, const_idx)
+            const_idx = fit_constants(tables, post, mean, prior_sd)
+        fit = np.log((probs * np.exp(cut[:, np.arange(6), const_idx])).sum(axis=1) + 1e-300).sum()
+        fit -= 0.5 * (((CONSTANT_GRID[const_idx] - mean) / prior_sd) ** 2).sum()
+        if best is None or fit > best[0]:
+            best = (fit, fuse_tables(probs, tables, const_idx), CONSTANT_GRID[const_idx], name)
+    return best[1:]

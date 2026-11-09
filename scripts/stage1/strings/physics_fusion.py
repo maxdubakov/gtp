@@ -77,7 +77,7 @@ def main(cfg):
         sharp = string_tables(cfg.calibration_temper * total, prof['log_b'], d['pitch'], cfg.spread)
 
         def label_free(i):
-            const = calibrate_profiles(probs[i], sharp[i], cfg.iters)[1]
+            const = calibrate_profiles(probs[i], sharp[i], cfg.iters, cfg.prior_sd)[1]
             return fuse_tables(probs[i], tables[i], np.searchsorted(CONSTANT_GRID, const - 1e-9)), const
 
         def from_labels(fit, i):

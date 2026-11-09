@@ -21,17 +21,16 @@ from gtp import REPO_ROOT, takes
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
-from gtp.stage1.inharmonicity import calibrate, implied_constants
-from gtp.stage1.partials import feature_names, note_features
+from gtp.stage1.bprofile import grid, recording_profiles
+from gtp.stage1.inharmonicity import CONSTANT_GRID, calibrate_profiles, fuse_tables, string_tables
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'takes'), config_name='string_check')
 def main(cfg):
     device = auto_device()
     classifiers = [st.StringClassifier.from_run(REPO_ROOT / r, device) for r in cfg.runs]
-    partials = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_features.yaml')
+    profiles = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml')
     physics = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml')
-    names = feature_names(partials)
     root = REPO_ROOT / cfg.takes_dir
     rows, per_take = [], []
     for take_id in takes.take_ids(root):
@@ -47,11 +46,9 @@ def main(cfg):
         spec = st.spectrogram(y[None], classifiers[0].feature)
         probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
         prior = classifiers[0].prior(pitches)
-        hi, sr = librosa.load(root / take_id / 'audio.wav', sr=partials.sample_rate, mono=True)
-        feats = np.stack([note_features(hi, sr, o, p, partials) for o, p in zip(onsets, pitches, strict=True)])
-        log_b, resid = feats[:, names.index('log10_b')], feats[:, names.index('fit_resid_cents')]
-        valid = (log_b > physics.min_log_b) & (resid < physics.max_resid_cents)
-        per_take.append((take['meta'].get('guitar', ''), probs, implied_constants(log_b, pitches), valid))
+        hi, sr = librosa.load(root / take_id / 'audio.wav', sr=profiles.sample_rate, mono=True)
+        curves = recording_profiles(hi, sr, onsets, [n['end'] for n in notes], pitches, profiles).sum(axis=1)
+        per_take.append((take['meta'].get('guitar', ''), probs, curves, np.asarray(pitches)))
         before = {n['id']: n for n in take['prediction']['notes']}
         old = [
             (np.argmax(src['evidence']), t)
@@ -62,7 +59,6 @@ def main(cfg):
             {
                 'take': take_id,
                 'notes': int(multi.sum()),
-                'valid B': float(valid[multi].mean()),
                 'runs': float((probs.argmax(1) == truth)[multi].mean()),
                 'runs prior': float((prior.argmax(1) == truth)[multi].mean()),
                 'saved evidence': float(np.mean([p == t for p, t in old])) if old else np.nan,
@@ -73,10 +69,13 @@ def main(cfg):
         )
     for guitar in {g for g, *_ in per_take}:
         group = [i for i, (g, *_) in enumerate(per_take) if g == guitar]
-        probs, implied, valid = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3))
-        fused, const, _ = calibrate(probs, implied, valid, physics.iters, physics.weight)
+        probs, curves, pitch = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3))
+        sharp = string_tables(physics.calibration_temper * curves, grid(profiles), pitch, physics.spread)
+        _, const, family = calibrate_profiles(probs, sharp, physics.iters, physics.prior_sd)
+        tables = string_tables(physics.temper * curves, grid(profiles), pitch, physics.spread)
+        fused = fuse_tables(probs, tables, np.searchsorted(CONSTANT_GRID, const - 1e-9))
         info(
-            f'{guitar or "unnamed guitar"}: {len(group)} takes, {int(valid.sum())} valid notes, constants {const.round(2)}'
+            f'{guitar or "unnamed guitar"}: {len(group)} takes, {len(probs)} notes, {family}, constants {const.round(2)}'
         )
         for i, part in zip(group, np.split(fused, np.cumsum([len(per_take[i][1]) for i in group])[:-1]), strict=True):
             r = rows[i]
