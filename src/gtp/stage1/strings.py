@@ -180,24 +180,34 @@ def load_cache(source, feature, n_notes):
     return x, meta
 
 
+POOLS = {
+    'flatten': lambda h: h.flatten(1),
+    'mean': lambda h: h.mean(dim=3).flatten(1),
+    'meanmax': lambda h: torch.cat([h.mean(dim=3), h.amax(dim=3)], dim=1).flatten(1),
+}
+
+
 class StringNet(nn.Module):
     """TART-style per-note encoder (3 conv blocks) + pitch embedding -> logits over the 6 strings.
 
     `pool_first` pools before BatchNorm/ReLU: about 1.4x faster on MPS, where BN/ReLU on the
     full-resolution first block dominates step time; BN then normalizes pooled activations.
+    `pool` collapses the encoder's time axis before the projection: 'flatten' keeps every time cell (TART),
+    'mean' averages them, 'meanmax' concatenates their mean and max (as in PANNs).
     """
 
-    def __init__(self, in_channels, n_freq, n_frames, width=1.0, use_pitch=True, pool_first=False):
+    def __init__(self, in_channels, n_freq, n_frames, width=1.0, use_pitch=True, pool_first=False, pool='flatten'):
         super().__init__()
         chans = [max(4, round(c * width)) for c in (32, 64, 128)]
         layers, prev = [], in_channels
         for c in chans:
-            conv, bn, relu, pool = nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)
-            layers += [conv, pool, bn, relu] if pool_first else [conv, bn, relu, pool]
+            conv, bn, relu, halve = nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)
+            layers += [conv, halve, bn, relu] if pool_first else [conv, bn, relu, halve]
             prev = c
-        self.encoder = nn.Sequential(*layers, nn.Flatten())
+        self.encoder = nn.Sequential(*layers)
+        self.pool = POOLS[pool]
         with torch.no_grad():
-            enc_dim = self.encoder(torch.zeros(1, in_channels, n_freq, n_frames)).shape[1]
+            enc_dim = self.pool(self.encoder(torch.zeros(1, in_channels, n_freq, n_frames))).shape[1]
         self.proj = nn.Sequential(nn.Linear(enc_dim, 256), nn.LayerNorm(256), nn.ReLU())
         self.pitch_emb = nn.Embedding(128, 16) if use_pitch else None
         self.head = nn.Sequential(
@@ -205,7 +215,7 @@ class StringNet(nn.Module):
         )
 
     def forward(self, x, pitch, candidates):
-        h = self.proj(self.encoder(x))
+        h = self.proj(self.pool(self.encoder(x)))
         if self.pitch_emb is not None:
             h = torch.cat([h, self.pitch_emb(pitch)], dim=1)
         return self.head(h).masked_fill(~candidates, float('-inf'))
