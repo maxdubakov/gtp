@@ -10,6 +10,7 @@ the fused probabilities to <out>/fused.npz (note = row of notes.csv.gz).
 
 Usage:
   uv run scripts/stage1/strings/physics_fusion.py "runs=['results/strings/runs/<run>', ...]"
+  uv run scripts/stage1/strings/physics_fusion.py probs=results/strings/logo/<run>/probs.npz
 """
 
 import hydra
@@ -45,12 +46,16 @@ def main(cfg):
     notes = pd.read_csv(index / 'notes.csv.gz').join(
         recs.set_index('rec')[['dataset', 'guitar', 'chain', 'content', 'split']], on='rec'
     )
-    runs = [np.load(REPO_ROOT / r / 'index_probs.npz') for r in cfg.runs]
-    note = runs[0]['note']
-    assert all((r['note'] == note).all() for r in runs)
+    if cfg.probs:
+        held = np.load(REPO_ROOT / cfg.probs)
+        note, probs = held['note'], held['classifier']
+    else:
+        runs = [np.load(REPO_ROOT / r / 'index_probs.npz') for r in cfg.runs]
+        note = runs[0]['note']
+        assert all((r['note'] == note).all() for r in runs)
+        probs = np.mean([r['probs'] for r in runs], axis=0)
     d = notes.iloc[note].reset_index(drop=True)
     d = d.assign(note=note)
-    probs = np.mean([r['probs'] for r in runs], axis=0)
 
     fused = {k: probs.copy() for k in ('per_guitar', 'per_recording', 'oracle')}
     labels = one_hot(d['string'])

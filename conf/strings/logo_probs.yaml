@@ -1,0 +1,12 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: logo
+index_dir: data/string_index
+# Glob of train_index.py runs with `holdout`, relative to the repo.
+runs: results/strings/runs/*logo-*
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/strings/logo/${now:%Y-%m-%d_%H-%M-%S}_${name}

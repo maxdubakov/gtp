@@ -6,6 +6,8 @@ name: physics_fusion
 index_dir: data/string_index
 # Run directories (relative to the repo) with index_probs.npz (predict_index.py); their probabilities are averaged.
 runs: []
+# Or held-out probabilities for every guitar (logo_probs.py): an .npz with `note` and `classifier`.
+probs: null
 # Inharmonicity evidence: `point` (one B estimate per note, harmonic_features.py) or `profile` (a likelihood curve
 # over B per note, b_profiles.py).
 evidence: profile

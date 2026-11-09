@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: e2e_index
+index_dir: data/string_index
+splits: [val, test]
+# Restrict to these guitars (recordings.csv `guitar`); empty = all of the splits.
+guitars: []
+inputs: [stage1, gt]
+stage1_checkpoint: models/finetuned/step_0070000_final.pth
+stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
+# Glob patterns of train_index.py runs, relative to the repo; `{guitar}` selects each guitar's own held-out runs.
+classifier_runs:
+  - results/strings/runs/*pool-flatten_w400_s*
+# Decode-time fusion weight, chosen on the val guitars (index_fusion.py).
+lam: 2.5
+onset_tolerance: 0.05
+prob_floor: 1.0e-4
+batch: 64
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/e2e/index/${now:%Y-%m-%d_%H-%M-%S}_${name}
