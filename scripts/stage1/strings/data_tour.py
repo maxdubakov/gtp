@@ -106,6 +106,29 @@ def audio(src):
     return f'<audio controls preload="none" src="{src}"></audio>'
 
 
+def players(tracks):
+    """Labelled audio players side by side: [(label, src)]."""
+    return '<div class="players">' + ''.join(f'<label>{esc(t)}{audio(src)}</label>' for t, src in tracks) + '</div>'
+
+
+def sonify(y, notes, t0, sr=SR):
+    """The recording with every label played over it as a short plucked tone at the label's pitch and onset, so
+    a misaligned label sounds as a doubled attack and a wrong pitch as a clash."""
+    synth = np.zeros(len(y), dtype=np.float32)
+    for n in notes.itertuples():
+        start = round((n.onset - t0) * sr)
+        length = int(min(max(n.offset - n.onset, 0.1), 0.6) * sr)
+        lo, hi = max(start, 0), min(start + length, len(y))
+        if hi <= lo:
+            continue
+        t = np.arange(lo - start, hi - start) / sr
+        f0 = librosa.midi_to_hz(n.pitch)
+        tone = sum(a * np.sin(2 * np.pi * k * f0 * t) for k, a in ((1, 1.0), (2, 0.5), (3, 0.25), (4, 0.12)))
+        synth[lo:hi] += (tone * np.exp(-t / 0.12) * np.minimum(t / 0.002, 1)).astype(np.float32)
+    rec = y / (np.abs(y).max() + 1e-9)
+    return 0.6 * rec + 0.4 * synth / (np.abs(synth).max() + 1e-9)
+
+
 def table(rows, cols=None, cls=''):
     cols = cols or list(rows[0])
     head = ''.join(f'<th>{esc(c)}</th>' for c in cols)
@@ -625,7 +648,12 @@ def samples_section(recs, notes, datasets, cfg, rng, assets):
             fig = excerpt_figure(y, start, shown, f'{r["rec"]}  ({len(shown)} notes)')
             cards.append(
                 f'<div class="card"><p class="reclabel">{rec_label(r, start, len(y) / SR)}</p>'
-                f'{audio(assets.wav(y, name))}'
+                + players(
+                    [
+                        ('recording', assets.wav(y, name)),
+                        ('recording + labels', assets.wav(sonify(y, shown, start), f'{name}_labels')),
+                    ]
+                )
                 + figure(
                     assets.fig(fig, name),
                     f'Excerpt of {r["rec"]}',
@@ -640,7 +668,10 @@ def samples_section(recs, notes, datasets, cfg, rng, assets):
         f'<p>{cfg.samples_per_dataset} random excerpts per dataset (seed {cfg.seed}), each starting just before a '
         f'random labelled note. Spectrograms are a constant-Q transform with one row per third of a semitone, so '
         'the y axis is pitch. Labels are drawn as they are in the index, i.e. after the alignment shift. Audio '
-        'clips are 22,050 Hz mono, peak-normalised for listening.</p>' + string_legend() + ''.join(blocks)
+        'clips are 22,050 Hz mono, peak-normalised for listening. <i>Recording + labels</i> plays every label as '
+        'a short synthetic pluck at its pitch and onset over the recording: a well-timed label merges with the '
+        "guitar's attack, a late or early one sounds as a doubled attack (a flam), a wrong pitch as a clash, "
+        'and a missing label as a guitar note with no pluck on it.</p>' + string_legend() + ''.join(blocks)
     )
     return section('samples', '4. Samples', body)
 
@@ -884,6 +915,15 @@ def walkthrough_section(recs, notes, report, cfg, assets):
     after = in_window(rn, w0, w1)
     before = after.assign(onset=after['onset'] - r['shift_ms'] / 1000, offset=after['offset'] - r['shift_ms'] / 1000)
     step6 = assets.fig(zoom_figure(y, w0, w1, after, before=before), 'walk_6_after')
+    c0, c1 = max(w0 - 1, 0), w1 + 2
+    clip = y[int(c0 * sd.ALIGN_SR) : int(c1 * sd.ALIGN_SR)]
+    listen = players(
+        [
+            ('recording', assets.wav(clip, 'walk_rec')),
+            ('+ labels as shipped', assets.wav(sonify(clip, in_window(shipped, c0, c1), c0), 'walk_shipped')),
+            ('+ labels after alignment', assets.wav(sonify(clip, in_window(rn, c0, c1), c0), 'walk_aligned')),
+        ]
+    )
 
     group_name = f'{info_of(r["dataset"])["name"]} / {r["player"]} / {r["chain"]} / {r["content"]}'
     body = (
@@ -950,6 +990,10 @@ def walkthrough_section(recs, notes, report, cfg, assets):
         'index. Pitch and string are never touched. Labels moved before 0 s are dropped; recordings whose best '
         f'move sits at the edge of the ±{1000 * sd.MAX_LAG:.0f} ms search are dropped too, since their real '
         'offset is outside it.</p>'
+        '<p>Listen: each label is played as a short synthetic pluck at its pitch over the recording. As shipped, '
+        f'each pluck comes {r["shift_ms"]:.0f} ms before the guitar and every note sounds doubled; after '
+        'alignment they merge.</p>'
+        + listen
         + figure(
             step6,
             'Labels before and after',
@@ -1093,14 +1137,29 @@ def alignment_section(recs, notes, report, datasets, cfg, assets):
         before = after.assign(onset=after['onset'] - dt, offset=after['offset'] - dt)
         name = 'alignment_shift_' + title.split()[1]
         src = assets.fig(zoom_figure(y, w0, w0 + cfg.align_seconds, after, before=before), name)
-        body += f'<h3>{title}</h3><p class="reclabel">{rec_label(r)}</p>' + figure(
-            src,
-            f'{title}: labels before and after',
-            f'Measured lag {r["lag_ms"]:+.1f} ms against the GuitarSet reference of {bias:+.1f} ms, so the labels '
-            f'moved by {r["shift_ms"]:+.1f} ms (matched {pct(r["matched"], 0)}, residual '
-            f'{r["residual_ms"]:.0f} ms). Dashed orange: label onsets as the dataset ships them; solid blue: in '
-            f'the index. On GuitarSet the nearest triangle sits a median {ref:+.0f} ms from the label, so '
-            'well-placed blue lines sit on or just before the triangles, at the foot of each rise.',
+        c0, c1 = max(w0 - 1, 0), w0 + cfg.align_seconds + 2
+        clip = y[int(c0 * sd.ALIGN_SR) : int(c1 * sd.ALIGN_SR)]
+        moved = in_window(rn, c0, c1)
+        shipped = moved.assign(onset=moved['onset'] - dt)
+        listen = players(
+            [
+                ('recording', assets.wav(clip, f'{name}_rec')),
+                ('+ labels as shipped', assets.wav(sonify(clip, shipped, c0), f'{name}_shipped')),
+                ('+ labels after alignment', assets.wav(sonify(clip, moved, c0), f'{name}_aligned')),
+            ]
+        )
+        body += (
+            f'<h3>{title}</h3><p class="reclabel">{rec_label(r)}</p>'
+            + listen
+            + figure(
+                src,
+                f'{title}: labels before and after',
+                f'Measured lag {r["lag_ms"]:+.1f} ms against the GuitarSet reference of {bias:+.1f} ms, so the labels '
+                f'moved by {r["shift_ms"]:+.1f} ms (matched {pct(r["matched"], 0)}, residual '
+                f'{r["residual_ms"]:.0f} ms). Dashed orange: label onsets as the dataset ships them; solid blue: in '
+                f'the index. On GuitarSet the nearest triangle sits a median {ref:+.0f} ms from the label, so '
+                'well-placed blue lines sit on or just before the triangles, at the foot of each rise.',
+            )
         )
 
     worst = []
@@ -1114,9 +1173,18 @@ def alignment_section(recs, notes, report, datasets, cfg, assets):
         after = in_window(rn, w0, w0 + cfg.align_seconds)
         unmatched = after[miss[after.index.to_numpy()]]
         src = assets.fig(zoom_figure(y, w0, w0 + cfg.align_seconds, after, unmatched=unmatched), f'alignment_worst_{d}')
+        c0, c1 = max(w0 - 1, 0), w0 + cfg.align_seconds + 2
+        clip = y[int(c0 * sd.ALIGN_SR) : int(c1 * sd.ALIGN_SR)]
+        listen = players(
+            [
+                ('recording', assets.wav(clip, f'alignment_worst_{d}_rec')),
+                ('+ labels', assets.wav(sonify(clip, in_window(rn, c0, c1), c0), f'alignment_worst_{d}_labels')),
+            ]
+        )
         worst.append(
             f'<h4>{esc(info_of(d)["name"])}: matched {pct(r["matched"], 0)}, residual {r["residual_ms"]:.0f} ms</h4>'
             f'<p class="reclabel">{rec_label(r)}</p>'
+            + listen
             + figure(
                 src,
                 f'Worst-aligned recording of {info_of(d)["name"]}',
@@ -1493,6 +1561,9 @@ figure{margin:14px 0 22px}
 figure img{max-width:100%;height:auto;display:block;background:#fff;border-radius:6px;border:1px solid var(--line)}
 figcaption{font-size:14px;color:var(--muted);margin-top:6px;max-width:90ch}
 audio{display:block;width:100%;max-width:520px;margin:6px 0}
+.players{display:flex;flex-wrap:wrap;gap:4px 16px;margin:6px 0}
+.players label{flex:1 1 260px;max-width:420px;font-size:13px;color:var(--muted)}
+.players audio{margin:2px 0 0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:14px 0}
 .reclabel{font-size:14px;margin:4px 0}
 .legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0;font-size:14px}
