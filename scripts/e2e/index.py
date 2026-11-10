@@ -6,7 +6,9 @@ For every recording of the requested splits:
   3. per guitar, the string constants are calibrated without labels and the two are fused;
   4. stage 2 picks each note's string by beam search, rescored with the fused evidence (weight lam).
 Predicted notes are matched to the reference with mir_eval (onset tolerance, no offset). A tab note is correct when
-it is matched and its string is right; Tab P/R/F1 count those.
+it is matched and its string is right; Tab P/R/F1 count those. On the matched notes it also reports the equivalent
+accuracy of metrics.py (a recording's most common string shift forgiven) and the number of separate runs of wrong
+notes per 100 notes, as a measure of how many corrections the tab needs.
 
 `classifier_runs` may contain `{guitar}`: then each guitar is scored by its own runs (leave-one-guitar-out folds).
 With `degrade` (a recording chain, see chains.py), the audio the string evidence reads is first rendered through it:
@@ -18,6 +20,7 @@ Usage:
 """
 
 import glob
+import itertools
 import json
 import zlib
 
@@ -41,6 +44,7 @@ from gtp.stage1.inference import PianoTranscription
 from gtp.stage1.inharmonicity import fuse_guitar
 from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
+from gtp.stage2.metrics import aggregate_drift_buckets
 
 TUNING = [int(p) for p in st.OPEN_STRINGS]
 
@@ -88,7 +92,9 @@ def main(cfg):
     ref_notes = pd.read_csv(index / 'notes.csv.gz').groupby('rec')
     stage2, vocab, step, max_seq_len = load_checkpoint(REPO_ROOT / cfg.stage2_checkpoint, device)
     stage1 = (
-        PianoTranscription(str(REPO_ROOT / cfg.stage1_checkpoint), device=device) if 'stage1' in cfg.inputs else None
+        PianoTranscription(str(REPO_ROOT / cfg.stage1_checkpoint), device=cfg.stage1_device)
+        if 'stage1' in cfg.inputs
+        else None
     )
     stage1_cache = REPO_ROOT / 'results' / 'e2e' / 'stage1' / f'index_{(REPO_ROOT / cfg.stage1_checkpoint).stem}'
 
@@ -99,10 +105,10 @@ def main(cfg):
         )
         assert runs, f'no classifier runs for {guitar}'
         classifiers = [st.StringClassifier.from_run(r, device) for r in runs]
-        for source in cfg.inputs:
+        for source, (_, sub) in itertools.product(cfg.inputs, group.groupby(list(cfg.calibrate_by), sort=False)):
             first = len(table)
             probs, curves = [], []
-            for r in group.itertuples():
+            for r in sub.itertuples():
                 ref = [
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
                     for n in ref_notes.get_group(r.rec).itertuples()
@@ -153,7 +159,8 @@ def main(cfg):
                     n['fret'] = n['pitch'] - TUNING[n['string'] - 1]
                 pieces.append((piece, ids))
                 table += [
-                    {'input': source, 'guitar': guitar, 'dataset': r.dataset, 'content': r.content, 'split': r.split,
+                    {'input': source, 'guitar': guitar, 'dataset': r.dataset, 'content': r.content, 'chain': r.chain,
+                        'split': r.split,
                      'rec': r.rec, 'pitch': n['pitch'], 'start': n['start'], 'ref_string': n['ref_string']}
                     for n in notes
                 ]  # fmt: skip
@@ -167,9 +174,7 @@ def main(cfg):
                 strings, _ = valid_tabs(t['pitch'], TUNING, vocab)
                 t['classifier'], t['fused'] = int(p.argmax()) + 1, int(f.argmax()) + 1
                 t['ratio'] = log_ratio(f[None], q, strings, cfg.prob_floor)
-            info(
-                f'{guitar} {source}: {len(group)} recordings, {len(probs)} notes, {family}, constants {const.round(2)}'
-            )
+            info(f'{guitar} {source}: {len(sub)} recordings, {len(probs)} notes, {family}, constants {const.round(2)}')
 
     df = pd.DataFrame(table)
     rows = [
@@ -178,23 +183,47 @@ def main(cfg):
         for row in piece_rows(piece, vocab, max_seq_len, ids, [table[i]['ratio'] for i in ids])
     ]
     df['stage2'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams, exclusive=cfg.exclusive_s))
-    df['pipeline'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams, exclusive=cfg.exclusive_s))
+    df['pipeline'] = pd.Series(
+        decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams, exclusive=cfg.exclusive_s)
+    )
     methods = ['stage2', 'classifier', 'fused', 'pipeline']
     df = df.drop(columns=['ratio'])
-    counts = pd.DataFrame(counts).merge(recs[['rec', 'guitar', 'dataset', 'content', 'split']], on='rec')
+    counts = pd.DataFrame(counts).merge(recs[['rec', 'guitar', 'dataset', 'chain', 'content', 'split']], on='rec')
 
     summary = []
-    keys = ['input', 'split', 'guitar', 'dataset', 'content']
-    for key, c in [*counts.groupby(keys), *(((*k, 'all', 'all'), g) for k, g in counts.groupby(keys[:3]))]:
-        d = df[df['rec'].isin(c['rec']) & (df['input'] == key[0]) & df['ref_string'].notna()]
+    keys = ['input', 'split', 'guitar', 'dataset', 'chain', 'content']
+    groups = [*counts.groupby(keys), *(((*k, 'all', 'all', 'all'), g) for k, g in counts.groupby(keys[:3]))]
+    for key, c in groups:
+        d = df[df['rec'].isin(c['rec']) & (df['input'] == key[0]) & df['ref_string'].notna()].sort_values(
+            ['rec', 'start']
+        )
         row = dict(zip(keys, key, strict=True)) | {'ref': c.n_ref.sum(), 'est': c.n_est.sum()}
         row['note_f1'] = prf(c.n_matched.sum(), row['est'], row['ref'])[2]
+        rec = d['rec'].to_numpy()
         for m in methods:
-            tp = (d[m] == d['ref_string']).sum()
-            row[f'{m}_acc'], row[f'{m}_tab_f1'] = tp / max(len(d), 1), prf(tp, row['est'], row['ref'])[2]
+            shift = (d[m] - d['ref_string']).to_numpy()
+            wrong = shift != 0
+            starts = wrong & ~(np.r_[False, wrong[:-1]] & (rec == np.r_[[''], rec[:-1]]))
+            records = [
+                {
+                    'piece_id': r,
+                    'error_type_pp': 'wrong' if w else 'correct',
+                    'delta_string_pp': int(x),
+                    'delta_fret_pp': 0,
+                }
+                for r, w, x in zip(rec, wrong, shift, strict=True)
+            ]
+            row[f'{m}_acc'] = 1 - wrong.mean() if len(d) else 0.0
+            row[f'{m}_equivalent'] = aggregate_drift_buckets(records, min_notes=cfg.min_notes_for_drift)[
+                'tab_equivalent_acc'
+            ]
+            row[f'{m}_fixes_per_100'] = 100 * starts.sum() / max(len(d), 1)
+            row[f'{m}_tab_f1'] = prf((~wrong).sum(), row['est'], row['ref'])[2]
         summary.append(row)
     summary = pd.DataFrame(summary).sort_values(keys)
-    info(f'stage 2 step {step}, lam {cfg.lam}\n{summary.round(3).to_string(index=False)}')
+    shown = ['ref', 'note_f1', 'stage2_acc', 'classifier_acc', 'fused_acc', 'pipeline_acc']
+    show = [*keys, *shown, 'pipeline_equivalent', 'pipeline_fixes_per_100', 'pipeline_tab_f1']
+    info(f'stage 2 step {step}, lam {cfg.lam}\n{summary[show].round(3).to_string(index=False)}')
     out = HydraConfig.get().runtime.output_dir
     df.to_csv(f'{out}/notes.csv.gz', index=False)
     summary.to_csv(f'{out}/summary.csv', index=False)

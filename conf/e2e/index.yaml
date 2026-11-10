@@ -9,7 +9,11 @@ splits: [val, test]
 guitars: []
 inputs: [stage1, gt]
 stage1_checkpoint: models/finetuned/step_0070000_final.pth
+# Stage 1's recurrent layers run about six times faster on the CPU than on Apple's GPU.
+stage1_device: cpu
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
+# Recordings calibrated together: a guitar's string constants are fitted over each group of these columns.
+calibrate_by: [guitar]
 # Glob patterns of train_index.py runs, relative to the repo; `{guitar}` selects each guitar's own held-out runs.
 classifier_runs:
   - results/strings/runs/*pool-flatten_w400_s*
@@ -23,6 +27,8 @@ physics: {}
 degrade: null
 onset_tolerance: 0.05
 prob_floor: 1.0e-4
+# Recordings with fewer matched notes are left out of the equivalent accuracy.
+min_notes_for_drift: 20
 # A string sounds one note at a time: seconds of overlap tolerated before a string is closed to a new note; null = off.
 exclusive_s: null
 batch: 64
