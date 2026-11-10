@@ -34,7 +34,7 @@ from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
-from gtp.stage1.inharmonicity import CONSTANT_GRID, calibrate_profiles, fuse_tables, string_tables
+from gtp.stage1.inharmonicity import fuse_guitar
 from gtp.stage2.fusion import decode_structured, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 
@@ -154,10 +154,7 @@ def main(cfg):
                 continue
             probs, curves = np.concatenate(probs), np.concatenate(curves)
             pitch = np.array([t['pitch'] for t in table[first:]])
-            sharp = string_tables(physics.calibration_temper * curves, grid(profiles), pitch, physics.spread)
-            _, const, family = calibrate_profiles(probs, sharp, physics.iters, physics.prior_sd)
-            tables = string_tables(physics.temper * curves, grid(profiles), pitch, physics.spread)
-            fused = fuse_tables(probs, tables, np.searchsorted(CONSTANT_GRID, const - 1e-9))
+            fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics)
             prior = classifiers[0].prior(pitch)
             for t, p, f, q in zip(table[first:], probs, fused, prior, strict=True):
                 strings, _ = valid_tabs(t['pitch'], TUNING, vocab)

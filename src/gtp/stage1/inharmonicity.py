@@ -141,3 +141,16 @@ def calibrate_profiles(probs, tables, iters=15, prior_sd=PRIOR_SD):
     _, post, const = best
     # The family is read off the fitted constants, not the winning prior: a wound G is less inharmonic than the B.
     return post, const, 'wound_g' if const[2] < const[1] else 'plain_g'
+
+
+def fuse_guitar(probs, curves, log_b, pitch, cfg):
+    """Classifier probabilities of one guitar's notes fused with their inharmonicity curves, calibrated label-free.
+
+    `curves` (N, G) are the notes' summed profiles on the `log_b` grid; `cfg` has calibration_temper, temper, spread,
+    iters and prior_sd (conf/strings/physics_fusion.yaml). The constants are fitted on the raw curves and the fusion
+    uses the tempered ones. Returns (fused probabilities, constants, family).
+    """
+    sharp = string_tables(cfg.calibration_temper * curves, log_b, pitch, cfg.spread)
+    _, const, family = calibrate_profiles(probs, sharp, cfg.iters, cfg.prior_sd)
+    tables = string_tables(cfg.temper * curves, log_b, pitch, cfg.spread)
+    return fuse_tables(probs, tables, np.searchsorted(CONSTANT_GRID, const - 1e-9)), const, family
