@@ -3,7 +3,8 @@ defaults:
   - override hydra/job_logging: none
   - override hydra/hydra_logging: none
 
-datasets: [guitarset, guitar_techs, egset12, idmt, egfxset, egdb]
+# EGDB is left out on purpose: it is kept as a dataset no model here has trained on (the test TART reports).
+datasets: [guitarset, guitar_techs, egset12, idmt, egfxset]
 # Labels move when their lag differs from GuitarSet's (the detector's own bias) by more than one
 # detector frame (128 / 22050 s); smaller differences are quantisation.
 shift_threshold_ms: 6
