@@ -130,3 +130,72 @@ def decode_structured(model, rows, device, batch, lam=0.0, seed_idx=0):
                     nxt.append(int(slot.token_ids[j]))
             cur = torch.tensor(nxt, device=device)[:, None]
     return picks
+
+
+@torch.no_grad()
+def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
+    """Beam search along each row's skeleton; returns {note: chosen string}.
+
+    A greedy decode commits to each note's string for good, so one early mistake drags the following notes to the
+    wrong position. The beam keeps the `beams` best string sequences, scored by the summed per-note scores of
+    decode_structured, so evidence on later notes can overturn an earlier choice.
+    """
+    pad = model.config.pad_token_id
+    picks = {}
+    for i in range(0, len(rows), batch):
+        chunk = rows[i : i + batch]
+        n = len(chunk)
+        input_ids, mask = padded([r.enc for r in chunk], pad, device)
+        if chunk[0].evidence is None:
+            encoder_outputs = model.get_encoder()(input_ids=input_ids, attention_mask=mask)
+        else:
+            evidence = torch.zeros(*input_ids.shape, EVIDENCE_DIM, device=device)
+            for b, r in enumerate(chunk):
+                evidence[b, : len(r.evidence)] = torch.from_numpy(r.evidence)
+            encoder_outputs = model.get_encoder()(inputs_embeds=model.embed(input_ids, evidence), attention_mask=mask)
+        encoder_outputs.last_hidden_state = encoder_outputs.last_hidden_state.repeat_interleave(beams, dim=0)
+        mask = mask.repeat_interleave(beams, dim=0)
+        score = np.full((n, beams), -np.inf)
+        score[:, 0] = 0.0
+        trace = [[] for _ in chunk]  # per row: (parent beam, chosen string) arrays, one pair per slot in order
+        cur = torch.full((n * beams, 1), pad, device=device)
+        past = None
+        own = np.arange(beams)
+        for t in range(max(len(r.dec) for r in chunk)):
+            out = model(
+                encoder_outputs=encoder_outputs,
+                attention_mask=mask,
+                decoder_input_ids=cur,
+                past_key_values=past,
+                use_cache=True,
+            )
+            past = out.past_key_values
+            logp = F.log_softmax(out.logits[:, -1].float(), dim=-1).cpu().numpy().reshape(n, beams, -1)
+            nxt, parent = np.full((n, beams), pad), np.tile(own, (n, 1))
+            for b, r in enumerate(chunk):
+                slot = r.slots.get(t)
+                if t >= len(r.dec):
+                    continue
+                if slot is None:
+                    nxt[b] = r.dec[t]
+                    continue
+                cand = score[b][:, None] + logp[b][:, slot.token_ids]
+                if lam and slot.log_ratio is not None:
+                    cand = cand + lam * slot.log_ratio[seed_idx][None]
+                top = np.argsort(cand.ravel())[::-1][:beams]
+                k, j = np.divmod(top, len(slot.token_ids))
+                keep = np.isfinite(cand.ravel()[top])
+                score[b] = np.where(keep, cand.ravel()[top], -np.inf)
+                score[b, len(top) :] = -np.inf
+                parent[b, : len(top)], nxt[b, : len(top)] = k, slot.token_ids[j]
+                trace[b].append((k, slot.strings[j], slot.note))
+            if (parent != own).any():
+                order = torch.from_numpy((parent + np.arange(n)[:, None] * beams).ravel()).to(device)
+                past.reorder_cache(order)
+            cur = torch.from_numpy(nxt.ravel()).to(device)[:, None]
+        for b in range(n):
+            k = int(score[b].argmax())
+            for parents, strings, note in reversed(trace[b]):
+                picks[note] = int(strings[k])
+                k = int(parents[k])
+    return picks

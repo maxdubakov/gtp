@@ -22,6 +22,8 @@ models:
 # Tempo given to Stage 2 for recordings whose dataset doesn't state one (null = unknown).
 tempo: null
 batch: 64
+# Beam width of the decode along the skeleton; 1 = greedy.
+beams: 1
 prob_floor: 1.0e-4
 
 hydra:

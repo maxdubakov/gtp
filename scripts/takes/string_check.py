@@ -24,7 +24,7 @@ from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
 from gtp.stage1.inharmonicity import fuse_guitar
-from gtp.stage2.fusion import decode_structured, log_ratio, piece_rows, sorted_notes, valid_tabs
+from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 
 
@@ -93,9 +93,8 @@ def main(cfg):
         piece = {'source': 'take', 'filename': r['take'], 'tuning': tuning, 'tempo': None, 'capo': 0, 'notes': notes}
         assert sorted_notes(piece) == notes, 'edited notes are not in decoder order'
         for name, lam in (('stage 2', 0.0), ('pipeline', cfg.lam)):
-            picks = decode_structured(
-                stage2, piece_rows(piece, vocab, max_seq_len, list(range(len(notes))), ratios), device, 64, lam
-            )
+            rows_ = piece_rows(piece, vocab, max_seq_len, list(range(len(notes))), ratios)
+            picks = decode_beam(stage2, rows_, device, 64, lam, beams=cfg.beams)
             hit = np.array([picks[i] - 1 for i in range(len(notes))]) == r['truth']
             r[name] = float(hit[r['multi']].mean())
     table = pd.DataFrame(rows).drop(columns=['truth', 'multi'])

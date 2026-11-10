@@ -7,8 +7,9 @@ takes_dir: data/takes
 # Classifier run dirs whose calibrated distributions are averaged (e.g. the seeds of one sweep).
 runs: []
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
-# Decode-time fusion weight (the one index_fusion.py picked on the val guitars).
-lam: 2.5
+# Decode-time fusion weight and beam width (the ones index_fusion.py picked on the val guitars).
+lam: 1.3
+beams: 8
 prob_floor: 1.0e-4
 
 hydra:

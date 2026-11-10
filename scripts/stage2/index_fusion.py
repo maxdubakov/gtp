@@ -22,7 +22,7 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.strings import OPEN_STRINGS, candidates, prior_from_counts
 from gtp.stage2.evidence import restrict
-from gtp.stage2.fusion import decode_structured, log_ratio, piece_rows, valid_tabs
+from gtp.stage2.fusion import decode_beam, decode_structured, log_ratio, piece_rows, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 
 TUNING = [int(p) for p in OPEN_STRINGS]
@@ -49,6 +49,8 @@ def decode(model, vocab, max_seq_len, pieces, probs, prior, cfg, device, lam):
         elif hasattr(model, 'embed'):
             evidence = np.full((len(ids), 6), np.nan)
         rows.extend(piece_rows(piece, vocab, max_seq_len, ids, ratios, evidence))
+    if cfg.beams > 1:
+        return decode_beam(model, rows, device, cfg.batch, lam, beams=cfg.beams)
     return decode_structured(model, rows, device, cfg.batch, lam)
 
 
