@@ -5,6 +5,9 @@ defaults:
 name: index_fusion
 index_dir: data/string_index
 splits: [val, test]
+# Restrict to these guitars (empty = all of the splits); datasets of isolated notes give Stage 2 nothing to do.
+guitars: []
+exclude_datasets: [egfxset]
 # Per-note string probabilities: an .npz with `note` (rows of notes.csv.gz) and one (N, 6) array per method.
 evidence: ???
 methods: [classifier, per_guitar]

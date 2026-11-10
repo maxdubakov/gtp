@@ -67,6 +67,9 @@ def main(cfg):
     prior = prior_from_counts(np.load(REPO_ROOT / cfg.prior_run / 'classifier.npz')['prior_counts'], notes['pitch'])
 
     d = notes[notes['split'].isin(list(cfg.splits)) & notes.index.isin(ev['note'])]
+    d = d[~d['dataset'].isin(list(cfg.exclude_datasets))]
+    if cfg.guitars:
+        d = d[d['guitar'].isin(list(cfg.guitars))]
     d = d.sort_values(['rec', 'onset', 'pitch'], kind='stable')
     pieces = []
     for rec, g in d.groupby('rec', sort=False):
