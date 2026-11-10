@@ -12,6 +12,7 @@ those probabilities fused with the inharmonicity likelihood.
 
 import numpy as np
 
+from gtp.stage1.envelope import fit_envelopes, posterior
 from gtp.stage1.strings import OPEN_STRINGS
 
 LOG_B_PER_FRET = np.log10(2) / 6
@@ -143,14 +144,20 @@ def calibrate_profiles(probs, tables, iters=15, prior_sd=PRIOR_SD):
     return post, const, 'wound_g' if const[2] < const[1] else 'plain_g'
 
 
-def fuse_guitar(probs, curves, log_b, pitch, cfg):
-    """Classifier probabilities of one guitar's notes fused with their inharmonicity curves, calibrated label-free.
+def fuse_guitar(probs, curves, log_b, pitch, cfg, levels=None, envelope=None):
+    """Classifier probabilities of one guitar's notes fused with their physical evidence, calibrated label-free.
 
-    `curves` (N, G) are the notes' summed profiles on the `log_b` grid; `cfg` has calibration_temper, temper, spread,
-    iters and prior_sd (conf/strings/physics_fusion.yaml). The constants are fitted on the raw curves and the fusion
-    uses the tempered ones. Returns (fused probabilities, constants, family).
+    `curves` (N, G) are the notes' summed inharmonicity profiles on the `log_b` grid; `cfg` has calibration_temper,
+    temper, spread, iters, prior_sd and envelope_temper (conf/strings/physics_fusion.yaml). The string constants are
+    fitted on the raw curves and the fusion uses the tempered ones. With `levels` (N, harmonics; envelope.py, settings
+    `envelope`), the string envelopes are then fitted starting from that result and their likelihood multiplied in.
+    Returns (fused probabilities, constants, family).
     """
     sharp = string_tables(cfg.calibration_temper * curves, log_b, pitch, cfg.spread)
     _, const, family = calibrate_profiles(probs, sharp, cfg.iters, cfg.prior_sd)
     tables = string_tables(cfg.temper * curves, log_b, pitch, cfg.spread)
-    return fuse_tables(probs, tables, np.searchsorted(CONSTANT_GRID, const - 1e-9)), const, family
+    fused = fuse_tables(probs, tables, np.searchsorted(CONSTANT_GRID, const - 1e-9))
+    if levels is not None and cfg.envelope_temper:
+        loglik, _ = fit_envelopes(levels, pitch, fused, envelope)
+        fused = posterior(fused, cfg.envelope_temper * loglik)
+    return fused, const, family

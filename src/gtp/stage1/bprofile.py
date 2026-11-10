@@ -13,6 +13,7 @@ only remove reward, never add it.
 
 import librosa
 import numpy as np
+import scipy.ndimage
 import scipy.signal
 
 
@@ -28,7 +29,13 @@ def frame_peaks(y, start, cfg, window, sr):
     df = sr / cfg.n_fft
     n_bins = int(cfg.f_max / df)
     log = 20 * np.log10(np.abs(np.fft.rfft(seg * window, cfg.n_fft))[:n_bins] + 1e-9)
-    idx, _ = scipy.signal.find_peaks(log, height=log.max() - cfg.peak_floor_db, prominence=cfg.peak_prominence_db)
+    height = log.max() - cfg.peak_floor_db
+    if cfg.peak_snr_db:
+        # Noise has peaks too, 8 dB prominent ones included: a partial must also clear the level the spectrum
+        # around it mostly sits at (a low percentile, since a low note's own partials fill much of the band).
+        floor = scipy.ndimage.percentile_filter(log, cfg.floor_percentile, size=2 * int(cfg.floor_hz / df) + 1)
+        height = np.maximum(height, floor + cfg.peak_snr_db)
+    idx, _ = scipy.signal.find_peaks(log, height=height, prominence=cfg.peak_prominence_db)
     idx = idx[(idx > 0) & (idx < n_bins - 1)]
     y0, y1, y2 = log[idx - 1], log[idx], log[idx + 1]
     shift = np.clip(0.5 * (y0 - y2) / (y0 - 2 * y1 + y2 - 1e-12), -0.5, 0.5)

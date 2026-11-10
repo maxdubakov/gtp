@@ -1,8 +1,8 @@
-"""Fuse the string classifier with self-calibrated inharmonicity evidence on the index's real recordings.
+"""Fuse the string classifier with self-calibrated physical evidence on the index's real recordings.
 
-For every guitar of the requested splits, the six open-string inharmonicity constants are calibrated without labels
-(inharmonicity.calibrate), pooling the guitar's recordings or one recording at a time, and the classifier's
-probabilities are multiplied by the resulting likelihood. `oracle` calibrates from the labels of the guitar's other
+For every guitar and chain of the requested splits, the six open-string inharmonicity constants and the string
+envelopes (envelope.py) are fitted without labels, pooling the recordings or one recording at a time, and the
+classifier's probabilities are multiplied by the resulting likelihoods. `oracle` calibrates from the labels of the guitar's other
 recordings instead (two folds), as a ceiling for the calibration step.
 
 Reports accuracy on notes with more than one candidate string, per split, guitar, dataset and content, and writes
@@ -20,6 +20,7 @@ import hydra
 import numpy as np
 import pandas as pd
 from hydra.core.hydra_config import HydraConfig
+from omegaconf import OmegaConf
 
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
@@ -27,10 +28,10 @@ from gtp.log import info
 from gtp.stage1.inharmonicity import (
     CONSTANT_GRID,
     calibrate,
-    calibrate_profiles,
     fit_constants,
     fit_strings,
     fuse,
+    fuse_guitar,
     fuse_tables,
     implied_constants,
     string_tables,
@@ -86,11 +87,15 @@ def main(cfg):
         valid = np.abs(frames).sum(axis=(1, 2)) > 0
         total = frames.sum(axis=1)
         tables = string_tables(cfg.temper * total, prof['log_b'], d['pitch'], cfg.spread)
-        sharp = string_tables(cfg.calibration_temper * total, prof['log_b'], d['pitch'], cfg.spread)
+
+        levels = np.load(index / 'cache' / cfg.levels)['x'][note].astype(np.float32) if cfg.envelope_temper else None
+        envelope = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml')
+        pitch = d['pitch'].to_numpy()
 
         def label_free(i):
-            _, const, family = calibrate_profiles(probs[i], sharp[i], cfg.iters, cfg.prior_sd)
-            return fuse_tables(probs[i], tables[i], np.searchsorted(CONSTANT_GRID, const - 1e-9)), const, family
+            return fuse_guitar(
+                probs[i], total[i], prof['log_b'], pitch[i], cfg, None if levels is None else levels[i], envelope
+            )
 
         def from_labels(fit, i):
             return fuse_tables(probs[i], tables[i], fit_constants(tables[fit], labels[fit]))

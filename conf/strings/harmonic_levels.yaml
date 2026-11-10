@@ -1,0 +1,48 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+sample_rate: 44100
+# Frames of `frame` samples (~93 ms), `hop` apart, starting start_s after the onset; their power spectra are summed.
+frame: 4096
+hop: 2048
+n_frames: 2
+n_fft: 16384
+start_s: 0.01
+# A later frame is used if it ends no more than this long after the note's offset.
+tail_s: 0.03
+n_harmonics: 30
+f_max: 9000
+# A harmonic is read as the strongest bin within this tuning range of n * f0, widened upwards for inharmonicity.
+tuning_cents: 40
+# A harmonic is present if it rises this far above the valleys towards its neighbours. Harmonics below a note's
+# highest present one are all read, peaks or not (a comb's nulls are the evidence); those above it are not.
+peak_db: 6
+# Other sounding notes: assumed upper bound of their B, and how much overlap counts as sounding. A harmonic that
+# falls where one of them has a partial is not used.
+other_b_max: 3.0e-4
+overlap_s: 0.01
+
+# Envelope model (envelope.py): resolution of H and E, residual scale, and EM settings.
+f_min: 70
+bins_per_octave: 12
+min_harmonics: 3
+# Each note also keeps its own spectral tilt (pick, fingers, palm muting), not only its level.
+tilt: true
+iters: 15
+sweeps: 3
+shrink: 2
+# Residual scale (dB): where EM starts, and the least it may fall to.
+sigma_start_db: 6
+sigma_min_db: 2
+
+# Recordings per dataset, for a quick check; 0 = all.
+limit: 0
+workers: 9
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

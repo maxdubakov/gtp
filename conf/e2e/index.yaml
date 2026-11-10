@@ -20,9 +20,11 @@ classifier_runs:
 # Decode-time fusion weight and beam width, chosen on the val guitars (index_fusion.py).
 lam: 1.3
 beams: 8
-# Overrides of conf/strings/b_profiles.yaml and physics_fusion.yaml, for trying settings without editing them.
+# Overrides of conf/strings/b_profiles.yaml, physics_fusion.yaml and harmonic_levels.yaml, for trying settings
+# without editing them.
 profiles: {}
 physics: {}
+envelope: {}
 # Chain the string evidence's audio is rendered through first (chains.py stages); null = the recording as is.
 degrade: null
 onset_tolerance: 0.05

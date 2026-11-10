@@ -38,6 +38,7 @@ from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
 from gtp.stage1.chains import render, stages_for
+from gtp.stage1.envelope import note_levels
 from gtp.stage1.inference import PianoTranscription, transcribe_cached
 from gtp.stage1.inharmonicity import fuse_guitar
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
@@ -69,6 +70,7 @@ def main(cfg):
     device = auto_device()
     profiles = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml'), cfg.profiles)
     physics = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml'), cfg.physics)
+    envelope = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml'), cfg.envelope)
     index = REPO_ROOT / cfg.index_dir
     recs = pd.read_csv(index / 'recordings.csv')
     recs = recs[recs['split'].isin(list(cfg.splits))]
@@ -92,7 +94,7 @@ def main(cfg):
         classifiers = [st.StringClassifier.from_run(r, device) for r in runs]
         for source, (_, sub) in itertools.product(cfg.inputs, group.groupby(list(cfg.calibrate_by), sort=False)):
             first = len(table)
-            probs, curves = [], []
+            probs, curves, levels = [], [], []
             for r in sub.itertuples():
                 ref = [
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
@@ -130,9 +132,9 @@ def main(cfg):
                 y = librosa.resample(hi, orig_sr=sr, target_sr=st.SAMPLE_RATE)
                 spec = st.spectrogram(y[None], classifiers[0].feature)
                 probs.append(np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0))
-                curves.append(
-                    recording_profiles(hi, sr, onsets, [n['end'] for n in notes], pitches, profiles).sum(axis=1)
-                )
+                ends = [n['end'] for n in notes]
+                curves.append(recording_profiles(hi, sr, onsets, ends, pitches, profiles).sum(axis=1))
+                levels.append(note_levels(hi, sr, onsets, ends, pitches, envelope))
                 ids = list(range(len(table), len(table) + len(notes)))
                 piece = {
                     'source': 'index',
@@ -155,9 +157,9 @@ def main(cfg):
                 ]  # fmt: skip
             if not probs:
                 continue
-            probs, curves = np.concatenate(probs), np.concatenate(curves)
+            probs, curves, levels = np.concatenate(probs), np.concatenate(curves), np.concatenate(levels)
             pitch = np.array([t['pitch'] for t in table[first:]])
-            fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics)
+            fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics, levels, envelope)
             prior = classifiers[0].prior(pitch)
             for t, p, f, q in zip(table[first:], probs, fused, prior, strict=True):
                 strings, _ = valid_tabs(t['pitch'], TUNING, vocab)

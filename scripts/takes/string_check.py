@@ -23,6 +23,7 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
+from gtp.stage1.envelope import note_levels
 from gtp.stage1.inharmonicity import fuse_guitar
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
@@ -34,6 +35,7 @@ def main(cfg):
     classifiers = [st.StringClassifier.from_run(REPO_ROOT / r, device) for r in cfg.runs]
     profiles = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml')
     physics = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml')
+    envelope = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml')
     root = REPO_ROOT / cfg.takes_dir
     rows, per_take = [], []
     for take_id in takes.take_ids(root):
@@ -50,8 +52,10 @@ def main(cfg):
         probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
         prior = classifiers[0].prior(pitches)
         hi, sr = librosa.load(root / take_id / 'audio.wav', sr=profiles.sample_rate, mono=True)
-        curves = recording_profiles(hi, sr, onsets, [n['end'] for n in notes], pitches, profiles).sum(axis=1)
-        per_take.append((take['meta'].get('guitar', ''), probs, curves, np.asarray(pitches)))
+        ends = [n['end'] for n in notes]
+        curves = recording_profiles(hi, sr, onsets, ends, pitches, profiles).sum(axis=1)
+        levels = note_levels(hi, sr, onsets, ends, pitches, envelope)
+        per_take.append((take['meta'].get('guitar', ''), probs, curves, np.asarray(pitches), levels))
         before = {n['id']: n for n in take['prediction']['notes']}
         old = [
             (np.argmax(src['evidence']), t)
@@ -73,8 +77,8 @@ def main(cfg):
         )
     for guitar in {g for g, *_ in per_take}:
         group = [i for i, (g, *_) in enumerate(per_take) if g == guitar]
-        probs, curves, pitch = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3))
-        fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics)
+        probs, curves, pitch, levels = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3, 4))
+        fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics, levels, envelope)
         info(
             f'{guitar or "unnamed guitar"}: {len(group)} takes, {len(probs)} notes, {family}, constants {const.round(2)}'
         )

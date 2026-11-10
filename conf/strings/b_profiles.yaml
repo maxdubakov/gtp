@@ -25,6 +25,10 @@ bend_partials: 3
 # A spectral peak must rise this far above its surroundings and lie within this range of the frame's maximum.
 peak_prominence_db: 8
 peak_floor_db: 70
+# And, when above 0, this far above the local noise floor: the floor_percentile of the levels within floor_hz of it.
+peak_snr_db: 0
+floor_hz: 150
+floor_percentile: 25
 # Partial model: Laplace frequency noise (Hz) when observed, prior probability of being missing.
 noise_hz: 1.5
 missing: 0.5
