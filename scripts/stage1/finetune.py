@@ -89,7 +89,7 @@ def main(cfg):
         batch = {k: move_data_to_device(v, device) for k, v in batch.items()}
         loss = regress_onset_offset_frame_velocity_bce(model, model(batch['waveform']), batch)
         if not torch.isfinite(loss):
-            raise RuntimeError(f'loss is {loss.item()} at step {step}; on Apple GPUs this model trains to NaN, use CUDA or the CPU')
+            raise RuntimeError(f'loss is {loss.item()} at step {step}')
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()

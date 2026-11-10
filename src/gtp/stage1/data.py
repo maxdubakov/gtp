@@ -330,7 +330,7 @@ class ManifestDataset(GuitarDataset):
         root = Path(root)
         self.durations = {str(root / e['audio']): e['duration'] for e in entries}
         self.chain_of = {str(root / e['audio']): e['chain'] for e in entries}
-        self.group_of = {str(root / e['audio']): f"{e['dataset']}/{e['chain']}" for e in entries}
+        self.group_of = {str(root / e['audio']): f'{e["dataset"]}/{e["chain"]}' for e in entries}
         self.augment = dict(augment or {})
         self._rng = None
         super().__init__([(str(root / e['audio']), e['notes']) for e in entries], **kwargs)
@@ -350,8 +350,16 @@ class ManifestDataset(GuitarDataset):
         if self._rng is None:
             self._rng = np.random.default_rng()
         if self._rng.random() < self.augment.get(chain, 0.0):
+            # The chains' filters reach 12 kHz, above this audio's Nyquist: render at twice the rate.
             params = chains.draw(self._rng, chains.stages_for(chain))
-            item['waveform'] = chains.render(item['waveform'], self.sample_rate, params, self._rng).astype(np.float32)
+            up = librosa.resample(item['waveform'], orig_sr=self.sample_rate, target_sr=2 * self.sample_rate)
+            out = librosa.resample(
+                chains.render(up, 2 * self.sample_rate, params, self._rng),
+                orig_sr=2 * self.sample_rate,
+                target_sr=self.sample_rate,
+            )
+            if np.isfinite(out).all():
+                item['waveform'] = librosa.util.fix_length(out, size=self.segment_samples).astype(np.float32)
         return item
 
 
