@@ -4,7 +4,9 @@ Writes data/string_index/{recordings.csv, notes.csv.gz, report.json}. Each recor
 measured against its onset envelope; GuitarSet's hex-pickup labels set the detector's own bias, and a
 recording whose lag departs from that bias by more than `shift_threshold_ms` has its labels shifted.
 One-note recordings keep their own lag; denser ones take their player/chain/content group median, since
-the search can lock one strum note off. Datasets whose onsets come from their own audio are never shifted. Recordings whose lag hits the search edge are dropped.
+the search can lock one strum note off. Recordings that Stage 1 has been run over (note_lags.py) are placed
+by its notes instead, which is the reliable measure on chords. Datasets whose onsets come from their own audio are
+never shifted. Recordings whose lag hits the search edge are dropped.
 
 Usage:
   uv run scripts/stage1/strings/build_index.py
@@ -17,6 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 import hydra
 import librosa
 import numpy as np
+import pandas as pd
 
 from gtp import REPO_ROOT
 from gtp.log import info
@@ -69,6 +72,24 @@ def main(cfg):
     bias = float(recs.loc[recs['dataset'] == 'guitarset', 'lag_ms'].median())
     off = recs['lag_used_ms'] - bias
     recs['shift_ms'] = np.where(~own & (off.abs() > cfg.shift_threshold_ms), -off, 0.0).round(1)
+    recs['lag_source'] = np.where(own, 'own audio', np.where(n_notes == 1, 'envelope', 'group envelope'))
+
+    # Where Stage 1 has been run over a recording (note_lags.py), its labels are placed by the notes it hears:
+    # matching by pitch cannot lock a strum note off, and it sees that takes of one group differ. GuitarSet's
+    # labels are the reference there too, so its median lag is Stage 1's own bias and GuitarSet itself stays put.
+    lags_path = REPO_ROOT / cfg.out_dir / 'note_lags.csv'
+    if cfg.use_note_lags and lags_path.exists():
+        lags = pd.read_csv(lags_path).set_index('rec')
+        lags = lags[lags['pairs'] >= cfg.min_note_pairs]
+        note_lag = recs['rec'].map(lags['lag_raw_ms'])
+        note_bias = float(note_lag[recs['dataset'] == 'guitarset'].median())
+        by_notes = note_lag.notna() & ~own & (recs['dataset'] != 'guitarset')
+        move = note_lag - note_bias
+        recs['shift_ms'] = np.where(
+            by_notes, np.where(move.abs() > cfg.shift_threshold_ms, move, 0.0), recs['shift_ms']
+        ).round(1)
+        recs['lag_source'] = np.where(by_notes, 'notes', recs['lag_source'])
+        info(f'{int(by_notes.sum())} recordings placed by Stage 1 notes (its bias on GuitarSet {note_bias:+.1f} ms)')
     shift = notes['rec'].map(recs.set_index('rec')['shift_ms']) / 1000
     notes['onset'] += shift
     notes['offset'] += shift

@@ -21,7 +21,6 @@ Usage:
 
 import glob
 import itertools
-import json
 import zlib
 
 import hydra
@@ -39,27 +38,13 @@ from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
 from gtp.stage1.chains import render, stages_for
-from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
-from gtp.stage1.inference import PianoTranscription
+from gtp.stage1.inference import PianoTranscription, transcribe_cached
 from gtp.stage1.inharmonicity import fuse_guitar
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.metrics import aggregate_drift_buckets
 
 TUNING = [int(p) for p in st.OPEN_STRINGS]
-
-
-def transcribe(stage1, audio, path):
-    if not path.exists():
-        y, _ = librosa.load(audio, sr=STAGE1_SR, mono=True)
-        events = stage1.transcribe(y)['note_events']
-        notes = [
-            {'pitch': int(e['midi_note']), 'start': float(e['onset_time']), 'end': float(e['offset_time'])}
-            for e in events
-        ]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(notes))
-    return json.loads(path.read_text())
 
 
 def match(ref, est, tolerance):
@@ -113,7 +98,7 @@ def main(cfg):
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
                     for n in ref_notes.get_group(r.rec).itertuples()
                 ]
-                est = ref if source == 'gt' else transcribe(stage1, REPO_ROOT / r.audio, stage1_cache / f'{r.rec}.json')
+                est = ref if source == 'gt' else transcribe_cached(stage1, REPO_ROOT / r.audio, stage1_cache / f'{r.rec}.json')
                 est = [n for n in est if len(valid_tabs(n['pitch'], TUNING, vocab)[0])]
                 ref_of = {e: i for i, e in match(ref, est, cfg.onset_tolerance)}
                 notes = sorted_notes(

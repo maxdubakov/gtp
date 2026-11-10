@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+stage1_checkpoint: models/finetuned/step_0070000_final.pth
+# Datasets whose labels come from outside the audio and can be mistimed. GuitarSet is included as the reference:
+# its labels are trusted, so its lag is Stage 1's own bias.
+datasets: [guitarset, guitar_techs, egset12, idmt]
+# A label is matched to a transcribed note of its pitch no further than this.
+max_gap_s: 0.3
+# These chains are not transcribed: they take the lag of the same take's source_chain recording.
+reuse:
+  datasets: [guitar_techs]
+  chains: [amp-mic]
+  source_chain: di
+# Stage 1 runs on the CPU (it is several times slower on Apple's GPU): processes, and threads per process.
+workers: 2
+threads: 5
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

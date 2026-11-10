@@ -8,6 +8,9 @@ datasets: [guitarset, guitar_techs, egset12, idmt, egfxset]
 # Labels move when their lag differs from GuitarSet's (the detector's own bias) by more than one
 # detector frame (128 / 22050 s); smaller differences are quantisation.
 shift_threshold_ms: 6
+# Place labels by <out_dir>/note_lags.csv (note_lags.py) where a recording has at least this many matched notes.
+use_note_lags: true
+min_note_pairs: 3
 workers: 8
 out_dir: data/string_index
 

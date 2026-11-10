@@ -1,5 +1,9 @@
 # Adapted from https://github.com/bytedance/piano_transcription
 
+import json
+from pathlib import Path
+
+import librosa
 import numpy as np
 import torch
 
@@ -177,3 +181,19 @@ class PianoTranscription:
             y.append(x[i, int(segment_frames * 0.25) : int(segment_frames * 0.75)])
         y.append(x[-1, int(segment_frames * 0.25) :])
         return np.concatenate(y, axis=0)
+
+
+def transcribe_cached(model, audio_path, cache_path):
+    """Notes [{pitch, start, end}] of one recording, transcribed once and kept as JSON at `cache_path`."""
+    cache_path = Path(cache_path)
+    if not cache_path.exists():
+        audio, _ = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
+        events = model.transcribe(audio)['note_events']
+        notes = [
+            {'pitch': int(e['midi_note']), 'start': float(e['onset_time']), 'end': float(e['offset_time'])}
+            for e in events
+        ]
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(notes))
+    return json.loads(cache_path.read_text())
+
