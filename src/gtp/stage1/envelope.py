@@ -21,46 +21,78 @@ from gtp.stage1.bprofile import occupied_bins
 from gtp.stage1.strings import OPEN_STRINGS
 
 
+def note_spectrum(y, sr, onset, frame, cfg):
+    """Power spectrum up to f_max of the `frame` samples that start start_s after the onset."""
+    start = max(round((onset + cfg.start_s) * sr), 0)
+    seg = y[start : start + frame]
+    if len(seg) < frame:
+        seg = np.pad(seg, (0, frame - len(seg)))
+    return np.abs(np.fft.rfft(seg * np.hanning(frame), cfg.n_fft)[: int(cfg.f_max * cfg.n_fft / sr) + 1]) ** 2
+
+
+def tuning_offset(spectra, pitches, df, cfg):
+    """Cents the recording sits above concert pitch: the median, over its notes, of where a low harmonic peaks.
+
+    The harmonic is the first one above tuning_ref_hz, where a bin is a few cents wide and the string's stiffness
+    has not yet moved it.
+    """
+    cents = []
+    for power, pitch in zip(spectra, pitches, strict=True):
+        f = librosa.midi_to_hz(pitch) * np.ceil(cfg.tuning_ref_hz / librosa.midi_to_hz(pitch))
+        lo, hi = (
+            int(f * 2 ** (-cfg.tuning_search_cents / 1200) / df),
+            int(f * 2 ** (cfg.tuning_search_cents / 1200) / df) + 2,
+        )
+        k = lo + int(np.argmax(power[lo:hi]))
+        if lo < k < hi - 1:
+            y0, y1, y2 = np.log(power[k - 1 : k + 2] + 1e-12)
+            cents.append(1200 * np.log2((k + 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2 - 1e-12)) * df / f))
+    return float(np.median(cents)) if cents else 0.0
+
+
 def note_levels(y, sr, onsets, offsets, pitches, cfg):
     """(notes, n_harmonics) level in dB of each harmonic of each note; NaN above f_max, where another sounding
-    note has a partial of its own, and past the note's last harmonic that is a spectral peak."""
-    window = np.hanning(cfg.frame)
+    note has a partial of its own, and past the note's last harmonic that is a spectral peak.
+
+    The recording's own tuning is measured first, so that harmonics are looked for, and other notes' partials
+    avoided, within a narrow range of where they must be: in a chord a wide range leaves almost nothing to read.
+    Each note is read over the frame length, of those it lasts for, that leaves it the most harmonics: a long frame
+    tells close partials apart, a short one ends before the next note of an arpeggio begins.
+    """
     df = sr / cfg.n_fft
     n_bins = int(cfg.f_max / df)
-    lobe = 2 * sr / cfg.frame
-    onsets, offsets, pitches = np.asarray(onsets), np.asarray(offsets), np.asarray(pitches)
+    onsets, offsets = np.asarray(onsets), np.asarray(offsets)
+    short = [note_spectrum(y, sr, on, min(cfg.frames), cfg) for on in onsets]
+    pitches = np.asarray(pitches) + tuning_offset(short, pitches, df, cfg) / 100
     n = np.arange(1, cfg.n_harmonics + 1)
     out = np.full((len(onsets), cfg.n_harmonics), np.nan, np.float32)
     for i, (on, off, pitch) in enumerate(zip(onsets, offsets, pitches, strict=True)):
-        power, t1 = 0.0, on
-        for j in range(cfg.n_frames):
-            t0 = on + cfg.start_s + j * cfg.hop / sr
-            if j > 0 and t0 + cfg.frame / sr > off + cfg.tail_s:
-                break
-            t1 = t0 + cfg.frame / sr
-            seg = y[max(round(t0 * sr), 0) : round(t0 * sr) + cfg.frame]
-            if len(seg) < cfg.frame:
-                seg = np.pad(seg, (0, cfg.frame - len(seg)))
-            power = power + np.abs(np.fft.rfft(seg * window, cfg.n_fft)[: n_bins + 1]) ** 2
-        sounding = (onsets < t1 - cfg.overlap_s) & (offsets > on + cfg.start_s + cfg.overlap_s)
-        sounding[i] = False
-        occ = occupied_bins(np.unique(pitches[sounding & (pitches != pitch)]), n_bins, df, cfg, lobe)
         f0 = librosa.midi_to_hz(pitch)
         lo = (n * f0 * 2 ** (-cfg.tuning_cents / 1200) / df).astype(int)
         hi = np.ceil(n * f0 * 2 ** (cfg.tuning_cents / 1200) * np.sqrt(1 + cfg.other_b_max * n**2) / df).astype(int) + 1
         half = max(int(f0 / 2 / df), 1)
-        last = -1
-        for k in range(cfg.n_harmonics):
-            if hi[k] + half > n_bins:
+        for frame in cfg.frames:
+            end = on + cfg.start_s + frame / sr
+            if frame > min(cfg.frames) and end > off + cfg.tail_s:
                 break
-            if not occ[lo[k] : hi[k]].any():
-                out[i, k] = 10 * np.log10(power[lo[k] : hi[k]].max() + 1e-12)
-                valley = max(power[max(lo[k] - half, 0) : lo[k] + 1].min(), power[hi[k] - 1 : hi[k] + half].min())
-                if out[i, k] - 10 * np.log10(valley + 1e-12) >= cfg.peak_db:
-                    last = k
-        # Past its last harmonic that stands out as a peak, a note is noise or the skirts of its lower harmonics
-        # (a muted or dying note, a bend out of range): readings there are not the string's.
-        out[i, last + 1 :] = np.nan
+            power = short[i] if frame == min(cfg.frames) else note_spectrum(y, sr, on, frame, cfg)
+            sounding = (onsets < end - cfg.overlap_s) & (offsets > on + cfg.start_s + cfg.overlap_s)
+            sounding[i] = False
+            occ = occupied_bins(np.unique(pitches[sounding & (pitches != pitch)]), n_bins, df, cfg, 2 * sr / frame)
+            row, last = np.full(cfg.n_harmonics, np.nan, np.float32), -1
+            for k in range(cfg.n_harmonics):
+                if hi[k] + half > n_bins:
+                    break
+                if not occ[lo[k] : hi[k]].any():
+                    row[k] = 10 * np.log10(power[lo[k] : hi[k]].max() + 1e-12)
+                    valley = max(power[max(lo[k] - half, 0) : lo[k] + 1].min(), power[hi[k] - 1 : hi[k] + half].min())
+                    if row[k] - 10 * np.log10(valley + 1e-12) >= cfg.peak_db:
+                        last = k
+            # Past its last harmonic that stands out as a peak, a note is noise or the skirts of its lower harmonics
+            # (a muted or dying note, a bend out of range): readings there are not the string's.
+            row[last + 1 :] = np.nan
+            if np.isfinite(row).sum() > np.isfinite(out[i]).sum():
+                out[i] = row
     return out
 
 

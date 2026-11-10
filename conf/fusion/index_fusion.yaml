@@ -12,7 +12,7 @@ exclude_datasets: [egfxset]
 evidence: ???
 methods: [classifier, per_guitar]
 # A train_index.py run whose pitch prior the decode-time rescoring divides out.
-prior_run: results/strings/runs/2026-11-09_17-19-10_pool-flatten_w400_s0
+prior_run: results/strings/runs/2026-11-10_20-25-01_al-roomfar_s0
 models:
   baseline:
     checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth

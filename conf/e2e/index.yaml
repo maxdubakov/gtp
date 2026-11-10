@@ -16,7 +16,7 @@ stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step
 calibrate_by: [guitar, chain]
 # Glob patterns of train_index.py runs, relative to the repo; `{guitar}` selects each guitar's own held-out runs.
 classifier_runs:
-  - results/strings/runs/*pool-flatten_w400_s*
+  - results/strings/runs/*al-roomfar_s*
 # Decode-time fusion weight and beam width, chosen on the val guitars (index_fusion.py).
 lam: 1.3
 beams: 8

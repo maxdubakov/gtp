@@ -5,18 +5,20 @@ defaults:
 
 index_dir: data/string_index
 sample_rate: 44100
-# Frames of `frame` samples (~93 ms), `hop` apart, starting start_s after the onset; their power spectra are summed.
-frame: 4096
-hop: 2048
-n_frames: 2
-n_fft: 16384
+# A note is read over one frame starting start_s after its onset. Of these lengths (samples, shortest first), those
+# ending no more than tail_s after its offset are tried, and the one leaving the most usable harmonics is kept.
+frames: [4096, 8192, 16384]
+n_fft: 32768
 start_s: 0.01
-# A later frame is used if it ends no more than this long after the note's offset.
 tail_s: 0.03
 n_harmonics: 30
 f_max: 9000
-# A harmonic is read as the strongest bin within this tuning range of n * f0, widened upwards for inharmonicity.
-tuning_cents: 40
+# The recording's tuning is the median offset of its notes' first harmonic above tuning_ref_hz, searched this far
+# either side of concert pitch.
+tuning_search_cents: 50
+tuning_ref_hz: 400
+# A harmonic is then read as the strongest bin within this range of n * f0, widened upwards for inharmonicity.
+tuning_cents: 15
 # A harmonic is present if it rises this far above the valleys towards its neighbours. Harmonics below a note's
 # highest present one are all read, peaks or not (a comb's nulls are the evidence); those above it are not.
 peak_db: 6
