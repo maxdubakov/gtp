@@ -2,7 +2,9 @@
 
 Every note gets its real window (variant 0). Training recordings also get `augment` more renders, each
 through its own random chain (chains.py) drawn from a seed fixed by (recording, variant), so a rebuild is
-identical and a window can be traced back to its chain. Val and test stay real recordings only.
+identical and a window can be traced back to its chain; then `augment_far` more through far-field chains
+(variants augment+1 and up). Val and test stay real recordings only, and so do the room recordings, which
+are far-field already.
 
 Writes to <index_dir>/cache/:
   <feature>.npy        (rows, 1, freq, PRE+MAX_POST frames) float16
@@ -28,6 +30,7 @@ import pandas as pd
 from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage1 import chains
+from gtp.stage1.string_data import ROOM_CHAINS
 from gtp.stage1.strings import SAMPLE_RATE, cache_layout, note_windows, spectrogram
 from gtp.track import git_state
 
@@ -37,7 +40,7 @@ def chain_seed(rec, variant):
 
 
 def recording_windows(job):
-    rec, audio, chain, onsets, variants, feature = job
+    rec, audio, chain, onsets, variants, first_far, feature = job
     y, _ = librosa.load(REPO_ROOT / audio, sr=SAMPLE_RATE, mono=True)
     out, params = [], []
     for v in variants:
@@ -45,7 +48,7 @@ def recording_windows(job):
             x = y
         else:
             rng = np.random.default_rng(chain_seed(rec, v))
-            p = chains.draw(rng, chains.stages_for(chain))
+            p = chains.draw(rng, chains.stages_for(chain, far=v >= first_far))
             x = chains.render(y, SAMPLE_RATE, p, rng)
             params.append({'rec': rec, 'variant': v, 'chain': p})
         out.append(note_windows(spectrogram(x[None], feature), onsets).astype(np.float16))
@@ -64,11 +67,14 @@ def main(cfg):
     jobs, rows = [], []
     for r in recs.itertuples():
         idx = by_rec[r.rec]
-        variants = list(range(1 + (cfg.augment if r.split == 'train' else 0)))
-        jobs.append((r.rec, r.audio, r.chain, notes['onset'].to_numpy()[idx], variants, cfg.feature))
+        augmented = r.split == 'train' and r.chain not in ROOM_CHAINS
+        variants = list(range(1 + (cfg.augment + cfg.augment_far if augmented else 0)))
+        jobs.append((r.rec, r.audio, r.chain, notes['onset'].to_numpy()[idx], variants, cfg.augment + 1, cfg.feature))
         rows += [(i, v) for v in variants for i in idx]
     rows = pd.DataFrame(rows, columns=['note', 'variant'])
-    info(f'{len(recs)} recordings -> {len(rows)} windows ({cfg.augment} augmented copies per training note)')
+    info(
+        f'{len(recs)} recordings -> {len(rows)} windows ({cfg.augment} + {cfg.augment_far} far-field copies per training note)'
+    )
 
     out_dir = index / 'cache'
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +102,7 @@ def main(cfg):
     meta = {
         'feature': cfg.feature,
         'augment': cfg.augment,
+        'augment_far': cfg.augment_far,
         'limit': cfg.limit,
         'layout': cache_layout(),
         'n_windows': len(rows),

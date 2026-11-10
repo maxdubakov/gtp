@@ -11,6 +11,10 @@ shift_threshold_ms: 6
 # Place labels by <out_dir>/note_lags.csv (note_lags.py) where a recording has at least this many matched notes.
 use_note_lags: true
 min_note_pairs: 3
+# A recording whose matched notes scatter further than this (median absolute deviation) around their lag is dropped.
+max_note_mad_ms: 45
+# Guitar-TECHS's camera microphones, added as chains of their own (real far-field recordings); [] = none.
+room_mics: [ego, exo]
 workers: 8
 out_dir: data/string_index
 

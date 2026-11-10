@@ -2,14 +2,18 @@
 
 A chain is drawn from a seed, so a render is reproducible and its parameters can be shown or logged.
 DI recordings get the whole chain; recordings already made through an amp or a mic get only the
-room and mic stages, since they already carry an amp or body sound.
+room and mic stages, since they already carry an amp or body sound. A far-field chain swaps the light studio
+reverb (`room`) for `far`: a microphone a metre or two from the source in an untreated room, with its noise.
 """
 
 import numpy as np
 import pedalboard as pb
+import scipy.signal
 
 DI_STAGES = ('pickup', 'amp', 'cabinet', 'room', 'mic')
 MIC_STAGES = ('room', 'mic')
+# The highest filter corner draw() can produce; audio sampled too low for it is rendered at twice its rate.
+MAX_CORNER_HZ = 12000
 
 
 def draw(rng, stages):
@@ -31,6 +35,13 @@ def draw(rng, stages):
         p['cabinet'] = {'highpass_hz': u(60, 120), 'lowpass_hz': u(3500, 7000), 'presence_db': u(-3, 6)}
     if 'room' in stages and rng.random() < 0.7:
         p['room'] = {'size': u(0.1, 0.8), 'damping': u(0.2, 0.8), 'wet': u(0.05, 0.4)}
+    if 'far' in stages:
+        p['far'] = {
+            'rt60_s': u(0.15, 0.7),
+            'direct_db': u(-3, 12),
+            'tail_lowpass_hz': u(2000, 8000),
+            'snr_db': u(8, 30),
+        }
     if 'mic' in stages:
         p['mic'] = {
             'highpass_hz': u(60, 300),
@@ -79,17 +90,50 @@ def board(p):
     return pb.Pedalboard(fx)
 
 
+def impulse_response(sr, q, rng):
+    """A room's response at a distant microphone: the direct sound, then a diffuse tail that decays by 60 dB in
+    rt60_s and holds 10^(-direct_db / 10) of the direct sound's energy."""
+    n = int(sr * 1.2 * q['rt60_s'])
+    t = np.arange(n) / sr
+    tail = (rng.standard_normal(n) * np.exp(-6.908 * t / q['rt60_s'])).astype(np.float32)
+    tail = pb.LowpassFilter(q['tail_lowpass_hz'])(tail[None], sr)[0]
+    tail[: int(0.003 * sr)] = 0
+    h = tail * np.sqrt(10 ** (-q['direct_db'] / 10) / (np.sum(tail**2) + 1e-12))
+    h[0] += 1.0
+    return h
+
+
+def pink_noise(n, rng):
+    spectrum = np.fft.rfft(rng.standard_normal(n))
+    spectrum[1:] /= np.sqrt(np.arange(1, len(spectrum)))
+    noise = np.fft.irfft(spectrum, n)
+    return (noise / (noise.std() + 1e-12)).astype(np.float32)
+
+
 def render(audio, sr, p, rng):
-    """Mono float32 audio through chain `p`; noise for the mic stage, peak-normalised so drive and
+    """Mono float32 audio through chain `p`; noise for the far and mic stages, peak-normalised so drive and
     reverb don't shift the level the classifier sees."""
     y = audio.astype(np.float32)
     y = y / (np.abs(y).max() + 1e-9) * 0.5
-    y = board(p)(y[None], sr)[0]
+    over = 2 if sr < 2.2 * MAX_CORNER_HZ else 1
+    if over > 1:
+        y = scipy.signal.resample_poly(y, over, 1).astype(np.float32)
+    y = board({k: v for k, v in p.items() if k != 'mic'})(y[None], over * sr)[0]
+    if 'far' in p:
+        h = impulse_response(over * sr, p['far'], rng)
+        y = scipy.signal.fftconvolve(y, h)[: len(y)].astype(np.float32)
     if 'mic' in p:
-        rms = np.sqrt(np.mean(y**2)) + 1e-9
+        y = board({'mic': p['mic']})(y[None], over * sr)[0]
+    if over > 1:
+        y = scipy.signal.resample_poly(y, 1, over)[: len(audio)].astype(np.float32)
+    rms = np.sqrt(np.mean(y**2)) + 1e-9
+    if 'far' in p:
+        y = y + pink_noise(len(y), rng) * rms * 10 ** (-p['far']['snr_db'] / 20)
+    if 'mic' in p:
         y = y + rng.standard_normal(len(y)).astype(np.float32) * rms * 10 ** (-p['mic']['snr_db'] / 20)
     return y / (np.abs(y).max() + 1e-9) * 0.9
 
 
-def stages_for(chain):
-    return DI_STAGES if chain == 'di' else MIC_STAGES
+def stages_for(chain, far=False):
+    stages = DI_STAGES if chain == 'di' else MIC_STAGES
+    return tuple('far' if far and k == 'room' else k for k in stages)

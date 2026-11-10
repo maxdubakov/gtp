@@ -11,6 +11,10 @@ name: index
 index_dir: data/string_index
 # Train on a random subset of this many training windows (0 = all); for smoke tests.
 limit: 0
+# Cached variants to train on (build_index_cache.py: 0 real, then augmented, then far-field renders); null = all.
+variants: null
+# Chains left out of training (their val and test recordings are still scored).
+exclude_chains: []
 # Guitars (recordings.csv `guitar`) to hold out as the test set; every other recording trains. Empty = index splits.
 holdout: []
 # {guitar: string-set family} (physics_fusion.py's families.json); read when model.use_family is set.

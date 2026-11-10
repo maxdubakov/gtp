@@ -7,6 +7,8 @@ index_dir: data/string_index
 feature: logmel229
 # Augmented renders per training recording, on top of the real one.
 augment: 4
+# And this many more through far-field chains (a distant microphone in a reverberant, noisy room).
+augment_far: 4
 # Recordings per dataset, for a quick check; 0 = all.
 limit: 0
 workers: 8

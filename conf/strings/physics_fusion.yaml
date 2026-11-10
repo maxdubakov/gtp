@@ -12,6 +12,9 @@ probs: null
 # training notes (the curves on their own). The notes scored still come from `runs` or `probs`.
 base: classifier
 prior_run: results/strings/runs/2026-11-09_17-19-10_pool-flatten_w400_s0
+# Notes calibrated together: the string constants are fitted over each group of these columns. A guitar's chains
+# are kept apart, so a room recording does not borrow the constants its direct recording makes easy to find.
+calibrate_by: [guitar, chain]
 # Inharmonicity evidence: `point` (one B estimate per note, harmonic_features.py) or `profile` (a likelihood curve
 # over B per note, b_profiles.py).
 evidence: profile

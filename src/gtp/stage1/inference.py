@@ -196,4 +196,3 @@ def transcribe_cached(model, audio_path, cache_path):
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(notes))
     return json.loads(cache_path.read_text())
-

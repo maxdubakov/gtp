@@ -72,14 +72,18 @@ def main(cfg):
     notes, rows, x, cache_meta = load_cached_index(cfg.index_dir, cfg.data.feature)
     split = rows['note'].map(notes['split'])
     real = rows['variant'] == 0
+    chain = rows['note'].map(notes['chain'])
+    usable = ~chain.isin(list(cfg.exclude_chains))
+    if cfg.variants is not None:
+        usable &= rows['variant'].isin(list(cfg.variants))
     idx = {
-        'train': np.flatnonzero(split == 'train'),
+        'train': np.flatnonzero(usable & (split == 'train')),
         'val': np.flatnonzero(real & (split == 'val')),
         'test': np.flatnonzero(real & (split == 'test')),
     }
     if cfg.holdout:
         held = rows['note'].map(notes['guitar']).isin(list(cfg.holdout))
-        idx = {'train': np.flatnonzero(~held), 'test': np.flatnonzero(real & held)}
+        idx = {'train': np.flatnonzero(usable & ~held), 'test': np.flatnonzero(real & held)}
         idx['val'] = idx['test']
     if cfg.limit:
         idx['train'] = np.sort(np.random.permutation(idx['train'])[: cfg.limit])

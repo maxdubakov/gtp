@@ -136,7 +136,7 @@ def guitar_techs():
 
 
 def egdb():
-    """One player, one guitar: training only. Track names '1'..'6' are strings, 1 = high e."""
+    """One player, one guitar, never trained on: a test set. Track names '1'..'6' are strings, 1 = high e."""
     root = DATA / 'egdb' / 'raw'
     tracks = {str(s): s for s in range(1, 7)}
     recs, notes = [], []
@@ -145,7 +145,7 @@ def egdb():
         if not audio.exists():
             continue
         rec = f'egdb/{midi.stem}'
-        recs.append((rec, 'egdb', rel(audio), 'egdb', 'egdb-strat', 'di', 'pieces', 'train'))
+        recs.append((rec, 'egdb', rel(audio), 'egdb', 'egdb-strat', 'di', 'pieces', 'test'))
         notes += [(rec, *n) for n in midi_notes(midi, tracks)]
     return frame(recs, notes)
 
@@ -304,6 +304,64 @@ def alignment(audio, onsets):
     nearest = np.where(np.abs(peaks[idx - 1] - shifted) < np.abs(peaks[idx] - shifted), peaks[idx - 1], peaks[idx])
     dist = nearest - shifted
     return lag, np.where(np.abs(dist) <= NEAR, dist, np.nan)
+
+
+ROOM_CHAINS = ('ego', 'exo')
+ROOM_MAX_LAG = 3.0
+
+
+def room_lag(job):
+    """Seconds a room recording lags its direct recording (the peak of the cross-correlation of their onset
+    envelopes), the correlation there, and the room audio's length."""
+    import librosa
+    import scipy.signal
+
+    direct, room = job
+    a, _ = librosa.load(REPO_ROOT / direct, sr=ALIGN_SR, mono=True)
+    b, _ = librosa.load(REPO_ROOT / room, sr=ALIGN_SR, mono=True)
+    ea, eb = onset_envelope(a), onset_envelope(b)
+    n = min(len(ea), len(eb))
+    ea, eb = ea[:n] - ea[:n].mean(), eb[:n] - eb[:n].mean()
+    corr = scipy.signal.correlate(eb, ea, mode='full')
+    lags = scipy.signal.correlation_lags(n, n, mode='full')
+    near = np.abs(lags) <= round(ROOM_MAX_LAG * ALIGN_SR / ALIGN_HOP)
+    k = np.argmax(corr[near])
+    peak = corr[near][k] / (np.linalg.norm(ea) * np.linalg.norm(eb) + 1e-12)
+    return lags[near][k] * ALIGN_HOP / ALIGN_SR, float(peak), len(b) / ALIGN_SR
+
+
+def room_recordings(recs, notes, mics, workers):
+    """Guitar-TECHS's room recordings of the indexed performances: the audio of its head-mounted camera (`ego`)
+    and of a camera about 5 feet in front of the player (`exo`), as chains of their own.
+
+    Each takes the (already aligned) notes of its direct-input recording, moved by the lag between the two files.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    rows = []
+    for r in recs[(recs['dataset'] == 'guitar_techs') & (recs['chain'] == 'di')].to_dict('records'):
+        _, part, _, stem = r['rec'].split('/')
+        for mic in mics:
+            audio = f'data/guitar_techs/{part}/video/{mic}/{mic}_{stem}.mp3'
+            if (REPO_ROOT / audio).exists():
+                rows.append(
+                    {k: r[k] for k in REC_COLUMNS}
+                    | {'rec': f'guitar_techs/{part}/{mic}/{stem}', 'audio': audio, 'chain': mic}
+                    | {'direct': r['rec'], 'direct_audio': r['audio']}
+                )
+    room = pd.DataFrame(rows)
+    with ProcessPoolExecutor(workers) as pool:
+        lags = list(pool.map(room_lag, room[['direct_audio', 'audio']].itertuples(index=False, name=None), chunksize=4))
+    lag, room['room_corr'], room['duration'] = zip(*lags, strict=True)
+    room['room_lag_ms'] = np.round(1000 * np.array(lag), 1)
+    room['lag_source'] = 'direct recording'
+    by_rec = dict(tuple(notes.groupby('rec')))
+    moved = []
+    for r in room.itertuples():
+        n = by_rec[r.direct].assign(rec=r.rec)
+        n[['onset', 'offset']] += r.room_lag_ms / 1000
+        moved.append(n[(n['onset'] >= 0) & (n['onset'] < r.duration)])
+    return room.drop(columns=['direct', 'direct_audio']), pd.concat(moved, ignore_index=True)
 
 
 LOADERS = {

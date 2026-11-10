@@ -98,7 +98,11 @@ def main(cfg):
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
                     for n in ref_notes.get_group(r.rec).itertuples()
                 ]
-                est = ref if source == 'gt' else transcribe_cached(stage1, REPO_ROOT / r.audio, stage1_cache / f'{r.rec}.json')
+                est = (
+                    ref
+                    if source == 'gt'
+                    else transcribe_cached(stage1, REPO_ROOT / r.audio, stage1_cache / f'{r.rec}.json')
+                )
                 est = [n for n in est if len(valid_tabs(n['pitch'], TUNING, vocab)[0])]
                 ref_of = {e: i for i, e in match(ref, est, cfg.onset_tolerance)}
                 notes = sorted_notes(

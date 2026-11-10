@@ -64,6 +64,7 @@ def main(cfg):
         probs = prior_from_counts(counts, d['pitch'].to_numpy())
 
     fused = {k: probs.copy() for k in ('per_guitar', 'per_recording', 'oracle')}
+    groups = {'/'.join(k): g for k, g in d.groupby(list(cfg.calibrate_by)).indices.items()}
     labels = one_hot(d['string'])
     if cfg.evidence == 'point':
         harm = np.load(index / 'cache' / cfg.features)
@@ -94,13 +95,13 @@ def main(cfg):
         def from_labels(fit, i):
             return fuse_tables(probs[i], tables[i], fit_constants(tables[fit], labels[fit]))
 
-        for guitar, g in d.groupby('guitar').indices.items():
-            info(f'{guitar}: constants from labels {CONSTANT_GRID[fit_constants(tables[g], labels[g])].round(2)}')
+        for name, g in groups.items():
+            info(f'{name}: constants from labels {CONSTANT_GRID[fit_constants(tables[g], labels[g])].round(2)}')
 
     families = {}
-    for guitar, g in d.groupby('guitar').indices.items():
-        fused['per_guitar'][g], const, families[guitar] = label_free(g)
-        info(f'{guitar}: {families[guitar]}, constants {const.round(2)}')
+    for name, g in groups.items():
+        fused['per_guitar'][g], const, families[name] = label_free(g)
+        info(f'{name}: {families[name]}, constants {const.round(2)}')
         rec = d['rec'].to_numpy()[g]
         for r in np.unique(rec):
             i = g[rec == r]
@@ -115,14 +116,18 @@ def main(cfg):
     for k, p in fused.items():
         table[k] = p.argmax(1) == label
     cols = ['classifier', *fused]
-    keys = ['split', 'guitar', 'dataset', 'content']
+    keys = ['split', 'guitar', 'dataset', 'chain', 'content']
     summary = (
         table[multi]
         .groupby(keys)
         .agg(notes=('multi', 'size'), valid=('valid', 'mean'), **{c: (c, 'mean') for c in cols})
     )
     info('\n' + summary.round(3).to_string())
-    by_split = table[multi].groupby(['split', 'guitar']).agg(notes=('multi', 'size'), **{c: (c, 'mean') for c in cols})
+    by_split = (
+        table[multi]
+        .groupby(['split', 'guitar', 'chain'])
+        .agg(notes=('multi', 'size'), **{c: (c, 'mean') for c in cols})
+    )
     info('\n' + by_split.round(3).to_string())
 
     out = HydraConfig.get().runtime.output_dir

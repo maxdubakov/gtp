@@ -5,8 +5,10 @@ measured against its onset envelope; GuitarSet's hex-pickup labels set the detec
 recording whose lag departs from that bias by more than `shift_threshold_ms` has its labels shifted.
 One-note recordings keep their own lag; denser ones take their player/chain/content group median, since
 the search can lock one strum note off. Recordings that Stage 1 has been run over (note_lags.py) are placed
-by its notes instead, which is the reliable measure on chords. Datasets whose onsets come from their own audio are
-never shifted. Recordings whose lag hits the search edge are dropped.
+by its notes instead, which is the reliable measure on chords, and dropped if its notes fit no single lag.
+Datasets whose onsets come from their own audio are never shifted. Recordings whose lag hits the search edge
+are dropped. Guitar-TECHS's room recordings (`room_mics`) are added last, as chains `ego` and `exo` carrying
+the notes of their direct-input recordings.
 
 Usage:
   uv run scripts/stage1/strings/build_index.py
@@ -77,10 +79,18 @@ def main(cfg):
     # Where Stage 1 has been run over a recording (note_lags.py), its labels are placed by the notes it hears:
     # matching by pitch cannot lock a strum note off, and it sees that takes of one group differ. GuitarSet's
     # labels are the reference there too, so its median lag is Stage 1's own bias and GuitarSet itself stays put.
+    scattered_counts = {}
     lags_path = REPO_ROOT / cfg.out_dir / 'note_lags.csv'
     if cfg.use_note_lags and lags_path.exists():
         lags = pd.read_csv(lags_path).set_index('rec')
         lags = lags[lags['pairs'] >= cfg.min_note_pairs]
+        # Matched notes that scatter widely around their lag mean the labels don't follow the audio at all
+        # (two GuitarSet takes are annotated a beat off in places): no shift can repair those.
+        scattered = recs['rec'].map(lags['mad_ms']) > cfg.max_note_mad_ms
+        scattered_counts = recs[scattered].groupby('dataset').size().to_dict()
+        recs = recs[~scattered].reset_index(drop=True)
+        own = recs['dataset'].isin(sd.AUDIO_ONSETS)
+        notes = notes[notes['rec'].isin(recs['rec'])].reset_index(drop=True)
         note_lag = recs['rec'].map(lags['lag_raw_ms'])
         note_bias = float(note_lag[recs['dataset'] == 'guitarset'].median())
         by_notes = note_lag.notna() & ~own & (recs['dataset'] != 'guitarset')
@@ -99,6 +109,13 @@ def main(cfg):
     )
     notes = notes[~early].reset_index(drop=True)
 
+    if cfg.room_mics:
+        room_recs, room_notes = sd.room_recordings(recs, notes, list(cfg.room_mics), cfg.workers)
+        recs = pd.concat([recs, room_recs], ignore_index=True)
+        notes = pd.concat([notes, room_notes], ignore_index=True)
+        stats = room_recs.groupby(['player', 'chain']).agg(recordings=('rec', 'size'), lag_ms=('room_lag_ms', 'median'), lag_min=('room_lag_ms', 'min'), lag_max=('room_lag_ms', 'max'), corr=('room_corr', 'median'), corr_min=('room_corr', 'min'))  # fmt: skip
+        info(f'{len(room_recs)} room recordings, {len(room_notes)} notes\n{stats.round(2).to_string()}')
+
     out = REPO_ROOT / cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)
     recs.to_csv(out / 'recordings.csv', index=False)
@@ -111,6 +128,7 @@ def main(cfg):
         'detector_bias_ms': bias,
         'shift_threshold_ms': cfg.shift_threshold_ms,
         'unresolved_recordings': unresolved_counts,
+        'scattered_recordings': scattered_counts,
         'shifted_recordings': recs.groupby('dataset')['shift_ms'].apply(lambda s: int((s != 0).sum())).to_dict(),
         'git_sha': sha,
         'git_dirty': bool(diff),

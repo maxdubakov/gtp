@@ -13,7 +13,7 @@ stage1_checkpoint: models/finetuned/step_0070000_final.pth
 stage1_device: cpu
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
 # Recordings calibrated together: a guitar's string constants are fitted over each group of these columns.
-calibrate_by: [guitar]
+calibrate_by: [guitar, chain]
 # Glob patterns of train_index.py runs, relative to the repo; `{guitar}` selects each guitar's own held-out runs.
 classifier_runs:
   - results/strings/runs/*pool-flatten_w400_s*
