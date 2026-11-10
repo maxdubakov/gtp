@@ -31,8 +31,9 @@ overlap_s: 0.01
 f_min: 70
 bins_per_octave: 12
 min_harmonics: 3
-# Each note also keeps its own spectral tilt (pick, fingers, palm muting), not only its level.
-tilt: true
+# Degree of the polynomial in log harmonic number each note keeps for itself: 0 = its level, 1 = also its tilt
+# (pick, fingers), 2 = also a bend in the tilt (palm muting).
+note_degree: 2
 iters: 15
 sweeps: 3
 shrink: 2

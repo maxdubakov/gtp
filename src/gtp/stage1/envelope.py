@@ -6,9 +6,9 @@ scale length), whatever fret is played; the plucking point leaves a comb of the 
 notes with one curve H along the axis u = f / f_open_s, shared by the six strings, and the rest of the chain (amp,
 room, microphone) adds one response E(f) common to all of them. A note's harmonic levels, in dB, are modelled as
 
-    level + tilt * log(n) + H(f / f_open_s) + E(f) + noise
+    note(n) + H(f / f_open_s) + E(f) + noise
 
-where level and tilt belong to the note (how hard and with what it was plucked). H and E are fitted to the recordings themselves by EM over the notes' string assignments: no labels, and nothing
+where note(n), a low-degree polynomial in log n, belongs to the note (how hard and with what it was plucked). H and E are fitted to the recordings themselves by EM over the notes' string assignments: no labels, and nothing
 learned from other guitars. The comb survives amps and rooms, where partial frequencies (inharmonicity) blur.
 
 `cfg`: conf/strings/harmonic_levels.yaml.
@@ -107,25 +107,26 @@ def envelope_bins(pitch, cfg):
 def residuals(levels, f_bin, u_bin, h, e, cfg):
     """(notes, harmonics, 6) what each string's envelope leaves of the notes' levels, NaN where a harmonic is unusable.
 
-    Each note keeps what the model does not explain about it for itself: its loudness and, with `tilt`, how fast its
-    harmonics fall off (a line in log harmonic number, least squares), which is the pick, the fingers or a palm on
-    the strings and not the string. Notes with fewer than min_harmonics usable harmonics get no tilt.
+    Each note keeps what the model does not explain about it for itself: a polynomial of degree `note_degree` in
+    log harmonic number, fitted by least squares. Degree 0 is its loudness, 1 adds how fast its harmonics fall off,
+    2 a bend in that fall: the pick, the fingers or a palm on the strings, not the string. A note with too few
+    usable harmonics for its degree gets the loudness only.
     """
     ok = ~np.isnan(levels)
-    count = ok.sum(axis=1)[:, None, None]
-    x = np.log2(np.arange(1, levels.shape[1] + 1))[None, :, None]
     r = (
         np.nan_to_num(levels)[:, :, None]
         - h[np.minimum(u_bin, len(h) - 1)]
         - e[np.minimum(f_bin, len(e) - 1)][:, :, None]
     )
     r = np.where(ok[:, :, None], r, 0.0)
-    mean_x = (ok[:, :, None] * x).sum(axis=1, keepdims=True) / np.maximum(count, 1)
-    mean_r = r.sum(axis=1, keepdims=True) / np.maximum(count, 1)
-    dx = np.where(ok[:, :, None], x - mean_x, 0.0)
-    slope = (dx * r).sum(axis=1, keepdims=True) / np.maximum((dx**2).sum(axis=1, keepdims=True), 1e-9)
-    slope = np.where((count >= cfg.min_harmonics) & cfg.tilt, slope, 0.0)
-    return np.where(ok[:, :, None], r - mean_r - slope * dx, np.nan)
+    x = np.log2(np.arange(1, levels.shape[1] + 1))
+    basis = np.stack([x**d for d in range(cfg.note_degree + 1)], axis=1)  # (harmonics, terms)
+    basis = np.where(ok[:, :, None], basis[None], 0.0)  # (notes, harmonics, terms)
+    enough = ok.sum(axis=1) >= cfg.min_harmonics + cfg.note_degree
+    basis[~enough, :, 1:] = 0.0
+    gram = np.einsum('nhp,nhq->npq', basis, basis) + 1e-6 * np.eye(basis.shape[2])
+    coef = np.linalg.solve(gram, np.einsum('nhp,nhs->nps', basis, r))
+    return np.where(ok[:, :, None], r - np.einsum('nhp,nps->nhs', basis, coef), np.nan)
 
 
 def envelope_loglik(levels, f_bin, u_bin, model, allowed, cfg):
