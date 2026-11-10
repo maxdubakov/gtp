@@ -101,7 +101,7 @@ def recording_profiles(y, sr, onsets, offsets, pitches, cfg):
             if j > 0 and t1 > off + cfg.tail_s:
                 break
             peaks, df = frame_peaks(y, round(t0 * sr), cfg, window, sr)
-            sounding = (onsets < t1 - cfg.overlap_s) & (offsets > t0 + cfg.overlap_s)
+            sounding = (onsets < t1 - cfg.overlap_s) & (offsets + cfg.ring_s > t0 + cfg.overlap_s)
             sounding[i] = False
             others = np.unique(pitches[sounding & (pitches != pitch)])
             occ = occupied_bins(others, int(cfg.f_max / df), df, cfg, lobe)

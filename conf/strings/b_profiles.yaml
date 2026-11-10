@@ -31,6 +31,8 @@ missing: 0.5
 # Other sounding notes: assumed upper bound of their B, and how much overlap with a frame counts as sounding.
 other_b_max: 3.0e-4
 overlap_s: 0.01
+# A note keeps masking for this long after its offset: strings ring on and rooms reverberate past the labelled end.
+ring_s: 0.0
 # A later frame is used if it ends no more than this long after the note's offset.
 tail_s: 0.03
 # Recordings per dataset, for a quick check; 0 = all.

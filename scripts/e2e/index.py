@@ -4,11 +4,13 @@ For every recording of the requested splits:
   1. stage 1 transcribes the audio into notes (or the reference notes are used, `inputs: gt`);
   2. the string classifiers score each note, and each note gets an inharmonicity likelihood curve;
   3. per guitar, the string constants are calibrated without labels and the two are fused;
-  4. stage 2 picks each note's string, rescored at decode time with the fused evidence (weight lam).
+  4. stage 2 picks each note's string by beam search, rescored with the fused evidence (weight lam).
 Predicted notes are matched to the reference with mir_eval (onset tolerance, no offset). A tab note is correct when
 it is matched and its string is right; Tab P/R/F1 count those.
 
 `classifier_runs` may contain `{guitar}`: then each guitar is scored by its own runs (leave-one-guitar-out folds).
+With `degrade` (a recording chain, see chains.py), the audio the string evidence reads is first rendered through it:
+a stand-in for conditions no dataset has, such as a laptop microphone in a room. Stage 1's notes are not re-derived.
 
 Usage:
   uv run scripts/e2e/index.py
@@ -17,6 +19,7 @@ Usage:
 
 import glob
 import json
+import zlib
 
 import hydra
 import librosa
@@ -32,10 +35,11 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
+from gtp.stage1.chains import render, stages_for
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
 from gtp.stage1.inharmonicity import fuse_guitar
-from gtp.stage2.fusion import decode_structured, log_ratio, piece_rows, sorted_notes, valid_tabs
+from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 
 TUNING = [int(p) for p in st.OPEN_STRINGS]
@@ -74,8 +78,8 @@ def prf(tp, n_est, n_ref):
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'e2e'), config_name='index')
 def main(cfg):
     device = auto_device()
-    profiles = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml')
-    physics = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml')
+    profiles = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml'), cfg.profiles)
+    physics = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml'), cfg.physics)
     index = REPO_ROOT / cfg.index_dir
     recs = pd.read_csv(index / 'recordings.csv')
     recs = recs[recs['split'].isin(list(cfg.splits))]
@@ -124,10 +128,13 @@ def main(cfg):
                 if not notes:
                     continue
                 onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
-                y, _ = librosa.load(REPO_ROOT / r.audio, sr=st.SAMPLE_RATE, mono=True)
+                hi, sr = librosa.load(REPO_ROOT / r.audio, sr=profiles.sample_rate, mono=True)
+                if cfg.degrade:
+                    chain = {k: v for k, v in OmegaConf.to_container(cfg.degrade).items() if k in stages_for(r.chain)}
+                    hi = render(hi, sr, chain, np.random.default_rng(zlib.crc32(r.rec.encode())))
+                y = librosa.resample(hi, orig_sr=sr, target_sr=st.SAMPLE_RATE)
                 spec = st.spectrogram(y[None], classifiers[0].feature)
                 probs.append(np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0))
-                hi, sr = librosa.load(REPO_ROOT / r.audio, sr=profiles.sample_rate, mono=True)
                 curves.append(
                     recording_profiles(hi, sr, onsets, [n['end'] for n in notes], pitches, profiles).sum(axis=1)
                 )
@@ -170,8 +177,8 @@ def main(cfg):
         for piece, ids in pieces
         for row in piece_rows(piece, vocab, max_seq_len, ids, [table[i]['ratio'] for i in ids])
     ]
-    df['stage2'] = pd.Series(decode_structured(stage2, rows, device, cfg.batch))
-    df['pipeline'] = pd.Series(decode_structured(stage2, rows, device, cfg.batch, cfg.lam))
+    df['stage2'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams))
+    df['pipeline'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams))
     methods = ['stage2', 'classifier', 'fused', 'pipeline']
     df = df.drop(columns=['ratio'])
     counts = pd.DataFrame(counts).merge(recs[['rec', 'guitar', 'dataset', 'content', 'split']], on='rec')
