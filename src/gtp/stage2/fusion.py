@@ -198,4 +198,9 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
             for parents, strings, note in reversed(trace[b]):
                 picks[note] = int(strings[k])
                 k = int(parents[k])
+        # Reordering the cache allocates a fresh, longer copy every step; MPS keeps all those blocks pooled unless
+        # told to release them, and the pool grows by gigabytes per chunk.
+        del out, past, encoder_outputs, cur
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
     return picks
