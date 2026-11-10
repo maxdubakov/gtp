@@ -42,7 +42,7 @@ from gtp.stage1.chains import render, stages_for
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
 from gtp.stage1.inharmonicity import fuse_guitar
-from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
+from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.metrics import aggregate_drift_buckets
 
@@ -182,9 +182,13 @@ def main(cfg):
         for piece, ids in pieces
         for row in piece_rows(piece, vocab, max_seq_len, ids, [table[i]['ratio'] for i in ids])
     ]
-    df['stage2'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams, exclusive=cfg.exclusive_s))
+    df['stage2'] = pd.Series(
+        decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams, exclusive=cfg.exclusive_s, jump=jump_of(cfg))
+    )
     df['pipeline'] = pd.Series(
-        decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams, exclusive=cfg.exclusive_s)
+        decode_beam(
+            stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams, exclusive=cfg.exclusive_s, jump=jump_of(cfg)
+        )
     )
     methods = ['stage2', 'classifier', 'fused', 'pipeline']
     df = df.drop(columns=['ratio'])

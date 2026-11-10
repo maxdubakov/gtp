@@ -26,6 +26,7 @@ class Slot:
     log_ratio: np.ndarray | None  # (n_seeds, n_valid): log p_audio - log p_prior
     onset: float = 0.0
     offset: float = 0.0
+    frets: np.ndarray | None = None  # fret of the note on each of `strings`
 
 
 @dataclass
@@ -75,7 +76,8 @@ def piece_rows(piece, vocab, max_seq_len, note_ids, log_ratios, evidence=None):
                 continue
             strings, token_ids = valid_tabs(notes[k]['pitch'], tuning, vocab)
             assert tid in token_ids, (piece.get('filename'), notes[k])
-            slots[t] = Slot(note_ids[k], token_ids, strings, log_ratios[k], notes[k]['start'], notes[k]['end'])
+            frets = notes[k]['pitch'] - np.asarray(tuning)[strings - 1]
+            slots[t] = Slot(note_ids[k], token_ids, strings, log_ratios[k], notes[k]['start'], notes[k]['end'], frets)
             k += 1
         rows.append(Row(enc, dec, tuning, slots, ev[0] if ev else None))
     assert k == len(notes), (piece.get('filename'), k, len(notes))
@@ -135,7 +137,7 @@ def decode_structured(model, rows, device, batch, lam=0.0, seed_idx=0):
 
 
 @torch.no_grad()
-def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclusive=None):
+def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclusive=None, jump=None):
     """Beam search along each row's skeleton; returns {note: chosen string}.
 
     A greedy decode commits to each note's string for good, so one early mistake drags the following notes to the
@@ -145,6 +147,10 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclus
     `exclusive` (seconds, None = off) enforces that a string sounds one note at a time: a string is closed to a note
     that starts more than `exclusive` before the string's previous note has ended. If that closes every string
     that can play the note, the note is left unconstrained.
+
+    `jump` = (weight, frets, window) charges `weight` nats for every fret beyond `frets` that a fretted note lies
+    from the previous fretted note, when the two start within `window` seconds: a soft cost on fast position
+    jumps and on wide chords. Players do both now and then, so it is a cost and not a ban.
     """
     pad = model.config.pad_token_id
     picks = {}
@@ -164,6 +170,7 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclus
         score = np.full((n, beams), -np.inf)
         score[:, 0] = 0.0
         busy = np.zeros((n, beams, N_STRINGS))  # per beam and string: when its last note ends
+        hand = np.full((n, beams, 2), np.nan)  # per beam: fret and onset of its last fretted note
         trace = [[] for _ in chunk]  # per row: (parent beam, chosen string) arrays, one pair per slot in order
         cur = torch.full((n * beams, 1), pad, device=device)
         past = None
@@ -192,10 +199,18 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclus
                 if exclusive is not None:
                     closed = busy[b][:, slot.strings - 1] > slot.onset + exclusive
                     cand = np.where(closed & ~closed.all(axis=1, keepdims=True), -np.inf, cand)
+                if jump is not None:
+                    weight, frets, window = jump
+                    far = np.abs(slot.frets[None] - hand[b][:, :1]) - frets
+                    recent = (slot.onset - hand[b][:, 1:] < window) & (slot.frets[None] > 0)
+                    cand = cand - weight * np.where(recent & (far > 0), far, 0.0)
                 top = np.argsort(cand.ravel())[::-1][:beams]
                 k, j = np.divmod(top, len(slot.token_ids))
                 busy[b] = busy[b][k]
                 busy[b, np.arange(len(top)), slot.strings[j] - 1] = slot.offset
+                hand[b] = hand[b][k]
+                fretted = slot.frets[j] > 0
+                hand[b, fretted] = np.stack([slot.frets[j], np.full(len(top), slot.onset)], axis=1)[fretted]
                 keep = np.isfinite(cand.ravel()[top])
                 score[b] = np.where(keep, cand.ravel()[top], -np.inf)
                 score[b, len(top) :] = -np.inf
@@ -219,3 +234,8 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclus
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
     return picks
+
+
+def jump_of(cfg):
+    """decode_beam's `jump` argument from a config with a `jump` group (weight, frets, window_s); None when off."""
+    return (cfg.jump.weight, cfg.jump.frets, cfg.jump.window_s) if cfg.jump.weight else None

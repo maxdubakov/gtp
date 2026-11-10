@@ -13,6 +13,12 @@ beams: 8
 prob_floor: 1.0e-4
 # A string sounds one note at a time: seconds of overlap tolerated before a string is closed to a new note; null = off.
 exclusive_s: null
+# Soft cost on fast position jumps and wide chords: nats per fret beyond `frets` between two fretted notes that
+# start within window_s of each other; weight 0 = off.
+jump:
+  weight: 0.0
+  frets: 4
+  window_s: 0.25
 
 hydra:
   output_subdir: null
