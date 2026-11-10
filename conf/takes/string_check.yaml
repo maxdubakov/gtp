@@ -6,6 +6,8 @@ defaults:
 takes_dir: data/takes
 # Classifier run dirs whose calibrated distributions are averaged (e.g. the seeds of one sweep).
 runs: []
+# Where to write every note's truth, evidence and picks (relative to the repo); null = nowhere.
+notes_out: null
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
 # Decode-time fusion weight and beam width (the ones index_fusion.py picked on the val guitars).
 lam: 1.3

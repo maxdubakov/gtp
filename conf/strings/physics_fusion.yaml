@@ -28,6 +28,8 @@ calibration_temper: 1.0
 # Harmonic levels (harmonic_levels.py) and the exponent on the string-envelope likelihood fitted to them; 0 = off.
 levels: levels.npz
 envelope_temper: 0.3
+# Overrides of conf/strings/harmonic_levels.yaml (the envelope model's settings).
+envelope: {}
 # How far (decades) a guitar's string constants may sit from its string-set family's typical ones.
 prior_sd: 0.12
 # Point evidence: a note's inharmonicity is used only if its fit found B above the floor and left a small residual.

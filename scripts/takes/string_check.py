@@ -87,6 +87,7 @@ def main(cfg):
             r['runs + B'] = float((part.argmax(1) == r['truth'])[r['multi']].mean())
             r['fused'] = part
     stage2, vocab, _, max_seq_len = load_checkpoint(REPO_ROOT / cfg.stage2_checkpoint, device)
+    dump = []
     for r in rows:
         notes, tuning = r.pop('notes'), [int(p) for p in st.OPEN_STRINGS]
         prior, fused = classifiers[0].prior([n['pitch'] for n in notes]), r.pop('fused')
@@ -101,9 +102,12 @@ def main(cfg):
             picks = decode_beam(
                 stage2, rows_, device, 64, lam, beams=cfg.beams, exclusive=cfg.exclusive_s, jump=jump_of(cfg)
             )
-            hit = np.array([picks[i] - 1 for i in range(len(notes))]) == r['truth']
-            r[name] = float(hit[r['multi']].mean())
+            picked = np.array([picks[i] for i in range(len(notes))])
+            r[name] = float((picked - 1 == r['truth'])[r['multi']].mean())
+            dump.append(pd.DataFrame({'take': r['take'], 'method': name, 'start': [n['start'] for n in notes], 'pitch': [n['pitch'] for n in notes], 'string': r['truth'] + 1, 'evidence': fused.argmax(1) + 1, 'confidence': fused.max(1), 'pick': picked}))  # fmt: skip
     table = pd.DataFrame(rows).drop(columns=['truth', 'multi'])
+    if cfg.notes_out:
+        pd.concat(dump).to_csv(REPO_ROOT / cfg.notes_out, index=False)
     info(
         f'{len(classifiers)} runs, string accuracy on edited multi-string notes\n{table.round(3).to_string(index=False)}'
     )

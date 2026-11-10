@@ -37,6 +37,15 @@ note_degree: 2
 iters: 15
 sweeps: 3
 shrink: 2
+# Pickup prior for H: combs of pickup positions (fraction of the string's length from the bridge) from pickup_min to
+# pickup_max are tried on at most scan_notes notes, with nulls no deeper than comb_floor, each also scaled by
+# comb_depths; pickup_step 0 = no prior.
+pickup_min: 0.03
+pickup_max: 0.45
+pickup_step: 0.005
+comb_floor: 0.05
+comb_depths: [1.0, 0.6, 0.35]
+scan_notes: 1500
 # Residual scale (dB): where EM starts, and the least it may fall to.
 sigma_start_db: 6
 sigma_min_db: 2

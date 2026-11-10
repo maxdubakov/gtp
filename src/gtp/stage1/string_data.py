@@ -135,10 +135,27 @@ def guitar_techs():
     return frame(recs, notes)
 
 
+def channel_notes(path):
+    """(start, end, pitch, channel + 1) of every note of a MIDI file: EGDB puts each string on its own channel."""
+    import mido
+
+    notes, sounding, t = [], {}, 0.0
+    for msg in mido.MidiFile(path):
+        t += msg.time
+        if msg.type not in ('note_on', 'note_off'):
+            continue
+        key = (msg.channel, msg.note)
+        if key in sounding:
+            notes.append((sounding.pop(key), t, msg.note, msg.channel + 1))
+        if msg.type == 'note_on' and msg.velocity > 0:
+            sounding[key] = t
+    return notes
+
+
 def egdb():
-    """One player, one guitar, never trained on: a test set. Track names '1'..'6' are strings, 1 = high e."""
+    """One player, one guitar, never trained on: a test set. A note's string is its MIDI channel (0 = high e); only
+    some files also name their tracks after the strings."""
     root = DATA / 'egdb' / 'raw'
-    tracks = {str(s): s for s in range(1, 7)}
     recs, notes = [], []
     for midi in sorted((root / 'audio_label').glob('*.midi'), key=lambda p: int(p.stem)):
         audio = root / 'audio_DI' / f'{midi.stem}.wav'
@@ -146,7 +163,7 @@ def egdb():
             continue
         rec = f'egdb/{midi.stem}'
         recs.append((rec, 'egdb', rel(audio), 'egdb', 'egdb-strat', 'di', 'pieces', 'test'))
-        notes += [(rec, *n) for n in midi_notes(midi, tracks)]
+        notes += [(rec, *n) for n in channel_notes(midi) if 1 <= n[3] <= 6]
     return frame(recs, notes)
 
 

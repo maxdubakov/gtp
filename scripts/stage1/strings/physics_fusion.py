@@ -89,7 +89,9 @@ def main(cfg):
         tables = string_tables(cfg.temper * total, prof['log_b'], d['pitch'], cfg.spread)
 
         levels = np.load(index / 'cache' / cfg.levels)['x'][note].astype(np.float32) if cfg.envelope_temper else None
-        envelope = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml')
+        envelope = OmegaConf.merge(
+            OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml'), cfg.envelope
+        )
         pitch = d['pitch'].to_numpy()
 
         def label_free(i):
