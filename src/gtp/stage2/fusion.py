@@ -191,15 +191,18 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
                 trace[b].append((k, slot.strings[j], slot.note))
             if (parent != own).any():
                 order = torch.from_numpy((parent + np.arange(n)[:, None] * beams).ravel()).to(device)
-                past.reorder_cache(order)
+                # Beams only swap places within their own row, and a row's beams share one encoder output, so the
+                # cross-attention cache (by far the larger one) never needs reordering.
+                past.self_attention_cache.reorder_cache(order)
+            # Every step allocates a fresh, longer copy of the cache; MPS pools the old blocks until told to release them.
+            if t % 4 == 3 and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
             cur = torch.from_numpy(nxt.ravel()).to(device)[:, None]
         for b in range(n):
             k = int(score[b].argmax())
             for parents, strings, note in reversed(trace[b]):
                 picks[note] = int(strings[k])
                 k = int(parents[k])
-        # Reordering the cache allocates a fresh, longer copy every step; MPS keeps all those blocks pooled unless
-        # told to release them, and the pool grows by gigabytes per chunk.
         del out, past, encoder_outputs, cur
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
