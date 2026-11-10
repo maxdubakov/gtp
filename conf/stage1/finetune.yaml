@@ -1,0 +1,36 @@
+defaults:
+  - wandb: default
+  - _self_
+  - override hydra/job_logging: none
+
+name: notes
+data_dir: data/stage1_notes
+# Note-model checkpoint to start from: the guitar model fine-tuned on GAPS and GuitarSet.
+init: models/finetuned/step_0070000_final.pth
+seed: 0
+# Riley et al.'s recipe: Adam at 1e-5, multiplied by lr_decay every lr_decay_steps.
+lr: 1.0e-5
+lr_decay: 0.9
+lr_decay_steps: 10000
+batch: 8
+max_steps: 30000
+log_steps: 50
+eval_steps: 2500
+save_steps: 5000
+val_segments_per_group: 48
+workers: 8
+# Probability that a training segment is rendered through a random recording chain, by the recording's own chain:
+# direct input gets the full pickup-amp-cabinet-room-microphone chain, microphone recordings a room and a microphone.
+# Room recordings (ego, exo) are left as they are.
+augment:
+  di: 0.7
+  amp-mic: 0.3
+  acoustic-mic: 0.3
+
+hydra:
+  run:
+    dir: ${repo_root:}/runs/stage1/${now:%Y-%m-%d_%H-%M-%S}_${name}
+  job:
+    config:
+      override_dirname:
+        exclude_keys: [name, wandb.mode, wandb.project, wandb.entity]

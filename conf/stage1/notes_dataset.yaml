@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+out_dir: data/stage1_notes
+gaps_dir: data/gaps_hf
+index_dir: data/string_index
+room_index_dir: data/string_index_room
+# EGFxSet's single notes become sequences: each note is cut to a random length and faded out.
+stitch:
+  seed: 0
+  passes: 2
+  notes_per_sequence: 12
+  min_note_s: 0.4
+  max_note_s: 2.0
+  # Audio kept before the note's onset, and the fade at its cut end.
+  lead_s: 0.02
+  fade_s: 0.01
+workers: 9
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -6,7 +6,9 @@ training loop.
 """
 
 import csv
+import json
 import os
+from pathlib import Path
 
 import jams
 import librosa
@@ -15,6 +17,7 @@ import pretty_midi
 from torch.utils.data import Dataset
 
 from gtp.log import trace
+from gtp.stage1 import chains
 
 # Piano MIDI range: A0 (21) to C8 (108), 88 keys.
 BEGIN_NOTE = 21
@@ -269,7 +272,8 @@ class GuitarDataset(Dataset):
         for audio_path, notes in items:
             duration = self._audio_duration(audio_path)
             start = 0.0
-            while start + segment_seconds <= duration:
+            # A recording shorter than one segment still gives one, zero-padded.
+            while start + segment_seconds <= max(duration, segment_seconds):
                 self.segments.append((audio_path, notes, start))
                 start += hop_seconds
 
@@ -313,6 +317,42 @@ class GuitarDataset(Dataset):
             'waveform': waveform.astype(np.float32),
             **{k: v.astype(np.float32) for k, v in targets.items()},
         }
+
+
+class ManifestDataset(GuitarDataset):
+    """Segments of the recordings in a notes manifest (scripts/stage1/build_notes_dataset.py).
+
+    `augment` maps a recording chain to the probability that a segment is rendered through a random recording
+    chain (chains.py) before the model hears it; chains absent from it are never augmented.
+    """
+
+    def __init__(self, root, entries, augment=None, **kwargs):
+        root = Path(root)
+        self.durations = {str(root / e['audio']): e['duration'] for e in entries}
+        self.chain_of = {str(root / e['audio']): e['chain'] for e in entries}
+        self.group_of = {str(root / e['audio']): f"{e['dataset']}/{e['chain']}" for e in entries}
+        self.augment = dict(augment or {})
+        self._rng = None
+        super().__init__([(str(root / e['audio']), e['notes']) for e in entries], **kwargs)
+
+    @classmethod
+    def from_manifest(cls, root, split, augment=None, **kwargs):
+        with open(Path(root) / 'manifest.jsonl') as fh:
+            entries = [e for e in map(json.loads, fh) if e['split'] == split]
+        return cls(root, entries, augment, **kwargs)
+
+    def _audio_duration(self, audio_path):
+        return self.durations[audio_path]
+
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        chain = self.chain_of[self.segments[idx][0]]
+        if self._rng is None:
+            self._rng = np.random.default_rng()
+        if self._rng.random() < self.augment.get(chain, 0.0):
+            params = chains.draw(self._rng, chains.stages_for(chain))
+            item['waveform'] = chains.render(item['waveform'], self.sample_rate, params, self._rng).astype(np.float32)
+        return item
 
 
 # ---------------------------------------------------------------------------

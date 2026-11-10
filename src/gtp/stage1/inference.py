@@ -46,6 +46,7 @@ class PianoTranscription:
 
         self.device = device
         self.segment_samples = segment_samples
+        self.batch_size = 1  # segments per forward pass; raise it on a GPU
         self.frames_per_second = FRAMES_PER_SECOND
         self.classes_num = CLASSES_NUM
 
@@ -142,7 +143,7 @@ class PianoTranscription:
         segments = self._enframe(audio, self.segment_samples)
         trace('segments', segments, segment_samples=self.segment_samples, overlap='50%')
 
-        output_dict = forward(self.model, segments, batch_size=1)
+        output_dict = forward(self.model, segments, batch_size=self.batch_size)
 
         hop_size = SAMPLE_RATE // self.frames_per_second
         expected_frames = audio_len // hop_size
