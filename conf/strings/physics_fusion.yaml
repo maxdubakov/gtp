@@ -8,6 +8,10 @@ index_dir: data/string_index
 runs: []
 # Or held-out probabilities for every guitar (logo_probs.py): an .npz with `note` and `classifier`.
 probs: null
+# What the curves are multiplied into: the `classifier` probabilities, or only the pitch `prior` of prior_run's
+# training notes (the curves on their own). The notes scored still come from `runs` or `probs`.
+base: classifier
+prior_run: results/strings/runs/2026-11-09_17-19-10_pool-flatten_w400_s0
 # Inharmonicity evidence: `point` (one B estimate per note, harmonic_features.py) or `profile` (a likelihood curve
 # over B per note, b_profiles.py).
 evidence: profile

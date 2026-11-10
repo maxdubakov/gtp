@@ -245,6 +245,10 @@ def main():
         help='When --run-dir is set, restrict to these exact step values (e.g. --checkpoint-steps 5000 10000 ...)',
     )
     ap.add_argument('--output', required=True, help='JSON path to save aggregated results')
+    ap.add_argument(
+        '--data-dir', default=None, help='Dataset directory with <split>.jsonl (default: the augmented set)'
+    )
+    ap.add_argument('--splits', nargs='+', default=['val', 'test'], choices=['val', 'test'])
     ap.add_argument('--device', default=None)
     ap.add_argument('--batch-size', type=int, default=64)
     ap.add_argument('--num-workers', type=int, default=4)
@@ -281,25 +285,15 @@ def main():
     info(f'Vocab: {len(vocab)} tokens (include_genre={cfg.conditioning.genre})  max_seq_len: {max_seq_len}')
 
     # Build datasets
-    datasets, _stats = build_datasets(vocab, splits=('val', 'test'), max_seq_len=max_seq_len)
-    val_ds, test_ds = datasets['val'], datasets['test']
-    info(f'Val sequences: {len(val_ds)}, test sequences: {len(test_ds)}')
-
-    pin_memory = device == 'cuda'
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=pin_memory,
-    )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=pin_memory,
-    )
+    kwargs = {'data_dir': Path(args.data_dir)} if args.data_dir else {}
+    datasets, _stats = build_datasets(vocab, splits=tuple(args.splits), max_seq_len=max_seq_len, **kwargs)
+    info(', '.join(f'{k} sequences: {len(v)}' for k, v in datasets.items()))
+    loaders = {
+        k: DataLoader(
+            v, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=device == 'cuda'
+        )
+        for k, v in datasets.items()
+    }
 
     all_results = []
     for label, path in ckpts:
@@ -309,7 +303,7 @@ def main():
 
         record = {'checkpoint': str(path), 'label': label, 'step': step, 'splits': {}, 'fallback': args.fallback}
 
-        for split, loader in (('val', val_loader), ('test', test_loader)):
+        for split, loader in loaders.items():
             metrics, records = evaluate_split(model, loader, vocab, device, fallback=args.fallback)
             summary = compute_eval_summary(records)
             _print_split(split, summary)

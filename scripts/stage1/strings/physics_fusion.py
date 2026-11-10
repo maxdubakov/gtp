@@ -35,7 +35,7 @@ from gtp.stage1.inharmonicity import (
     implied_constants,
     string_tables,
 )
-from gtp.stage1.strings import candidates
+from gtp.stage1.strings import candidates, prior_from_counts
 
 
 def one_hot(strings):
@@ -59,6 +59,9 @@ def main(cfg):
         probs = np.mean([r['probs'] for r in runs], axis=0)
     d = notes.iloc[note].reset_index(drop=True)
     d = d.assign(note=note)
+    if cfg.base == 'prior':
+        counts = np.load(REPO_ROOT / cfg.prior_run / 'classifier.npz')['prior_counts']
+        probs = prior_from_counts(counts, d['pitch'].to_numpy())
 
     fused = {k: probs.copy() for k in ('per_guitar', 'per_recording', 'oracle')}
     labels = one_hot(d['string'])

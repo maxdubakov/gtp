@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from gtp.stage2.tokenizer import EVIDENCE_DIM, MAX_FRET, TAB, Token, tokenize_piece
+from gtp.stage2.tokenizer import EVIDENCE_DIM, MAX_FRET, N_STRINGS, TAB, Token, tokenize_piece
 
 
 @dataclass
@@ -24,6 +24,8 @@ class Slot:
     token_ids: np.ndarray
     strings: np.ndarray
     log_ratio: np.ndarray | None  # (n_seeds, n_valid): log p_audio - log p_prior
+    onset: float = 0.0
+    offset: float = 0.0
 
 
 @dataclass
@@ -73,7 +75,7 @@ def piece_rows(piece, vocab, max_seq_len, note_ids, log_ratios, evidence=None):
                 continue
             strings, token_ids = valid_tabs(notes[k]['pitch'], tuning, vocab)
             assert tid in token_ids, (piece.get('filename'), notes[k])
-            slots[t] = Slot(note_ids[k], token_ids, strings, log_ratios[k])
+            slots[t] = Slot(note_ids[k], token_ids, strings, log_ratios[k], notes[k]['start'], notes[k]['end'])
             k += 1
         rows.append(Row(enc, dec, tuning, slots, ev[0] if ev else None))
     assert k == len(notes), (piece.get('filename'), k, len(notes))
@@ -133,12 +135,16 @@ def decode_structured(model, rows, device, batch, lam=0.0, seed_idx=0):
 
 
 @torch.no_grad()
-def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
+def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8, exclusive=None):
     """Beam search along each row's skeleton; returns {note: chosen string}.
 
     A greedy decode commits to each note's string for good, so one early mistake drags the following notes to the
     wrong position. The beam keeps the `beams` best string sequences, scored by the summed per-note scores of
     decode_structured, so evidence on later notes can overturn an earlier choice.
+
+    `exclusive` (seconds, None = off) enforces that a string sounds one note at a time: a string is closed to a note
+    that starts more than `exclusive` before the string's previous note has ended. If that closes every string
+    that can play the note, the note is left unconstrained.
     """
     pad = model.config.pad_token_id
     picks = {}
@@ -157,6 +163,7 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
         mask = mask.repeat_interleave(beams, dim=0)
         score = np.full((n, beams), -np.inf)
         score[:, 0] = 0.0
+        busy = np.zeros((n, beams, N_STRINGS))  # per beam and string: when its last note ends
         trace = [[] for _ in chunk]  # per row: (parent beam, chosen string) arrays, one pair per slot in order
         cur = torch.full((n * beams, 1), pad, device=device)
         past = None
@@ -182,8 +189,13 @@ def decode_beam(model, rows, device, batch, lam=0.0, seed_idx=0, beams=8):
                 cand = score[b][:, None] + logp[b][:, slot.token_ids]
                 if lam and slot.log_ratio is not None:
                     cand = cand + lam * slot.log_ratio[seed_idx][None]
+                if exclusive is not None:
+                    closed = busy[b][:, slot.strings - 1] > slot.onset + exclusive
+                    cand = np.where(closed & ~closed.all(axis=1, keepdims=True), -np.inf, cand)
                 top = np.argsort(cand.ravel())[::-1][:beams]
                 k, j = np.divmod(top, len(slot.token_ids))
+                busy[b] = busy[b][k]
+                busy[b, np.arange(len(top)), slot.strings[j] - 1] = slot.offset
                 keep = np.isfinite(cand.ravel()[top])
                 score[b] = np.where(keep, cand.ravel()[top], -np.inf)
                 score[b, len(top) :] = -np.inf

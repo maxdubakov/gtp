@@ -94,7 +94,7 @@ def main(cfg):
         assert sorted_notes(piece) == notes, 'edited notes are not in decoder order'
         for name, lam in (('stage 2', 0.0), ('pipeline', cfg.lam)):
             rows_ = piece_rows(piece, vocab, max_seq_len, list(range(len(notes))), ratios)
-            picks = decode_beam(stage2, rows_, device, 64, lam, beams=cfg.beams)
+            picks = decode_beam(stage2, rows_, device, 64, lam, beams=cfg.beams, exclusive=cfg.exclusive_s)
             hit = np.array([picks[i] - 1 for i in range(len(notes))]) == r['truth']
             r[name] = float(hit[r['multi']].mean())
     table = pd.DataFrame(rows).drop(columns=['truth', 'multi'])

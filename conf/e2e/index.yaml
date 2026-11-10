@@ -23,6 +23,8 @@ physics: {}
 degrade: null
 onset_tolerance: 0.05
 prob_floor: 1.0e-4
+# A string sounds one note at a time: seconds of overlap tolerated before a string is closed to a new note; null = off.
+exclusive_s: null
 batch: 64
 
 hydra:

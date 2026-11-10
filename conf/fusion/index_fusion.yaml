@@ -25,6 +25,10 @@ batch: 64
 # Beam width of the decode along the skeleton; 1 = greedy. Wide beams need a smaller batch: memory grows with both.
 beams: 8
 prob_floor: 1.0e-4
+# A string sounds one note at a time: seconds of overlap tolerated before a string is closed to a new note; null = off.
+exclusive_s: null
+# Recordings shorter than this are left out of the equivalent accuracy (too few notes to call a shift consistent).
+min_notes_for_drift: 20
 
 hydra:
   run:

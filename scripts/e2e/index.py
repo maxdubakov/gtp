@@ -177,8 +177,8 @@ def main(cfg):
         for piece, ids in pieces
         for row in piece_rows(piece, vocab, max_seq_len, ids, [table[i]['ratio'] for i in ids])
     ]
-    df['stage2'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams))
-    df['pipeline'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams))
+    df['stage2'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, beams=cfg.beams, exclusive=cfg.exclusive_s))
+    df['pipeline'] = pd.Series(decode_beam(stage2, rows, device, cfg.batch, cfg.lam, beams=cfg.beams, exclusive=cfg.exclusive_s))
     methods = ['stage2', 'classifier', 'fused', 'pipeline']
     df = df.drop(columns=['ratio'])
     counts = pd.DataFrame(counts).merge(recs[['rec', 'guitar', 'dataset', 'content', 'split']], on='rec')

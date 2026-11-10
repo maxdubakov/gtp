@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+index_dir: data/string_index
+out_dir: data/string_index_room
+mics: [ego, exo]
+# The room audio is searched within this many seconds of its direct recording.
+max_lag_s: 3.0
+workers: 8
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
