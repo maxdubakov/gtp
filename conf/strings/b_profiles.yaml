@@ -15,11 +15,7 @@ n_partials: 40
 log_b_min: -5.6
 log_b_max: -2.4
 log_b_step: 0.05
-# The recording's tuning is measured first: the median offset of its notes' first harmonic above tuning_ref_hz,
-# searched this far either side of concert pitch (0 = assume concert pitch).
-tuning_search_cents: 0
-tuning_ref_hz: 400
-# Offset of a note's f0 from that tuning: search range and step.
+# Tuning offset of the note's f0 from equal temperament: search range and step.
 tuning_cents: 30
 tuning_step_cents: 2
 # Bends and slides: offsets up to this many cents above nominal are also tried where one of the first few partials
@@ -29,10 +25,6 @@ bend_partials: 3
 # A spectral peak must rise this far above its surroundings and lie within this range of the frame's maximum.
 peak_prominence_db: 8
 peak_floor_db: 70
-# And, when above 0, this far above the local noise floor: the floor_percentile of the levels within floor_hz of it.
-peak_snr_db: 0
-floor_hz: 150
-floor_percentile: 25
 # Partial model: Laplace frequency noise (Hz) when observed, prior probability of being missing.
 noise_hz: 1.5
 missing: 0.5

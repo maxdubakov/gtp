@@ -1,0 +1,18 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# An e2e/index.py run directory (relative to the repo).
+run: ???
+index_dir: data/string_index
+# The Stage 1 checkpoint of that run: its cached transcriptions give the notes' ends.
+stage1_checkpoint: models/finetuned/step_0070000_final.pth
+methods: [stage2, pipeline]
+# Frame period: TabCNN's 512 samples at 22050 Hz, which GuitarSet tablature papers report on.
+hop_s: 0.02322
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

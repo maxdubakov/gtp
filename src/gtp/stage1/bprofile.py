@@ -13,7 +13,6 @@ only remove reward, never add it.
 
 import librosa
 import numpy as np
-import scipy.ndimage
 import scipy.signal
 
 
@@ -29,36 +28,11 @@ def frame_peaks(y, start, cfg, window, sr):
     df = sr / cfg.n_fft
     n_bins = int(cfg.f_max / df)
     log = 20 * np.log10(np.abs(np.fft.rfft(seg * window, cfg.n_fft))[:n_bins] + 1e-9)
-    height = log.max() - cfg.peak_floor_db
-    if cfg.peak_snr_db:
-        # Noise has peaks too, 8 dB prominent ones included: a partial must also clear the level the spectrum
-        # around it mostly sits at (a low percentile, since a low note's own partials fill much of the band).
-        floor = scipy.ndimage.percentile_filter(log, cfg.floor_percentile, size=2 * int(cfg.floor_hz / df) + 1)
-        height = np.maximum(height, floor + cfg.peak_snr_db)
-    idx, _ = scipy.signal.find_peaks(log, height=height, prominence=cfg.peak_prominence_db)
+    idx, _ = scipy.signal.find_peaks(log, height=log.max() - cfg.peak_floor_db, prominence=cfg.peak_prominence_db)
     idx = idx[(idx > 0) & (idx < n_bins - 1)]
     y0, y1, y2 = log[idx - 1], log[idx], log[idx + 1]
     shift = np.clip(0.5 * (y0 - y2) / (y0 - 2 * y1 + y2 - 1e-12), -0.5, 0.5)
     return (idx + shift) * df, df
-
-
-def tuning_offset(spectra, pitches, df, cfg):
-    """Cents the recording sits above concert pitch: the median, over its notes, of where a low harmonic peaks in
-    their power `spectra` (bin spacing df).
-
-    The harmonic is the first one above tuning_ref_hz, where a bin is a few cents wide and the string's stiffness
-    has not yet moved it.
-    """
-    cents = []
-    for power, pitch in zip(spectra, pitches, strict=True):
-        f = librosa.midi_to_hz(pitch) * np.ceil(cfg.tuning_ref_hz / librosa.midi_to_hz(pitch))
-        lo = int(f * 2 ** (-cfg.tuning_search_cents / 1200) / df)
-        hi = int(f * 2 ** (cfg.tuning_search_cents / 1200) / df) + 2
-        k = lo + int(np.argmax(power[lo:hi]))
-        if lo < k < hi - 1:
-            y0, y1, y2 = np.log(power[k - 1 : k + 2] + 1e-12)
-            cents.append(1200 * np.log2((k + 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2 - 1e-12)) * df / f))
-    return float(np.median(cents)) if cents else 0.0
 
 
 def occupied_bins(others, n_bins, df, cfg, lobe):
@@ -119,16 +93,6 @@ def recording_profiles(y, sr, onsets, offsets, pitches, cfg):
     window = np.hanning(cfg.frame)
     lobe = 2 * sr / cfg.frame
     onsets, offsets, pitches = np.asarray(onsets), np.asarray(offsets), np.asarray(pitches)
-    if cfg.tuning_search_cents:
-        # With the recording's own tuning known, partials are searched and other notes' partials avoided within a
-        # narrow range (tuning_cents) of where they must be; in a chord a wide range masks almost everything.
-        n_bins = int(cfg.f_max * cfg.n_fft / sr)
-        spectra = []
-        for on in onsets:
-            seg = y[max(round(on * sr), 0) :][: cfg.frame]
-            seg = np.pad(seg, (0, cfg.frame - len(seg)))
-            spectra.append(np.abs(np.fft.rfft(seg * window, cfg.n_fft)[:n_bins]) ** 2)
-        pitches = pitches + tuning_offset(spectra, pitches, sr / cfg.n_fft, cfg) / 100
     out = np.zeros((len(onsets), cfg.n_frames, len(log_b)), np.float32)
     for i, (on, off, pitch) in enumerate(zip(onsets, offsets, pitches, strict=True)):
         for j in range(cfg.n_frames):
