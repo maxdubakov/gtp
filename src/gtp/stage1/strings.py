@@ -27,6 +27,8 @@ GUITARSET_DIR = Path(REPO_ROOT) / 'data' / 'guitarset'
 CACHE_DIR = GUITARSET_DIR / 'string_cache'
 
 OPEN_STRINGS = np.array([64, 59, 55, 50, 45, 40])
+# String-set families, told apart by the G string (inharmonicity.STRING_SETS has their typical constants).
+FAMILIES = ('plain_g', 'wound_g')
 MAX_FRET = 24
 N_STRINGS = 6
 
@@ -194,9 +196,21 @@ class StringNet(nn.Module):
     full-resolution first block dominates step time; BN then normalizes pooled activations.
     `pool` collapses the encoder's time axis before the projection: 'flatten' keeps every time cell (TART),
     'mean' averages them, 'meanmax' concatenates their mean and max (as in PANNs).
+    `use_family` adds the guitar's string-set family (FAMILIES) as an input: a plain G string sounds unlike a wound one,
+    so which timbre means "G string" depends on the family.
     """
 
-    def __init__(self, in_channels, n_freq, n_frames, width=1.0, use_pitch=True, pool_first=False, pool='flatten'):
+    def __init__(
+        self,
+        in_channels,
+        n_freq,
+        n_frames,
+        width=1.0,
+        use_pitch=True,
+        pool_first=False,
+        pool='flatten',
+        use_family=False,
+    ):
         super().__init__()
         chans = [max(4, round(c * width)) for c in (32, 64, 128)]
         layers, prev = [], in_channels
@@ -210,14 +224,16 @@ class StringNet(nn.Module):
             enc_dim = self.pool(self.encoder(torch.zeros(1, in_channels, n_freq, n_frames))).shape[1]
         self.proj = nn.Sequential(nn.Linear(enc_dim, 256), nn.LayerNorm(256), nn.ReLU())
         self.pitch_emb = nn.Embedding(128, 16) if use_pitch else None
-        self.head = nn.Sequential(
-            nn.Dropout(0.3), nn.Linear(256 + (16 if use_pitch else 0), 128), nn.ReLU(), nn.Linear(128, N_STRINGS)
-        )
+        self.family_emb = nn.Embedding(len(FAMILIES), 8) if use_family else None
+        width_in = 256 + (16 if use_pitch else 0) + (8 if use_family else 0)
+        self.head = nn.Sequential(nn.Dropout(0.3), nn.Linear(width_in, 128), nn.ReLU(), nn.Linear(128, N_STRINGS))
 
-    def forward(self, x, pitch, candidates):
+    def forward(self, x, pitch, candidates, family=None):
         h = self.proj(self.pool(self.encoder(x)))
         if self.pitch_emb is not None:
             h = torch.cat([h, self.pitch_emb(pitch)], dim=1)
+        if self.family_emb is not None:
+            h = torch.cat([h, self.family_emb(family)], dim=1)
         return self.head(h).masked_fill(~candidates, float('-inf'))
 
 
@@ -323,19 +339,28 @@ class StringClassifier:
     def prior(self, pitches):
         return prior_from_counts(self.prior_counts, pitches)
 
-    def predict(self, spec, onsets, pitches, batch=512):
+    @property
+    def uses_family(self):
+        return self.model.family_emb is not None
+
+    def predict(self, spec, onsets, pitches, batch=512, family=None):
         """Calibrated (N, 6) string probabilities for notes in one track's spectrogram."""
-        return self.predict_windows(note_windows(spec, np.asarray(onsets)), pitches, batch)
+        return self.predict_windows(note_windows(spec, np.asarray(onsets)), pitches, batch, family)
 
     @torch.no_grad()
-    def predict_windows(self, windows, pitches, batch=512):
-        """Calibrated (N, 6) string probabilities for cached note windows (N, 1, freq, >= n_frames)."""
+    def predict_windows(self, windows, pitches, batch=512, family=None):
+        """Calibrated (N, 6) string probabilities for cached note windows (N, 1, freq, >= n_frames).
+
+        `family` (a name in FAMILIES) is required by a model trained with use_family.
+        """
         pitch = torch.as_tensor(np.asarray(pitches), dtype=torch.long)
         cand = torch.as_tensor(candidates(pitches))
+        fam = torch.full((batch,), FAMILIES.index(family) if self.uses_family else 0, device=self.device)
         out = []
         for i in range(0, len(windows), batch):
             w = np.ascontiguousarray(windows[i : i + batch, ..., : self.n_frames])
             x = (torch.from_numpy(w).to(self.device).float() - self.mean) / self.std
-            logits = self.model(x, pitch[i : i + batch].to(self.device), cand[i : i + batch].to(self.device))
+            p, c = pitch[i : i + batch].to(self.device), cand[i : i + batch].to(self.device)
+            logits = self.model(x, p, c, fam[: len(p)])
             out.append(torch.softmax(logits / self.temperature, dim=1).cpu())
         return torch.cat(out).numpy()

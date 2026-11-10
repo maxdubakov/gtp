@@ -3,5 +3,7 @@ width: 1.0
 use_pitch: true
 # flatten (TART) | mean | meanmax: how the encoder's time axis is collapsed before the projection.
 pool: flatten
+# Give the model the guitar's string-set family (plain or wound G); needs `families` in train_index.yaml.
+use_family: false
 # Exploration default (2x faster on MPS, same accuracy in speed_check); paper runs use pool_first=false optim.epochs=30.
 pool_first: true

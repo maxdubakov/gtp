@@ -13,6 +13,9 @@ Usage:
   uv run scripts/stage1/strings/physics_fusion.py probs=results/strings/logo/<run>/probs.npz
 """
 
+import json
+from pathlib import Path
+
 import hydra
 import numpy as np
 import pandas as pd
@@ -67,7 +70,7 @@ def main(cfg):
         implied = implied_constants(log_b, d['pitch'])
 
         def label_free(i):
-            return calibrate(probs[i], implied[i], valid[i], cfg.iters, cfg.weight)[:2]
+            return *calibrate(probs[i], implied[i], valid[i], cfg.iters, cfg.weight)[:2], None
 
         def from_labels(fit, i):
             fit = fit[valid[fit]]
@@ -82,8 +85,8 @@ def main(cfg):
         sharp = string_tables(cfg.calibration_temper * total, prof['log_b'], d['pitch'], cfg.spread)
 
         def label_free(i):
-            const = calibrate_profiles(probs[i], sharp[i], cfg.iters, cfg.prior_sd)[1]
-            return fuse_tables(probs[i], tables[i], np.searchsorted(CONSTANT_GRID, const - 1e-9)), const
+            _, const, family = calibrate_profiles(probs[i], sharp[i], cfg.iters, cfg.prior_sd)
+            return fuse_tables(probs[i], tables[i], np.searchsorted(CONSTANT_GRID, const - 1e-9)), const, family
 
         def from_labels(fit, i):
             return fuse_tables(probs[i], tables[i], fit_constants(tables[fit], labels[fit]))
@@ -91,9 +94,10 @@ def main(cfg):
         for guitar, g in d.groupby('guitar').indices.items():
             info(f'{guitar}: constants from labels {CONSTANT_GRID[fit_constants(tables[g], labels[g])].round(2)}')
 
+    families = {}
     for guitar, g in d.groupby('guitar').indices.items():
-        fused['per_guitar'][g], const = label_free(g)
-        info(f'{guitar}: constants {const.round(2)}')
+        fused['per_guitar'][g], const, families[guitar] = label_free(g)
+        info(f'{guitar}: {families[guitar]}, constants {const.round(2)}')
         rec = d['rec'].to_numpy()[g]
         for r in np.unique(rec):
             i = g[rec == r]
@@ -120,6 +124,7 @@ def main(cfg):
 
     out = HydraConfig.get().runtime.output_dir
     summary.to_csv(f'{out}/summary.csv')
+    Path(out, 'families.json').write_text(json.dumps(families, indent=1))
     np.savez(f'{out}/fused.npz', note=note, classifier=probs, **fused)
     info(f'Saved {out}')
 

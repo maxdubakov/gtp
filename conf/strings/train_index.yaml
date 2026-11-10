@@ -13,6 +13,10 @@ index_dir: data/string_index
 limit: 0
 # Guitars (recordings.csv `guitar`) to hold out as the test set; every other recording trains. Empty = index splits.
 holdout: []
+# {guitar: string-set family} (physics_fusion.py's families.json); read when model.use_family is set.
+families: null
+# Family of a guitar the file doesn't list (one too small to hold out: the 88-note Ibanez RG, an electric).
+family_default: plain_g
 seed: 0
 
 # Paper recipe (see model/stringnet.yaml): standard conv-BN-ReLU-pool order, 30 epochs.

@@ -31,6 +31,7 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
 from gtp.stage1.strings import (
+    FAMILIES,
     PRE_FRAMES,
     candidates,
     fit_temperature,
@@ -90,6 +91,10 @@ def main(cfg):
     note_of = {k: rows['note'].to_numpy()[v] for k, v in idx.items()}
     pitch = notes['pitch'].to_numpy()
     label = notes['string'].to_numpy() - 1
+    family = np.zeros(len(notes), int)
+    if cfg.model.get('use_family'):
+        names = json.loads((REPO_ROOT / cfg.families).read_text())
+        family = notes['guitar'].map(lambda g: FAMILIES.index(names.get(g, cfg.family_default))).to_numpy()
     t0 = time.time()
     data = {}
     for k, v in idx.items():
@@ -98,6 +103,7 @@ def main(cfg):
             to_device(x, v, n_frames, device),
             torch.from_numpy(pitch[n]).to(device),
             torch.from_numpy(candidates(pitch[n])).to(device),
+            torch.from_numpy(family[n]).to(device),
             torch.from_numpy(label[n]).to(device),
         )
     info(f'windows {sizes} on {device} in {time.time() - t0:.0f}s')
@@ -115,16 +121,16 @@ def main(cfg):
     mean, std = mean[None, None, :, None], std[None, None, :, None]
 
     def batches(k, shuffle=False):
-        xs, ps, cs, ys = data[k]
+        xs, ps, cs, fs, ys = data[k]
         order = torch.randperm(len(xs), device=device) if shuffle else torch.arange(len(xs), device=device)
         for i in range(0, len(xs), cfg.optim.batch):
             b = order[i : i + cfg.optim.batch]
-            yield (xs[b].float() - mean) / std, ps[b], cs[b], ys[b]
+            yield (xs[b].float() - mean) / std, ps[b], cs[b], fs[b], ys[b]
 
     def logits_of(k):
         model.eval()
         with torch.no_grad():
-            return torch.cat([model(*b[:3]).cpu() for b in batches(k)])
+            return torch.cat([model(*b[:4]).cpu() for b in batches(k)])
 
     val_frame = notes.iloc[note_of['val']].reset_index(drop=True)
 
@@ -148,8 +154,8 @@ def main(cfg):
     for epoch in range(cfg.optim.epochs):
         model.train()
         t0, loss_sum, n_batches = time.time(), 0.0, 0
-        for xb, pb, cb, yb in batches('train', shuffle=True):
-            loss = F.cross_entropy(model(xb, pb, cb), yb)
+        for *inputs, yb in batches('train', shuffle=True):
+            loss = F.cross_entropy(model(*inputs), yb)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -176,7 +182,7 @@ def main(cfg):
 
     model.load_state_dict(best_state)
     torch.save(best_state, run.dir / 'model.pt')
-    temperature = 1.0 if cfg.holdout else fit_temperature(logits_of('val'), data['val'][3].cpu())
+    temperature = 1.0 if cfg.holdout else fit_temperature(logits_of('val'), data['val'][4].cpu())
     info(f'best epoch {best_epoch}, temperature {temperature:.3f}')
 
     train_notes = np.unique(note_of['train'])

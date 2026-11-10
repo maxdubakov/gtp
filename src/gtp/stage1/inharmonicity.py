@@ -129,7 +129,7 @@ def calibrate_profiles(probs, tables, iters=15, prior_sd=PRIOR_SD):
     """
     best = None
     cut = bounded(tables)
-    for name, mean in STRING_SETS.items():
+    for mean in STRING_SETS.values():
         const_idx = np.searchsorted(CONSTANT_GRID, mean - 1e-9)
         for _ in range(iters):
             post = fuse_tables(probs, tables, const_idx)
@@ -137,5 +137,7 @@ def calibrate_profiles(probs, tables, iters=15, prior_sd=PRIOR_SD):
         fit = np.log((probs * np.exp(cut[:, np.arange(6), const_idx])).sum(axis=1) + 1e-300).sum()
         fit -= 0.5 * (((CONSTANT_GRID[const_idx] - mean) / prior_sd) ** 2).sum()
         if best is None or fit > best[0]:
-            best = (fit, fuse_tables(probs, tables, const_idx), CONSTANT_GRID[const_idx], name)
-    return best[1:]
+            best = (fit, fuse_tables(probs, tables, const_idx), CONSTANT_GRID[const_idx])
+    _, post, const = best
+    # The family is read off the fitted constants, not the winning prior: a wound G is less inharmonic than the B.
+    return post, const, 'wound_g' if const[2] < const[1] else 'plain_g'
