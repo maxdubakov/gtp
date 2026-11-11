@@ -27,17 +27,16 @@ import mir_eval
 import numpy as np
 import pandas as pd
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import OmegaConf
 
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
-from gtp.stage1.bprofile import grid, recording_profiles
-from gtp.stage1.envelope import note_levels
+from gtp.stage1.bprofile import grid
 from gtp.stage1.inference import PianoTranscription, transcribe_cached
 from gtp.stage1.inharmonicity import fuse_guitar
+from gtp.stage1.string_evidence import classifier_probs, physical, settings
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.metrics import aggregate_drift_buckets
@@ -57,16 +56,6 @@ def match(ref, est, tolerance):
     return mir_eval.transcription.match_notes(*arrays(ref), *arrays(est), onset_tolerance=tolerance, offset_ratio=None)
 
 
-def physical(job):
-    """A recording's inharmonicity curves and harmonic levels, for its notes (onsets, ends, pitches)."""
-    audio, onsets, ends, pitches, profiles, envelope = job
-    y, sr = librosa.load(audio, sr=profiles.sample_rate, mono=True)
-    return (
-        recording_profiles(y, sr, onsets, ends, pitches, profiles).sum(axis=1),
-        note_levels(y, sr, onsets, ends, pitches, envelope),
-    )
-
-
 def prf(tp, n_est, n_ref):
     p, r = tp / max(n_est, 1), tp / max(n_ref, 1)
     return p, r, 2 * p * r / max(p + r, 1e-12)
@@ -75,9 +64,7 @@ def prf(tp, n_est, n_ref):
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'e2e'), config_name='index')
 def main(cfg):
     device = auto_device()
-    profiles = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml'), cfg.profiles)
-    physics = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml'), cfg.physics)
-    envelope = OmegaConf.merge(OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml'), cfg.envelope)
+    profiles, physics, envelope = settings(cfg.profiles, cfg.physics, cfg.envelope)
     index = REPO_ROOT / cfg.index_dir
     recs = pd.read_csv(index / 'recordings.csv')
     recs = recs[recs['split'].isin(list(cfg.splits))]
@@ -134,10 +121,8 @@ def main(cfg):
                     continue
                 onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
                 ends = [n['end'] for n in notes]
-                jobs.append(pool.submit(physical, (REPO_ROOT / r.audio, onsets, ends, pitches, profiles, envelope)))
-                y, _ = librosa.load(REPO_ROOT / r.audio, sr=st.SAMPLE_RATE, mono=True)
-                spec = st.spectrogram(y[None], classifiers[0].feature)
-                probs.append(np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0))
+                jobs.append(pool.submit(physical, REPO_ROOT / r.audio, onsets, ends, pitches, profiles, envelope))
+                probs.append(classifier_probs(REPO_ROOT / r.audio, onsets, pitches, classifiers))
                 ids = list(range(len(table), len(table) + len(notes)))
                 piece = {
                     'source': 'index',

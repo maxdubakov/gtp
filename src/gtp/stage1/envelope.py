@@ -186,7 +186,10 @@ def em(levels, f_bin, u_bin, prior, cfg):
 def fit_envelopes(levels, pitch, prior, cfg):
     """(notes, 6) log likelihood of the notes' harmonic levels under each string, the model fitted to these notes
     themselves, starting from `prior` (zero on strings that cannot play the note). Also returns the residual scale (dB).
+    Fewer than min_notes notes cannot place two curves: they are left alone (all zeros).
     """
+    if len(levels) < cfg.min_notes:
+        return np.zeros((len(levels), 6)), np.nan
     f_bin, u_bin = envelope_bins(pitch, cfg)
     model = em(levels, f_bin, u_bin, prior, cfg)
     return envelope_loglik(levels, f_bin, u_bin, model, prior > 0, cfg), model[2]

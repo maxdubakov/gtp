@@ -13,18 +13,14 @@ Usage:
 """
 
 import hydra
-import librosa
 import numpy as np
 import pandas as pd
-from omegaconf import OmegaConf
 
 from gtp import REPO_ROOT, takes
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
-from gtp.stage1.bprofile import grid, recording_profiles
-from gtp.stage1.envelope import note_levels
-from gtp.stage1.inharmonicity import fuse_guitar
+from gtp.stage1.string_evidence import classifier_probs, fuse_recordings, physical, settings
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 
@@ -33,9 +29,7 @@ from gtp.stage2.inference import load_checkpoint
 def main(cfg):
     device = auto_device()
     classifiers = [st.StringClassifier.from_run(REPO_ROOT / r, device) for r in cfg.runs]
-    profiles = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'b_profiles.yaml')
-    physics = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'physics_fusion.yaml')
-    envelope = OmegaConf.load(REPO_ROOT / 'conf' / 'strings' / 'harmonic_levels.yaml')
+    profiles, physics, envelope = settings()
     root = REPO_ROOT / cfg.takes_dir
     rows, per_take = [], []
     for take_id in takes.take_ids(root):
@@ -47,15 +41,11 @@ def main(cfg):
         onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
         multi = st.candidates(pitches).sum(axis=1) > 1
         truth = np.array([n['string'] - 1 for n in notes])
-        y, _ = librosa.load(root / take_id / 'audio.wav', sr=st.SAMPLE_RATE, mono=True)
-        spec = st.spectrogram(y[None], classifiers[0].feature)
-        probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
+        audio = root / take_id / 'audio.wav'
+        probs = classifier_probs(audio, onsets, pitches, classifiers)
         prior = classifiers[0].prior(pitches)
-        hi, sr = librosa.load(root / take_id / 'audio.wav', sr=profiles.sample_rate, mono=True)
-        ends = [n['end'] for n in notes]
-        curves = recording_profiles(hi, sr, onsets, ends, pitches, profiles).sum(axis=1)
-        levels = note_levels(hi, sr, onsets, ends, pitches, envelope)
-        per_take.append((take['meta'].get('guitar', ''), probs, curves, np.asarray(pitches), levels))
+        curves, levels = physical(audio, onsets, [n['end'] for n in notes], pitches, profiles, envelope)
+        per_take.append((take['meta'].get('guitar', ''), probs, curves, pitches, levels))
         before = {n['id']: n for n in take['prediction']['notes']}
         old = [
             (np.argmax(src['evidence']), t)
@@ -77,12 +67,10 @@ def main(cfg):
         )
     for guitar in {g for g, *_ in per_take}:
         group = [i for i, (g, *_) in enumerate(per_take) if g == guitar]
-        probs, curves, pitch, levels = (np.concatenate([per_take[i][k] for i in group]) for k in (1, 2, 3, 4))
-        fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics, levels, envelope)
-        info(
-            f'{guitar or "unnamed guitar"}: {len(group)} takes, {len(probs)} notes, {family}, constants {const.round(2)}'
-        )
-        for i, part in zip(group, np.split(fused, np.cumsum([len(per_take[i][1]) for i in group])[:-1]), strict=True):
+        probs, curves, pitch, levels = ([per_take[i][k] for i in group] for k in (1, 2, 3, 4))
+        fused, const, family = fuse_recordings(probs, curves, levels, pitch, profiles, physics, envelope)
+        info(f'{guitar or "unnamed guitar"}: {len(group)} takes, {family}, constants {const.round(2)}')
+        for i, part in zip(group, fused, strict=True):
             r = rows[i]
             r['runs + B'] = float((part.argmax(1) == r['truth'])[r['multi']].mean())
             r['fused'] = part
