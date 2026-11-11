@@ -12,7 +12,7 @@ seed: 0
 lr: 1.0e-5
 lr_decay: 0.9
 lr_decay_steps: 10000
-batch: 8
+batch: 4
 max_steps: 30000
 log_steps: 50
 eval_steps: 2500

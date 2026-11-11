@@ -52,6 +52,7 @@ def mean_loss(model, loader, device):
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'stage1'), config_name='finetune')
 def main(cfg):
     torch.manual_seed(cfg.seed)
+    torch.backends.cudnn.benchmark = True
     device = auto_device()
     run = start_run(cfg, job_type='stage1_notes', device=device)
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')
