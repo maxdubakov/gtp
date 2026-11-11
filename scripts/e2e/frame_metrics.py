@@ -5,7 +5,8 @@ transcribed notes with the strings a method gave them. Reported per split, guita
 multi-pitch F1 (strings ignored), tablature precision, recall and F1, and the tablature disambiguation rate
 (TDR): of the frames' correctly detected pitches, the share on the right string.
 
-Writes <run>/frame_metrics.csv.
+Writes <run>/frame_metrics.csv, and the per-recording counts behind it to <run>/frame_counts.csv (some papers average
+per track instead of pooling frames).
 
 Usage:
   uv run scripts/e2e/frame_metrics.py run=results/e2e/index/<run>
@@ -71,6 +72,7 @@ def main(cfg):
                 }
             )
     counts = pd.DataFrame(counts).join(recs[['split', 'guitar', 'dataset', 'chain']], on='rec')
+    counts.to_csv(run / 'frame_counts.csv', index=False)
     rows = []
     for key, c in counts.groupby(['split', 'guitar', 'dataset', 'chain', 'method']):
         s = c.sum(numeric_only=True)
