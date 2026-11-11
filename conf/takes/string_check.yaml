@@ -4,6 +4,8 @@ defaults:
   - override hydra/hydra_logging: none
 
 takes_dir: data/takes
+# Takes whose id contains one of these are left out, of the scores and of the fitting alike.
+exclude: []
 # Classifier run dirs whose calibrated distributions are averaged (e.g. the seeds of one sweep).
 runs: []
 # Where to write every note's truth, evidence and picks (relative to the repo); null = nowhere.

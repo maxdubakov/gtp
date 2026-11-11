@@ -35,9 +35,10 @@ def main(cfg):
     for take_id in takes.take_ids(root):
         take = takes.load(root / take_id)
         edited = take['edited']
-        if not edited:
+        if not edited or any(x in take_id for x in cfg.exclude):
             continue
-        notes = edited['notes']
+        # Notes added in the editor are saved where they were added: put them in the order the decoder reads.
+        notes = sorted_notes({'notes': edited['notes']})
         onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
         multi = st.candidates(pitches).sum(axis=1) > 1
         truth = np.array([n['string'] - 1 for n in notes])
