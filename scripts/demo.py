@@ -1,7 +1,9 @@
 """End-to-end demo: record audio → transcribe → render tabs (ASCII + PDF).
 
-A Stage 2 trained with audio evidence also gets the string classifier's per-note
-distributions from the recording, and decodes along the skeleton fixed by the notes.
+Each note's string comes from Stage 2's beam search, rescored with string evidence heard in the recording: the
+string classifiers, the notes' inharmonicity and their harmonic levels, fitted to the guitar without labels
+(gtp.stage1.string_evidence). With --guitar, earlier takes of that guitar are fitted together with the new one:
+the more of a guitar's playing is pooled, the better its strings are told apart.
 
 Every run also writes a take folder (data/takes/<take_id>/, see gtp.takes) that the tab editor
 opens: scripts/takes/editor.py.
@@ -11,7 +13,8 @@ Usage:
   python scripts/demo.py --duration 15
   python scripts/demo.py --audio path/to/take.wav  # skip recording
   python scripts/demo.py --capo 3 --tuning 64 59 55 50 45 38
-  python scripts/demo.py --no-evidence             # evidence model without the classifier
+  python scripts/demo.py --guitar hagstrom         # fit the evidence together with earlier takes of this guitar
+  python scripts/demo.py --no-evidence             # Stage 2 alone, no string evidence from the audio
   python scripts/demo.py --slug strat-clean        # take id 20261109_101500_strat-clean
   python scripts/demo.py --audio old.wav --take-id 20260917_095751  # take from an existing recording
 
@@ -20,6 +23,7 @@ Requires `sounddevice` for the recording path:
 """
 
 import argparse
+import glob
 import sys
 import time
 from datetime import datetime
@@ -37,8 +41,8 @@ from gtp.device import auto_device
 from gtp.stage1 import strings
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
-from gtp.stage2.evidence import restrict, sweep_runs
-from gtp.stage2.fusion import decode_structured, piece_rows, sorted_notes, valid_tabs
+from gtp.stage1.string_evidence import classifier_probs, fuse_recordings, physical, settings
+from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.genres import GENRES, UNKNOWN
 from gtp.stage2.inference import (
     build_anchor_prefix,
@@ -52,9 +56,9 @@ from gtp.track import git_state
 
 STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
 STAGE2_DEFAULT = (
-    REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_audio' / 'checkpoints' / 'step_0060000_final.pth'
+    REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_baseline' / 'checkpoints' / 'step_0060000_final.pth'
 )
-STRINGS_SWEEP_DEFAULT = 'results/strings/sweeps/lopo'
+CLASSIFIER_RUNS_DEFAULT = 'results/strings/runs/*al-roomfar_s*'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 DEFAULT_TAKES_DIR = REPO_ROOT / 'data' / 'takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
@@ -185,23 +189,42 @@ def stage2(piece, checkpoint, device, anchor_tabs=None, fallback='first_viable')
     return corrected_tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab
 
 
-def string_evidence(audio, piece, sweep, test_player, device):
-    """(n_notes, 6) classifier string distributions for sorted_notes(piece), averaged over the fold's seeds,
-    and the classifier runs used."""
-    player = strings.PLAYERS[test_player]
-    runs = [run for (p, _), run in sorted(sweep_runs(sweep).items()) if p == player]
-    print(f'String classifier: {len(runs)} seeds of the fold holding out player {player}...')
+def earlier_takes(takes_dir, guitar):
+    """[(audio path, notes)] of the takes recorded on `guitar`: their edited notes if saved, else the predicted ones."""
+    out = []
+    for d in sorted(Path(takes_dir).iterdir()) if guitar and Path(takes_dir).exists() else []:
+        if not (d / 'prediction.json').exists():
+            continue
+        take = takes.load(d)
+        notes = (take['edited'] or take['prediction'])['notes']
+        if take['meta'].get('guitar', '').strip().lower() == guitar.strip().lower() and notes:
+            out.append((d / 'audio.wav', sorted(notes, key=lambda n: (n['start'], n['pitch']))))
+    return out
+
+
+def string_evidence(wav_path, piece, runs, pooled, device):
+    """(n_notes, 6) fused string probabilities for sorted_notes(piece) and the classifier's pitch prior.
+
+    `pooled` [(audio path, notes)] are other recordings of the same guitar: the string constants and envelopes are
+    fitted over them and this take together.
+    """
+    print(f'String evidence: {len(runs)} classifiers, {len(pooled)} earlier takes of this guitar...')
     classifiers = [strings.StringClassifier.from_run(run, device) for run in runs]
-    audio = librosa.resample(audio, orig_sr=SR, target_sr=strings.SAMPLE_RATE)[None]
-    spec = strings.spectrogram(audio, classifiers[0].feature)
-    notes = sorted_notes(piece)
-    onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
-    probs = np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
-    return restrict(probs, pitches, piece['tuning']), runs
+    profiles, physics, envelope = settings()
+    parts = []
+    for audio, notes in [(wav_path, sorted_notes(piece)), *pooled]:
+        onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
+        probs = classifier_probs(audio, onsets, pitches, classifiers)
+        parts.append((probs, *physical(audio, onsets, [n['end'] for n in notes], pitches, profiles, envelope), pitches))
+    probs, curves, levels, pitches = zip(*parts, strict=True)
+    fused, _, family = fuse_recordings(probs, curves, levels, pitches, profiles, physics, envelope)
+    print(f'  {sum(len(p) for p in pitches)} notes fitted together, {family} string set')
+    return fused[0], classifiers[0].prior(pitches[0])
 
 
-def stage2_evidence(piece, model, vocab, max_seq_len, evidence, device):
-    """Choose each note's string along the skeleton its notes fix; returns tabs in sorted_notes(piece) order."""
+def stage2_fused(piece, model, vocab, max_seq_len, fused, prior, lam, beams, device):
+    """Choose each note's string by beam search along the skeleton its notes fix, rescored with the string
+    evidence (weight lam); returns tabs in sorted_notes(piece) order."""
     print('Stage 2 (with string evidence): notes → tabs...')
     tuning = piece['tuning']
     # tokenize_piece needs a string/fret per note; these placeholders are replaced by the model's choices.
@@ -210,15 +233,16 @@ def stage2_evidence(piece, model, vocab, max_seq_len, evidence, device):
         s = int(valid_tabs(n['pitch'], tuning, vocab)[0][0])
         notes.append({**n, 'string': s, 'fret': n['pitch'] - tuning[s - 1]})
     piece = {**piece, 'notes': notes}
-    n = len(notes)
-    rows = piece_rows(piece, vocab, max_seq_len, list(range(n)), [None] * n, evidence)
-    picks = decode_structured(model, rows, device, batch=64)
-    tabs = [(picks[i], note['pitch'] - tuning[picks[i] - 1]) for i, note in enumerate(sorted_notes(piece))]
-    with_audio = ~np.isnan(evidence[:, 0])
-    if with_audio.any():
-        chosen = np.array([s for s, _ in tabs])
-        agree = (chosen[with_audio] == evidence[with_audio].argmax(axis=1) + 1).mean()
-        print(f'  {with_audio.sum()}/{n} notes with evidence; model agrees with the classifier on {agree:.0%}')
+    ordered = sorted_notes(piece)
+    ratios = [
+        log_ratio(f[None], q, valid_tabs(n['pitch'], tuning, vocab)[0], 1e-4)
+        for n, f, q in zip(ordered, fused, prior, strict=True)
+    ]
+    rows = piece_rows(piece, vocab, max_seq_len, list(range(len(ordered))), ratios)
+    picks = decode_beam(model, rows, device, 64, lam, beams=beams)
+    tabs = [(picks[i], note['pitch'] - tuning[picks[i] - 1]) for i, note in enumerate(ordered)]
+    agree = np.mean([s == f.argmax() + 1 for (s, _), f in zip(tabs, fused, strict=True)])
+    print(f'  Stage 2 agrees with the audio evidence on {agree:.0%} of {len(tabs)} notes')
     return tabs, [r.enc for r in rows]
 
 
@@ -421,6 +445,7 @@ def write_take(args, take_id, audio, sr, tuning, placed, unplaced, pipeline):
         'tuning_name': 'standard' if args.tuning == STD_TUNING else ' '.join(map(str, args.tuning)),
         'style': '' if args.genre == UNKNOWN else args.genre,
         'source': repo_relative(args.audio) if args.audio else 'mic',
+        'guitar': args.guitar or '',
     }
     d = takes.create(args.takes_dir, take_id, audio, sr, prediction, meta)
     print(f'Wrote take: {d} ({len(placed)} notes, {len(unplaced)} without a tab)')
@@ -441,9 +466,11 @@ def main():
     ap.add_argument('--slug', default=None, help='Suffix for the default take id, e.g. the guitar')
     ap.add_argument('--stage1-checkpoint', default=str(STAGE1_DEFAULT))
     ap.add_argument('--stage2-checkpoint', default=str(STAGE2_DEFAULT))
-    ap.add_argument('--strings-sweep', default=STRINGS_SWEEP_DEFAULT, help='String-classifier sweep (evidence model)')
-    ap.add_argument('--classifier-player', type=int, default=5, help='Use the classifier fold holding out this player')
-    ap.add_argument('--no-evidence', action='store_true', help='Run an evidence model without the classifier')
+    ap.add_argument('--classifier-runs', default=CLASSIFIER_RUNS_DEFAULT, help='Glob of string-classifier runs')
+    ap.add_argument('--guitar', default=None, help='Guitar name: its earlier takes are fitted together with this one')
+    ap.add_argument('--lam', type=float, default=1.3, help='Weight of the string evidence in the beam search')
+    ap.add_argument('--beams', type=int, default=8)
+    ap.add_argument('--no-evidence', action='store_true', help='Stage 2 alone, without string evidence from the audio')
     ap.add_argument('--tuning', nargs=6, type=int, default=STD_TUNING, help='Open-string pitches (high E to low E)')
     ap.add_argument('--capo', type=int, default=0)
     ap.add_argument('--tempo', type=float, default=None, help='Override tempo (None = unknown, model handles)')
@@ -515,9 +542,8 @@ def main():
         'stage2_checkpoint': repo_relative(args.stage2_checkpoint),
         'stage2_evidence': None,
         'no_evidence': args.no_evidence,
-        'strings_sweep': None,
-        'classifier_player': None,
         'classifier_runs': [],
+        'pooled_takes': [],
         'genre': args.genre,
         'anchor': args.anchor,
         'fallback': None,
@@ -528,7 +554,8 @@ def main():
     tuning_with_capo = [t + args.capo for t in args.tuning]  # our convention: tuning includes capo
 
     # 2) Stage 1: audio → MIDI
-    note_events = stage1(audio, args.stage1_checkpoint, device)
+    # Stage 1's recurrent layers run several times faster on the CPU than on Apple's GPU.
+    note_events = stage1(audio, args.stage1_checkpoint, 'cpu' if device == 'mps' else device)
     if not note_events:
         print('No notes detected, exiting.')
         write_take(args, take_id, captured, captured_sr, tuning_with_capo, [], [], pipeline)
@@ -543,31 +570,35 @@ def main():
     t0 = time.time()
     model, vocab, _, max_seq_len = load_checkpoint(str(args.stage2_checkpoint), device)
     if hasattr(model, 'embed'):
-        if anchor_tabs:
-            sys.exit('--anchor is not supported for a Stage 2 trained with evidence')
+        sys.exit(
+            'This Stage 2 checkpoint reads evidence in its encoder; the demo fuses evidence at decoding: use a plain one'
+        )
+    if not args.no_evidence and not anchor_tabs:
         if args.capo or args.tuning != STD_TUNING:
-            print('  warning: the string classifier only saw standard tuning without a capo')
+            print('  warning: the string evidence assumes standard tuning without a capo')
         unplaced = [n for n in piece['notes'] if not len(valid_tabs(n['pitch'], piece['tuning'], vocab)[0])]
         piece['notes'] = [
             {**n, 'end': max(n['end'], n['start'] + 0.01)}
             for n in piece['notes']
             if len(valid_tabs(n['pitch'], piece['tuning'], vocab)[0])
         ]
-        if args.no_evidence:
-            evidence = np.full((len(piece['notes']), 6), np.nan)
-        else:
-            evidence, runs = string_evidence(audio, piece, args.strings_sweep, args.classifier_player, device)
-            pipeline |= {
-                'strings_sweep': args.strings_sweep,
-                'classifier_player': args.classifier_player,
-                'classifier_runs': [repo_relative(r) for r in runs],
-            }
-        tabs, enc_subseqs = stage2_evidence(piece, model, vocab, max_seq_len, evidence, device)
+        runs = sorted(glob.glob(str(REPO_ROOT / args.classifier_runs)))
+        if not runs:
+            sys.exit(f'No classifier runs match {args.classifier_runs}')
+        pooled = earlier_takes(args.takes_dir, args.guitar)
+        fused, prior = string_evidence(wav_path, piece, runs, pooled, device)
+        pipeline |= {
+            'classifier_runs': [repo_relative(r) for r in runs],
+            'pooled_takes': [a.parent.name for a, _ in pooled],
+            'lam': args.lam,
+            'beams': args.beams,
+        }
+        tabs, enc_subseqs = stage2_fused(piece, model, vocab, max_seq_len, fused, prior, args.lam, args.beams, device)
         raw_tabs, dec_subseqs, sources = tabs, [], ['unchanged'] * len(tabs)
         pipeline['stage2_evidence'] = True
         placed = [
-            {**n, 'string': s, 'fret': f, 'evidence': None if np.isnan(e[0]) else e}
-            for n, (s, f), e in zip(sorted_notes(piece), tabs, evidence, strict=True)
+            {**n, 'string': s, 'fret': f, 'evidence': e}
+            for n, (s, f), e in zip(sorted_notes(piece), tabs, fused, strict=True)
         ]
     else:
         tabs, raw_tabs, enc_subseqs, dec_subseqs, sources, vocab = stage2(
