@@ -1,0 +1,27 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: extra_notes
+index_dirs: [data/string_index, data/string_index_egdb]
+guitars: [evh-wolfgang, gibson-les-paul, sire-t7, egdb-strat]
+chains: [di, amp-mic]
+stage1_cache: results/e2e/stage1/index_step_0070000_final
+onset_tolerance: 0.05
+# A same-pitch reference onset this close counts as a timing miss, not an invented note.
+timing_s: 0.15
+# Intervals (semitones) read as a harmonic confusion of a reference note starting within onset_tolerance.
+harmonic_intervals: [12, 19, 24, -12, -19, -24]
+# Invented notes and correctly found notes (blind controls) cut per guitar; at most max_per_rec from one recording.
+extras_per_guitar: 7
+controls_per_guitar: 2
+max_per_rec: 2
+before_s: 1.0
+after_s: 1.5
+fmin_midi: 36
+fmax_midi: 96
+seed: 0
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/listen/extras/${now:%Y-%m-%d_%H-%M-%S}_${name}
