@@ -149,13 +149,6 @@ def posterior(prior, loglik):
     return p / p.sum(axis=1, keepdims=True)
 
 
-def comb(n_u, delta, cfg):
-    """dB response, per bin of H, of a pickup at `delta` of the string's length from the bridge: nulls where
-    delta * u is a whole number. Averaged over each bin, which at high u spans several teeth."""
-    sub = (np.arange(n_u)[:, None] + np.linspace(-0.5, 0.5, 9)[None]) / cfg.bins_per_octave
-    return (20 * np.log10(np.maximum(np.abs(np.sin(np.pi * delta * 2**sub)), cfg.comb_floor))).mean(axis=1)
-
-
 def fit_chain(levels, f_bin, u_bin, h, e, w, cfg):
     """E given H: the weighted mean, per frequency bin, of what H and the notes' own polynomials leave."""
     r = np.nan_to_num(residuals(levels, f_bin, u_bin, h, e, cfg))
@@ -165,50 +158,15 @@ def fit_chain(levels, f_bin, u_bin, h, e, w, cfg):
     return total / (count + cfg.shrink)
 
 
-def pickup_prior(levels, f_bin, u_bin, prior, cfg):
-    """What H is expected to be before the notes shape it: the comb of the pickup position under which the notes
-    are most likely given `prior`, or zero (no pickup: an acoustic guitar) if no position beats that. The comb is
-    also tried at reduced depths: through a room microphone its nulls are partly filled in.
-
-    Six free curves can agree with a wrong assignment of the strings; a comb has one number to fit, so a short
-    recording can still find it, and the fit then starts from, and with few notes stays near, a physical shape.
-    """
-    n_u, n_f = u_bin.max() + 1, f_bin.max() + 1
-    if len(levels) > cfg.scan_notes:
-        pick = np.random.default_rng(0).choice(len(levels), cfg.scan_notes, replace=False)
-        levels, f_bin, u_bin, prior = levels[pick], f_bin[pick], u_bin[pick], prior[pick]
-    w = np.where(~np.isnan(levels)[:, :, None], prior[:, None, :], 0.0)
-    best, best_score = np.zeros(n_u), -np.inf
-    shapes = [np.zeros(n_u)] + [
-        depth * comb(n_u, delta, cfg)
-        for delta in np.arange(cfg.pickup_min, cfg.pickup_max + 1e-9, cfg.pickup_step)
-        for depth in cfg.comb_depths
-    ]
-    for h in shapes:
-        e = np.zeros(n_f)
-        for _ in range(2):
-            e = fit_chain(levels, f_bin, u_bin, h, e, w, cfg)
-        loglik = envelope_loglik(levels, f_bin, u_bin, (h, e, cfg.sigma_start_db), prior > 0, cfg)
-        top = np.where(prior > 0, loglik, -np.inf).max(axis=1, keepdims=True)
-        score = (
-            top[:, 0] + np.log((prior * np.exp(np.where(prior > 0, loglik - top, -np.inf))).sum(axis=1) + 1e-300)
-        ).sum()
-        if score > best_score:
-            best, best_score = h, score
-    return best
-
-
 def em(levels, f_bin, u_bin, prior, cfg):
     """(H, E, sigma) fitted by EM over the notes' strings, started from `prior`.
 
-    H starts at its pickup prior and each of its bins is pulled back to it by `shrink` pseudo-observations (E's
-    towards zero), so a handful of notes fits little more than that. sigma, the residual scale in dB, is the one
-    the fit leaves (never below sigma_min_db).
+    Bins are shrunk towards zero by `shrink` pseudo-observations, so a handful of notes fits a nearly flat model
+    and says little. sigma, the residual scale in dB, is the one the fit leaves (never below sigma_min_db).
     """
     ok = ~np.isnan(levels)
     n_u, n_f = u_bin.max() + 1, f_bin.max() + 1
-    mean = pickup_prior(levels, f_bin, u_bin, prior, cfg) if cfg.pickup_step else np.zeros(n_u)
-    h, e, sigma = mean.copy(), np.zeros(n_f), cfg.sigma_start_db
+    h, e, sigma = np.zeros(n_u), np.zeros(n_f), cfg.sigma_start_db
     resp = prior / np.maximum(prior.sum(axis=1, keepdims=True), 1e-12)
     for _ in range(cfg.iters):
         w = np.where(ok[:, :, None], resp[:, None, :], 0.0)
@@ -218,7 +176,7 @@ def em(levels, f_bin, u_bin, prior, cfg):
             total, count = np.zeros(n_u), np.zeros(n_u)
             np.add.at(total, u_bin, w * (r + h[u_bin]))
             np.add.at(count, u_bin, w)
-            h = (total + cfg.shrink * mean) / (count + cfg.shrink)
+            h = total / (count + cfg.shrink)
         r = np.nan_to_num(residuals(levels, f_bin, u_bin, h, e, cfg))
         sigma = max((w * np.abs(r)).sum() / max(w.sum(), 1e-9), cfg.sigma_min_db)
         resp = posterior(prior, envelope_loglik(levels, f_bin, u_bin, (h, e, sigma), prior > 0, cfg))

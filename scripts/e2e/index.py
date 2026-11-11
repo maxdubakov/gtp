@@ -11,8 +11,6 @@ accuracy of metrics.py (a recording's most common string shift forgiven) and the
 notes per 100 notes, as a measure of how many corrections the tab needs.
 
 `classifier_runs` may contain `{guitar}`: then each guitar is scored by its own runs (leave-one-guitar-out folds).
-With `degrade` (a recording chain, see chains.py), the audio the string evidence reads is first rendered through it:
-a stand-in for conditions no dataset has, such as a laptop microphone in a room. Stage 1's notes are not re-derived.
 
 Usage:
   uv run scripts/e2e/index.py
@@ -21,7 +19,7 @@ Usage:
 
 import glob
 import itertools
-import zlib
+from concurrent.futures import ProcessPoolExecutor
 
 import hydra
 import librosa
@@ -37,7 +35,6 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid, recording_profiles
-from gtp.stage1.chains import render, stages_for
 from gtp.stage1.envelope import note_levels
 from gtp.stage1.inference import PianoTranscription, transcribe_cached
 from gtp.stage1.inharmonicity import fuse_guitar
@@ -58,6 +55,16 @@ def match(ref, est, tolerance):
         return intervals, librosa.midi_to_hz(np.array([n['pitch'] for n in notes]))
 
     return mir_eval.transcription.match_notes(*arrays(ref), *arrays(est), onset_tolerance=tolerance, offset_ratio=None)
+
+
+def physical(job):
+    """A recording's inharmonicity curves and harmonic levels, for its notes (onsets, ends, pitches)."""
+    audio, onsets, ends, pitches, profiles, envelope = job
+    y, sr = librosa.load(audio, sr=profiles.sample_rate, mono=True)
+    return (
+        recording_profiles(y, sr, onsets, ends, pitches, profiles).sum(axis=1),
+        note_levels(y, sr, onsets, ends, pitches, envelope),
+    )
 
 
 def prf(tp, n_est, n_ref):
@@ -85,6 +92,7 @@ def main(cfg):
     )
     stage1_cache = REPO_ROOT / 'results' / 'e2e' / 'stage1' / f'index_{(REPO_ROOT / cfg.stage1_checkpoint).stem}'
 
+    pool = ProcessPoolExecutor(cfg.workers)
     table, pieces, counts = [], [], []
     for guitar, group in recs.groupby('guitar'):
         runs = sorted(
@@ -94,7 +102,7 @@ def main(cfg):
         classifiers = [st.StringClassifier.from_run(r, device) for r in runs]
         for source, (_, sub) in itertools.product(cfg.inputs, group.groupby(list(cfg.calibrate_by), sort=False)):
             first = len(table)
-            probs, curves, levels = [], [], []
+            probs, jobs = [], []
             for r in sub.itertuples():
                 ref = [
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
@@ -125,16 +133,11 @@ def main(cfg):
                 if not notes:
                     continue
                 onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
-                hi, sr = librosa.load(REPO_ROOT / r.audio, sr=profiles.sample_rate, mono=True)
-                if cfg.degrade:
-                    chain = {k: v for k, v in OmegaConf.to_container(cfg.degrade).items() if k in stages_for(r.chain)}
-                    hi = render(hi, sr, chain, np.random.default_rng(zlib.crc32(r.rec.encode())))
-                y = librosa.resample(hi, orig_sr=sr, target_sr=st.SAMPLE_RATE)
+                ends = [n['end'] for n in notes]
+                jobs.append(pool.submit(physical, (REPO_ROOT / r.audio, onsets, ends, pitches, profiles, envelope)))
+                y, _ = librosa.load(REPO_ROOT / r.audio, sr=st.SAMPLE_RATE, mono=True)
                 spec = st.spectrogram(y[None], classifiers[0].feature)
                 probs.append(np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0))
-                ends = [n['end'] for n in notes]
-                curves.append(recording_profiles(hi, sr, onsets, ends, pitches, profiles).sum(axis=1))
-                levels.append(note_levels(hi, sr, onsets, ends, pitches, envelope))
                 ids = list(range(len(table), len(table) + len(notes)))
                 piece = {
                     'source': 'index',
@@ -157,7 +160,8 @@ def main(cfg):
                 ]  # fmt: skip
             if not probs:
                 continue
-            probs, curves, levels = np.concatenate(probs), np.concatenate(curves), np.concatenate(levels)
+            probs = np.concatenate(probs)
+            curves, levels = (np.concatenate(x) for x in zip(*(j.result() for j in jobs), strict=True))
             pitch = np.array([t['pitch'] for t in table[first:]])
             fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics, levels, envelope)
             prior = classifiers[0].prior(pitch)

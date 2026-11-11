@@ -103,11 +103,12 @@ def main(cfg):
     shift = notes['rec'].map(recs.set_index('rec')['shift_ms']) / 1000
     notes['onset'] += shift
     notes['offset'] += shift
-    early = notes['onset'] < 0
-    dropped['starts before the audio'] = (
-        early.groupby(notes['rec'].map(recs.set_index('rec')['dataset'])).sum().to_dict()
+    outside = (notes['onset'] < 0) | (notes['onset'] >= notes['rec'].map(recs.set_index('rec')['duration']))
+    dropped['starts outside the audio'] = (
+        outside.groupby(notes['rec'].map(recs.set_index('rec')['dataset'])).sum().to_dict()
     )
-    notes = notes[~early].reset_index(drop=True)
+    notes = notes[~outside].reset_index(drop=True)
+    recs = sd.drop_empty(recs, notes)
 
     if cfg.room_mics:
         room_recs, room_notes = sd.room_recordings(recs, notes, list(cfg.room_mics), cfg.workers)

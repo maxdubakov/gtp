@@ -25,8 +25,8 @@ beams: 8
 profiles: {}
 physics: {}
 envelope: {}
-# Chain the string evidence's audio is rendered through first (chains.py stages); null = the recording as is.
-degrade: null
+# Processes computing the recordings' curves and harmonic levels.
+workers: 8
 onset_tolerance: 0.05
 prob_floor: 1.0e-4
 # Recordings with fewer matched notes are left out of the equivalent accuracy.

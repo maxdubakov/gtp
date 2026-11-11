@@ -1,7 +1,0 @@
-# @package degrade
-# A clean amp heard by a small microphone across a room: band-limited, reverberant, compressed and noisy.
-pickup: {resonance_hz: 3000, resonance_db: 3, cable_lowpass_hz: 8000}
-amp: {drive_db: 2, bass_db: 0, mid_hz: 800, mid_db: 0, treble_db: 0}
-cabinet: {highpass_hz: 90, lowpass_hz: 5000, presence_db: 2}
-room: {size: 0.6, damping: 0.5, wet: 0.35}
-mic: {highpass_hz: 150, lowpass_hz: 8000, resonance_hz: 3000, resonance_db: 3, compress: true, snr_db: 25}
