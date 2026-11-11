@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# Manifest whose labels are refined, and the new manifest written beside it (audio linked, not copied).
+src_dir: data/stage1_notes_z
+out_dir: data/stage1_notes_z_refined
+checkpoint: ???
+datasets: [goat]
+device: null
+batch: 8
+# A recording's labels first shift by the median offset of its notes matched within lag_window_s; then each labelled
+# onset moves to a detected onset of the same pitch within max_shift_s of it.
+lag_window_s: 0.15
+max_shift_s: 0.06
+onset_threshold: 0.3
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

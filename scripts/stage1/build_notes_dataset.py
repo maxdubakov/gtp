@@ -3,8 +3,8 @@
 Sources and splits (by player or guitar; benchmark recordings never train):
   * GAPS (classical guitar): its train split, a hashed `gaps_val_fraction` of it validating; its test split is a
     benchmark and stays out;
-  * GOAT (electric, DI plus five amp renders): train items with fine-aligned labels, `goat_val_items` of them
-    validating; its test split is a benchmark;
+  * GOAT (electric, DI plus five amp renders): train items with fine-aligned labels whose alignment score (GOAT's
+    own F-measure) reaches `goat_min_alignment`, `goat_val_items` of them validating; its test split is a benchmark;
   * the string index's train and val recordings except EGFxSet's single notes and GuitarSet. GuitarSet is left out
     (`guitarset: none`, so GuitarSet stays a zero-shot benchmark) or split as MT3 does (`guitarset: mt3`: a style's
     first two progressions train, the third is held out);
@@ -118,6 +118,7 @@ def main(cfg):
     goat = REPO_ROOT / cfg.goat_dir / 'GOAT'
     meta = pd.read_csv(goat / 'metadata.csv')
     meta = meta[(meta.split == 'train') & meta.finealigned_midi_path.notna()]
+    meta = meta[meta.alignment_f_measure_fine >= cfg.goat_min_alignment]
     meta = meta[[(goat / 'data' / p.split('/', 1)[1]).is_file() for p in meta.finealigned_midi_path]]
     val_items = set(sorted(meta.item, key=lambda x: zlib.crc32(x.encode()))[: cfg.goat_val_items])
     renders = {'di_audio_path': 'di', **{f'amp_audio_path_{k}': 'amp-sim' for k in range(1, 6)}}

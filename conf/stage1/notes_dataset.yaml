@@ -9,6 +9,9 @@ gaps_dir: data/gaps_hf
 gaps_val_fraction: 0.1
 goat_dir: data/goat
 goat_val_items: 8
+# Items GOAT itself aligned worse than this (its alignment_f_measure_fine) are left out: their notes are off by more
+# than refine_labels.py can move.
+goat_min_alignment: 0.7
 index_dir: data/string_index
 # none: GuitarSet left out, a zero-shot benchmark; mt3: progressions 1-2 train, progression 3 is held out.
 guitarset: none
