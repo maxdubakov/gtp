@@ -75,7 +75,12 @@ def spectrogram(y, sr, note, start, cfg, path):
         np.abs(librosa.cqt(y, sr=sr, hop_length=256, fmin=fmin, n_bins=bins, bins_per_octave=36)), ref=np.max
     )
     t = np.arange(c.shape[1]) * 256 / sr + start - note.onset
-    fig, ax = plt.subplots(figsize=(7.2, 3.0), dpi=110)
+    ink = '#c9ceda'
+    fig, ax = plt.subplots(figsize=(7.2, 3.0), dpi=110, facecolor='#14161c')
+    ax.tick_params(colors=ink)
+    ax.xaxis.label.set_color(ink)
+    for side in ax.spines.values():
+        side.set_color('#3a3f4b')
     ax.imshow(c, origin='lower', aspect='auto', cmap='magma', vmin=-70, vmax=0,
               extent=[t[0], t[-1], cfg.fmin_midi - 1 / 6, cfg.fmax_midi - 1 / 6])  # fmt: skip
     p, d = note.pitch, max(note.offset - note.onset, 0.05)

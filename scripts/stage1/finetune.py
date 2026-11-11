@@ -16,7 +16,7 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 from gtp import REPO_ROOT
 from gtp.device import auto_device
@@ -56,15 +56,25 @@ def main(cfg):
     run = start_run(cfg, job_type='stage1_notes', device=device)
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')
     root = REPO_ROOT / cfg.data_dir
-    train = ManifestDataset.from_manifest(root, 'train', OmegaConf.to_container(cfg.augment))
+    train = ManifestDataset.from_manifest(
+        root, 'train', OmegaConf.to_container(cfg.augment), OmegaConf.to_container(cfg.pitch_shift)
+    )
     val = val_subsets(ManifestDataset.from_manifest(root, 'val'), cfg.val_segments_per_group, cfg.seed)
     info(f'{len(train)} training segments; validation groups { ({g: len(s) for g, s in val.items()}) }')
 
-    def loader(dataset, shuffle):
+    def loader(dataset, shuffle, sampler=None):
         return DataLoader(
-            dataset, batch_size=cfg.batch, shuffle=shuffle, num_workers=cfg.workers, collate_fn=collate_fn,
-            pin_memory=device == 'cuda', drop_last=shuffle, persistent_workers=cfg.workers > 0,
+            dataset, batch_size=cfg.batch, shuffle=shuffle and sampler is None, sampler=sampler,
+            num_workers=cfg.workers, collate_fn=collate_fn, pin_memory=device == 'cuda', drop_last=shuffle,
+            persistent_workers=cfg.workers > 0,
         )  # fmt: skip
+
+    sampler = None
+    if cfg.dataset_weights:
+        of = [train.dataset_of[path] for path, _, _ in train.segments]
+        share = {d: cfg.dataset_weights.get(d, 1.0) / of.count(d) for d in set(of)}
+        sampler = WeightedRandomSampler([share[d] for d in of], num_samples=len(of), replacement=True)
+        info(f'segments per dataset { ({d: of.count(d) for d in sorted(set(of))}) }')
 
     val_loaders = {g: loader(s, False) for g, s in val.items()}
     model, _ = load_note_model(REPO_ROOT / cfg.init)
@@ -78,7 +88,7 @@ def main(cfg):
         info(f'saved {path}')
 
     step, losses, t0 = 0, [], time.time()
-    train_loader = loader(train, True)
+    train_loader = loader(train, True, sampler)
     batches = iter(train_loader)
     while step < cfg.max_steps:
         try:

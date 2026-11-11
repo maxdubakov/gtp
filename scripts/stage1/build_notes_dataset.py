@@ -1,9 +1,13 @@
 """Gather every labelled recording Stage 1 can train on into one folder of 16 kHz audio and a manifest.
 
-Sources, with the splits the string index uses (by player or guitar):
-  * GAPS (classical guitar): its own train split trains, its test split validates;
-  * every recording of the string index except EGFxSet's single notes;
-  * the room recordings of Guitar-TECHS (build_room_index.py);
+Sources and splits (by player or guitar; benchmark recordings never train):
+  * GAPS (classical guitar): its train split, a hashed `gaps_val_fraction` of it validating; its test split is a
+    benchmark and stays out;
+  * GOAT (electric, DI plus five amp renders): train items with fine-aligned labels, `goat_val_items` of them
+    validating; its test split is a benchmark;
+  * the string index's train and val recordings except EGFxSet's single notes and GuitarSet. GuitarSet is left out
+    (`guitarset: none`, so GuitarSet stays a zero-shot benchmark) or split as MT3 does (`guitarset: mt3`: a style's
+    first two progressions train, the third is held out);
   * EGFxSet's single notes, stitched into short sequences so that they fill a training segment. Each note is cut to
     a random length, so the sequences have onsets and endings at the density of played music.
 
@@ -17,6 +21,7 @@ Usage:
 import csv
 import json
 import re
+import zlib
 from concurrent.futures import ProcessPoolExecutor
 
 import hydra
@@ -27,6 +32,7 @@ import soundfile as sf
 
 from gtp import REPO_ROOT
 from gtp.log import info
+from gtp.stage1.benchmarks import midi_notes
 from gtp.stage1.data import load_gaps_notes
 
 SR = 16000
@@ -103,13 +109,36 @@ def main(cfg):
     gaps = REPO_ROOT / cfg.gaps_dir
     with open(gaps / 'gaps_metadata_with_splits.csv', newline='', encoding='utf-8') as fh:
         for row in csv.DictReader(fh):
-            split = {'train': 'train', 'test': 'val'}.get(row['split'])
-            if split and (gaps / row['audio_path']).exists() and (gaps / row['midi_path']).exists():
-                add(f'gaps/{row["id"]}', gaps / row['audio_path'], load_gaps_notes(str(gaps / row['midi_path'])),
-                    dataset='gaps', chain='acoustic-mic', guitar='gaps', content='pieces', split=split)  # fmt: skip
-    for index_dir, exclude in ((cfg.index_dir, ['egfxset']), (cfg.room_index_dir, [])):
-        for r, notes in index_entries(REPO_ROOT / index_dir, exclude):
-            add(r.rec, REPO_ROOT / r.audio, notes, dataset=r.dataset, chain=r.chain, guitar=r.guitar, content=r.content, split=r.split)  # fmt: skip
+            if row['split'] != 'train' or not (gaps / row['audio_path']).exists():
+                continue
+            split = 'val' if zlib.crc32(row['id'].encode()) % 1000 < 1000 * cfg.gaps_val_fraction else 'train'
+            add(f'gaps/{row["id"]}', gaps / row['audio_path'], load_gaps_notes(str(gaps / row['midi_path'])),
+                dataset='gaps', chain='acoustic-mic', guitar='gaps', content='pieces', split=split)  # fmt: skip
+
+    goat = REPO_ROOT / cfg.goat_dir / 'GOAT'
+    meta = pd.read_csv(goat / 'metadata.csv')
+    meta = meta[(meta.split == 'train') & meta.finealigned_midi_path.notna()]
+    meta = meta[[(goat / 'data' / p.split('/', 1)[1]).is_file() for p in meta.finealigned_midi_path]]
+    val_items = set(sorted(meta.item, key=lambda x: zlib.crc32(x.encode()))[: cfg.goat_val_items])
+    renders = {'di_audio_path': 'di', **{f'amp_audio_path_{k}': 'amp-sim' for k in range(1, 6)}}
+    for r in meta.itertuples():
+        notes = [
+            {'onset_time': a, 'offset_time': b, 'midi_note': int(p), 'velocity': VELOCITY}
+            for a, b, p in midi_notes(goat / 'data' / r.finealigned_midi_path.split('/', 1)[1])
+        ]
+        for col, chain in renders.items():
+            path = goat / 'data' / getattr(r, col).split('/', 1)[1]
+            add(f'goat/{r.item}/{path.stem}', path, notes, dataset='goat', chain=chain, guitar=f'goat-{r.guitar_brand}',
+                content='pieces', split='val' if r.item in val_items else 'train')  # fmt: skip
+
+    for r, notes in index_entries(REPO_ROOT / cfg.index_dir, ['egfxset']):
+        split = r.split
+        if r.dataset == 'guitarset':
+            if cfg.guitarset == 'none':
+                continue
+            split = 'test' if re.search(r'_[A-Za-z]+3-', r.rec) else 'train'
+        if split in ('train', 'val'):
+            add(r.rec, REPO_ROOT / r.audio, notes, dataset=r.dataset, chain=r.chain, guitar=r.guitar, content=r.content, split=split)  # fmt: skip
     with ProcessPoolExecutor(cfg.workers) as pool:
         for e, duration in zip(entries, pool.map(convert, jobs, chunksize=8), strict=True):
             e['duration'] = duration

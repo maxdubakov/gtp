@@ -1,0 +1,29 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: benchmark
+# Note-model checkpoints, relative to the repo.
+checkpoints: [models/finetuned/step_0070000_final.pth]
+benchmarks: [guitarset, guitarset_test, egdb, gaps_test, goat_di, goat_amp, guitarset_noisy, egdb_noisy, val_evh, val_les_paul]
+onset_tolerance: 0.05
+device: null
+batch: 8
+# Model outputs per checkpoint and recording, so post-processing settings are re-scored without the model.
+cache_dir: results/stage1/bench_cache
+# Manifest whose val split the val_<dataset> benchmarks read (val_gaps, val_goat, val_guitar_techs, val_idmt).
+val_manifest: data/stage1_notes_z
+# Post-processing settings scored on every benchmark; each is {name, onset, offset, frame, min_duration_s}.
+postprocess:
+  - {name: kong, onset: 0.3, offset: 0.3, frame: 0.1, min_duration_s: 0.0}
+  - {name: min30ms, onset: 0.3, offset: 0.3, frame: 0.1, min_duration_s: 0.03}
+noise:
+  seed: 0
+  ir_dir: data/echothief
+  cache_dir: data/stage1_bench
+  highpass_hz: 80
+  snr_db: [25, 45]
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/stage1/benchmark/${now:%Y-%m-%d_%H-%M-%S}_${name}

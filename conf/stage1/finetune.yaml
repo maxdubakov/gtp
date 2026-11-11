@@ -25,7 +25,20 @@ workers: 8
 augment:
   di: 0.7
   amp-mic: 0.3
+  amp-sim: 0.3
   acoustic-mic: 0.3
+pitch_shift:
+  prob: 0.5
+  max_semitones: 2
+# Share of training segments drawn from each dataset (relative; datasets left out get 1). null = in proportion to
+# their hours.
+dataset_weights:
+  gaps: 1.0
+  goat: 1.0
+  guitar_techs: 1.0
+  guitarset: 1.0
+  egfxset: 0.4
+  idmt: 0.4
 
 hydra:
   run:

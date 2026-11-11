@@ -323,38 +323,50 @@ class ManifestDataset(GuitarDataset):
     """Segments of the recordings in a notes manifest (scripts/stage1/build_notes_dataset.py).
 
     `augment` maps a recording chain to the probability that a segment is rendered through a random recording
-    chain (chains.py) before the model hears it; chains absent from it are never augmented.
+    chain (chains.py) before the model hears it; chains absent from it are never augmented. With probability
+    `pitch_shift.prob` a segment is first shifted by a whole number of semitones up to `pitch_shift.max_semitones`,
+    its labels with it.
     """
 
-    def __init__(self, root, entries, augment=None, **kwargs):
+    def __init__(self, root, entries, augment=None, pitch_shift=None, **kwargs):
         root = Path(root)
         self.durations = {str(root / e['audio']): e['duration'] for e in entries}
         self.chain_of = {str(root / e['audio']): e['chain'] for e in entries}
         self.group_of = {str(root / e['audio']): f'{e["dataset"]}/{e["chain"]}' for e in entries}
+        self.dataset_of = {str(root / e['audio']): e['dataset'] for e in entries}
         self.augment = dict(augment or {})
+        self.pitch_shift = dict(pitch_shift or {'prob': 0.0, 'max_semitones': 0})
         self._rng = None
         super().__init__([(str(root / e['audio']), e['notes']) for e in entries], **kwargs)
 
     @classmethod
-    def from_manifest(cls, root, split, augment=None, **kwargs):
+    def from_manifest(cls, root, split, augment=None, pitch_shift=None, **kwargs):
         with open(Path(root) / 'manifest.jsonl') as fh:
             entries = [e for e in map(json.loads, fh) if e['split'] == split]
-        return cls(root, entries, augment, **kwargs)
+        return cls(root, entries, augment, pitch_shift, **kwargs)
 
     def _audio_duration(self, audio_path):
         return self.durations[audio_path]
 
     def __getitem__(self, idx):
-        item = super().__getitem__(idx)
-        chain = self.chain_of[self.segments[idx][0]]
         if self._rng is None:
             self._rng = np.random.default_rng()
-        if self._rng.random() < self.augment.get(chain, 0.0):
-            params = chains.draw(self._rng, chains.stages_for(chain))
-            out = chains.render(item['waveform'], self.sample_rate, params, self._rng)
+        path, notes, start = self.segments[idx]
+        waveform, _ = librosa.load(path, sr=self.sample_rate, offset=start, duration=self.segment_seconds, mono=True)
+        waveform = librosa.util.fix_length(waveform, size=self.segment_samples)
+        steps = 0
+        if self._rng.random() < self.pitch_shift['prob']:
+            steps = int(self._rng.integers(-self.pitch_shift['max_semitones'], self.pitch_shift['max_semitones'] + 1))
+        if steps:
+            waveform = librosa.effects.pitch_shift(waveform, sr=self.sample_rate, n_steps=steps)
+            notes = [{**n, 'midi_note': n['midi_note'] + steps} for n in notes]
+        targets = self.target_processor.process_notes(start, notes)
+        if self._rng.random() < self.augment.get(self.chain_of[path], 0.0):
+            params = chains.draw(self._rng, chains.stages_for(self.chain_of[path]))
+            out = chains.render(waveform, self.sample_rate, params, self._rng)
             if np.isfinite(out).all():
-                item['waveform'] = librosa.util.fix_length(out, size=self.segment_samples).astype(np.float32)
-        return item
+                waveform = librosa.util.fix_length(out, size=self.segment_samples)
+        return {'waveform': waveform.astype(np.float32), **{k: v.astype(np.float32) for k, v in targets.items()}}
 
 
 # ---------------------------------------------------------------------------
