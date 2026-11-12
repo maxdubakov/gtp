@@ -8,6 +8,8 @@ data_dir: data/stage1_notes
 # Note-model checkpoint to start from: the guitar model fine-tuned on GAPS and GuitarSet.
 init: models/finetuned/step_0070000_final.pth
 seed: 0
+# A checkpoint of a stopped run to continue from (model, optimizer, step); overrides init.
+resume: null
 # Riley et al.'s recipe: Adam at 1e-5, multiplied by lr_decay every lr_decay_steps.
 lr: 1.0e-5
 lr_decay: 0.9
@@ -16,7 +18,7 @@ batch: 4
 max_steps: 30000
 log_steps: 50
 eval_steps: 2500
-save_steps: 5000
+save_steps: 2500
 val_segments_per_group: 48
 workers: 8
 # Probability that a training segment is rendered through a random recording chain, by the recording's own chain:

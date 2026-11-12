@@ -13,6 +13,8 @@ batch: 8
 cache_dir: results/stage1/bench_cache
 # Manifest whose val split the val_<dataset> benchmarks read (val_gaps, val_goat, val_guitar_techs, val_idmt).
 val_manifest: data/stage1_notes_z
+# Per-recording label shifts (label_shifts.py) the goat_*_corrected suites apply.
+goat_shifts: data/goat/test_label_shifts.csv
 # Post-processing settings scored on every benchmark; each is {name, onset, offset, frame, min_duration_s}.
 postprocess:
   - {name: kong, onset: 0.3, offset: 0.3, frame: 0.1, min_duration_s: 0.0}

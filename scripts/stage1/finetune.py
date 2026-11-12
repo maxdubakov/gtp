@@ -1,6 +1,7 @@
 """Fine-tune the Stage 1 note model on the notes dataset (build_notes_dataset.py).
 
-Starts from a note-model checkpoint and trains on the manifest's train split, with segments of direct-input and
+Starts from a note-model checkpoint (`init`), or continues a stopped run from one of its checkpoints (`resume`:
+model, optimizer, step and learning rate), and trains on the manifest's train split, with segments of direct-input and
 microphone recordings rendered through random recording chains at the probabilities in `augment`. Validation loss is
 tracked per dataset and chain on a fixed set of segments; checkpoints are scored on note F1 afterwards
 (eval_notes.py), since the loss is not what the pipeline is judged on.
@@ -78,17 +79,27 @@ def main(cfg):
         info(f'segments per dataset { ({d: of.count(d) for d in sorted(set(of))}) }')
 
     val_loaders = {g: loader(s, False) for g, s in val.items()}
-    model, _ = load_note_model(REPO_ROOT / cfg.init)
+    model, ckpt = load_note_model(REPO_ROOT / (cfg.resume or cfg.init))
     model.to(device).train()
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, amsgrad=True)
+    step = 0
+    if cfg.resume:
+        step = int(ckpt['iteration'])
+        if 'optimizer' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer'])
+        else:
+            for group in optimizer.param_groups:
+                group['lr'] = cfg.lr * cfg.lr_decay ** (step // cfg.lr_decay_steps)
+        info(f'resumed {cfg.resume} at step {step}, lr {optimizer.param_groups[0]["lr"]:.2e}')
     (run.dir / 'checkpoints').mkdir(exist_ok=True)
 
     def save(step, final=False):
         path = run.dir / 'checkpoints' / f'step_{step:07d}{"_final" if final else ""}.pth'
-        torch.save({'iteration': step, 'model': model.state_dict(), 'config': OmegaConf.to_container(cfg)}, path)
+        torch.save({'iteration': step, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                    'config': OmegaConf.to_container(cfg)}, path)  # fmt: skip
         info(f'saved {path}')
 
-    step, losses, t0 = 0, [], time.time()
+    losses, t0 = [], time.time()
     train_loader = loader(train, True, sampler)
     batches = iter(train_loader)
     while step < cfg.max_steps:

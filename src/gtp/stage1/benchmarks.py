@@ -1,7 +1,7 @@
 """Note-transcription benchmarks with the labels each dataset ships, as published Stage 1 work scores them.
 
 A benchmark is a list of `Recording(rec, audio, notes)`; `audio` is a path, and `notes` an (n, 3) array of onset,
-offset and MIDI pitch. The noisy variants follow TART (Gupta et al. 2026): a random EchoThief room response, an 80 Hz
+offset and MIDI pitch. The `_corrected` GOAT suites move each recording's labels by one constant (label_shifts.py). The noisy variants follow TART (Gupta et al. 2026): a random EchoThief room response, an 80 Hz
 zero-phase high-pass, a random mix of white, pink and 60 Hz hum noise at 25 to 45 dB SNR, peak at 0.9. They are
 rendered once, deterministically per recording, into `cache_dir`.
 """
@@ -142,6 +142,12 @@ def noisy(recordings, name, cfg):
     return out
 
 
+def corrected(recordings, path):
+    """`recordings` with each one's labels moved by its constant shift from label_shifts.py."""
+    shifts = pd.read_csv(REPO_ROOT / path).set_index('rec').shift_ms / 1000
+    return [Recording(r.rec, r.audio, r.notes + np.array([1.0, 1.0, 0.0]) * shifts.get(r.rec, 0.0)) for r in recordings]
+
+
 def build(name, cfg):
     amps = [f'amp_audio_path_{k}' for k in range(1, 6)]
     match name:
@@ -157,6 +163,10 @@ def build(name, cfg):
             return goat(['di_audio_path'])
         case 'goat_amp':
             return goat(amps)
+        case 'goat_di_corrected':
+            return corrected(goat(['di_audio_path']), cfg.goat_shifts)
+        case 'goat_amp_corrected':
+            return corrected(goat(amps), cfg.goat_shifts)
         case 'guitarset_noisy':
             return noisy(guitarset(audio='audio_hex-pickup_debleeded', suffix='_hex_cln'), name, cfg.noise)
         case 'egdb_noisy':

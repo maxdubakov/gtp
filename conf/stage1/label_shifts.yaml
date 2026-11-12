@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# Benchmarks whose recordings get one constant label shift each, estimated with a checkpoint that is not ours.
+benchmarks: [goat_di, goat_amp]
+# Suites whose recordings are renders of another suite's: {render suite: source suite}.
+renders: {goat_amp: goat_di}
+max_latency_s: 0.1
+checkpoint: models/riley/fl.pth
+out: data/goat/test_label_shifts.csv
+# Shift = median offset of detected from labelled onsets, over notes matched within window_s; recordings with fewer
+# matched notes keep their labels.
+window_s: 0.15
+min_matched: 20
+device: null
+batch: 8
+# Needed by benchmarks.build for the noisy and val suites; unused here.
+noise: {}
+val_manifest: data/stage1_notes_z
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
