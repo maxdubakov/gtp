@@ -3,7 +3,8 @@
 Onset-only matching as in mir_eval (onsets within `onset_tolerance`, pitch within 50 cents, offsets ignored), the
 measure of Riley et al., GAPS, TART and YourMT3+. `f1` is the mean of the recordings' F1 (mir_eval per file, as those
 papers report); `micro_f1` pools the notes. Model outputs are cached per checkpoint and recording, so every
-post-processing setting is scored from one pass of the model.
+post-processing setting is scored from one pass of the model. A checkpoint entry joining paths with `+` scores the
+ensemble of those checkpoints: their output rolls are averaged before notes are picked.
 
 Usage:
   uv run scripts/stage1/benchmark.py
@@ -67,12 +68,15 @@ def main(cfg):
     info(' '.join(f'{n}: {len(s)}' for n, s in suites.items()))
     rows = []
     for ckpt in cfg.checkpoints:
-        model = PianoTranscription(str(REPO_ROOT / ckpt), device=device)
-        model.batch_size = cfg.batch
-        cache = REPO_ROOT / cfg.cache_dir / str(ckpt).replace('/', '__')
+        members = []
+        for path in str(ckpt).split('+'):
+            model = PianoTranscription(str(REPO_ROOT / path), device=device)
+            model.batch_size = cfg.batch
+            members.append((model, REPO_ROOT / cfg.cache_dir / path.replace('/', '__')))
         for name, suite in suites.items():
             for r in suite:
-                output = outputs(model, r, cache / f'{r.rec.replace("/", "__")}.npz')
+                runs = [outputs(m, r, cache / f'{r.rec.replace("/", "__")}.npz') for m, cache in members]
+                output = {k: np.mean([o[k] for o in runs], axis=0) for k in KEYS}
                 for pp in cfg.postprocess:
                     tp, n_est, n_ref = counts(r.notes, notes_of(output, pp), cfg.onset_tolerance)
                     rows.append({'checkpoint': ckpt, 'benchmark': name, 'postprocess': pp.name, 'rec': r.rec,
