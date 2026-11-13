@@ -19,6 +19,9 @@ classifier_runs:
   - results/strings/runs/*al-roomfar_s*
 # Decode-time fusion weight and beam width, chosen on the val guitars (index_fusion.py).
 lam: 1.3
+# false = ablation: the classifier's per-note output is replaced by its pitch prior, so only physics and Stage 2
+# tell strings apart.
+use_classifier: true
 beams: 8
 # Overrides of conf/strings/b_profiles.yaml, physics_fusion.yaml and harmonic_levels.yaml, for trying settings
 # without editing them.
