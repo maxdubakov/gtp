@@ -122,11 +122,13 @@ def main(cfg):
                 onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
                 ends = [n['end'] for n in notes]
                 jobs.append(pool.submit(physical, REPO_ROOT / r.audio, onsets, ends, pitches, profiles, envelope))
-                probs.append(
+                p = (
                     classifier_probs(REPO_ROOT / r.audio, onsets, pitches, classifiers)
                     if cfg.use_classifier
                     else classifiers[0].prior(pitches)
                 )
+                p = p**cfg.classifier_temper
+                probs.append(p / p.sum(axis=1, keepdims=True))
                 ids = list(range(len(table), len(table) + len(notes)))
                 piece = {
                     'source': 'index',
