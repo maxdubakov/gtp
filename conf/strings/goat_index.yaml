@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+goat_dir: data/goat/GOAT
+out_dir: data/string_index_goat
+# Audio columns of metadata.csv that become recordings, with the chain each is calibrated as.
+renders:
+  di_audio_path: di
+  amp_audio_path_1: amp1
+  amp_audio_path_2: amp2
+  amp_audio_path_3: amp3
+  amp_audio_path_4: amp4
+  amp_audio_path_5: amp5
+# Onset clusters of the aligned MIDI (performance time) start this far apart; the tab's chords share one score time.
+cluster_gap_s: 0.03
+# DTW band, in chords, around the diagonal.
+band: 400
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
