@@ -73,7 +73,9 @@ def main(cfg):
     split = rows['note'].map(notes['split'])
     real = rows['variant'] == 0
     chain = rows['note'].map(notes['chain'])
-    usable = ~chain.isin(list(cfg.exclude_chains))
+    usable = ~chain.isin(list(cfg.exclude_chains)) & ~rows['note'].map(notes['dataset']).isin(
+        list(cfg.exclude_datasets)
+    )
     if cfg.variants is not None:
         usable &= rows['variant'].isin(list(cfg.variants))
     idx = {

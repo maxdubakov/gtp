@@ -1,0 +1,19 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# An index.py run directory (with notes.csv.gz and counts.csv).
+run: ???
+methods: [stage2, classifier, fused, pipeline]
+# Groups scored: rows of recordings sharing these columns.
+by: [split, guitar, chain]
+input: stage1
+resamples: 2000
+seed: 0
+level: 0.95
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

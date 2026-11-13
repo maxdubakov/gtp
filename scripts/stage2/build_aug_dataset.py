@@ -253,6 +253,12 @@ def main():
         default=None,
         help='Split GuitarSet by player: this player is test (at its recorded capo), the previous one is val',
     )
+    ap.add_argument(
+        '--exclude-sources',
+        nargs='*',
+        default=[],
+        help='Sources left out entirely, e.g. guitarset, so the model is zero-shot on them',
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -260,6 +266,7 @@ def main():
 
     print('Loading pieces...')
     pieces, _summary = load_all_pieces()
+    pieces = [p for p in pieces if p['source'] not in args.exclude_sources]
     print(f'Total pieces: {len(pieces)}')
 
     train_pieces, val_pieces, test_pieces = stratified_split(
@@ -324,6 +331,7 @@ def main():
         'capo_range': [CAPO_RANGE.start, CAPO_RANGE.stop],
         'split_seed': args.seed,
         'test_player': args.test_player,
+        'exclude_sources': args.exclude_sources,
         'train_ratio': args.train_ratio,
         'val_ratio': args.val_ratio,
         'git_sha': get_git_sha(),

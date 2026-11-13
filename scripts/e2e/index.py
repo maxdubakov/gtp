@@ -210,6 +210,7 @@ def main(cfg):
     info(f'stage 2 step {step}, lam {cfg.lam}\n{summary[show].round(3).to_string(index=False)}')
     out = HydraConfig.get().runtime.output_dir
     df.to_csv(f'{out}/notes.csv.gz', index=False)
+    counts.to_csv(f'{out}/counts.csv', index=False)
     summary.to_csv(f'{out}/summary.csv', index=False)
     info(f'Saved {out}')
 
