@@ -8,7 +8,7 @@ splits: [val, test]
 # Restrict to these guitars (recordings.csv `guitar`); empty = all of the splits.
 guitars: []
 inputs: [stage1, gt]
-stage1_checkpoint: models/finetuned/step_0070000_final.pth
+stage1_checkpoint: models/finetuned/z3_step_0055000.pth
 # Stage 1's recurrent layers run about six times faster on the CPU than on Apple's GPU.
 stage1_device: cpu
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth

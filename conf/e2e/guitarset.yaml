@@ -6,7 +6,7 @@ name: e2e_guitarset
 test_player: 5
 # Stage 2's split: its train tracks define the `clean` subset (all of test_player's tracks for data/stage2_p05).
 data_dir: data/stage2_p05
-stage1_checkpoint: models/finetuned/step_0070000_final.pth
+stage1_checkpoint: models/finetuned/z3_step_0055000.pth
 stage2_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_baseline/checkpoints/step_0060000_final.pth
 # Stage 2 trained with audio evidence in its encoder (null to skip).
 evidence_checkpoint: runs/stage2/2026-11-08_11-58-31_p05_audio/checkpoints/step_0060000_final.pth

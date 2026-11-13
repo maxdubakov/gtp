@@ -54,7 +54,7 @@ from gtp.stage2.postprocess import correct_tabs
 from gtp.stage2.tokenizer import tokenize_piece_for_inference
 from gtp.track import git_state
 
-STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'step_0070000_final.pth'
+STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'z3_step_0055000.pth'
 STAGE2_DEFAULT = (
     REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_baseline' / 'checkpoints' / 'step_0060000_final.pth'
 )

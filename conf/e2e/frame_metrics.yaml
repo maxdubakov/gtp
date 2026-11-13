@@ -7,7 +7,7 @@ defaults:
 run: ???
 index_dir: data/string_index
 # The Stage 1 checkpoint of that run: its cached transcriptions give the notes' ends.
-stage1_checkpoint: models/finetuned/step_0070000_final.pth
+stage1_checkpoint: models/finetuned/z3_step_0055000.pth
 methods: [stage2, pipeline]
 # Frame period: TabCNN's 512 samples at 22050 Hz, which GuitarSet tablature papers report on.
 hop_s: 0.02322

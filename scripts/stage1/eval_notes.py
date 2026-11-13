@@ -5,7 +5,7 @@ Each recording is transcribed and its notes matched to the reference with mir_ev
 so the largest dataset doesn't decide alone; pick checkpoints on it for the val split.
 
 Usage:
-  uv run scripts/stage1/eval_notes.py "checkpoints=[models/finetuned/step_0070000_final.pth]"
+  uv run scripts/stage1/eval_notes.py "checkpoints=[models/finetuned/z3_step_0055000.pth]"
 """
 
 import json

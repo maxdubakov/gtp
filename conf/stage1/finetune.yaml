@@ -5,8 +5,9 @@ defaults:
 
 name: notes
 data_dir: data/stage1_notes
-# Note-model checkpoint to start from: the guitar model fine-tuned on GAPS and GuitarSet.
-init: models/finetuned/step_0070000_final.pth
+# Note-model checkpoint to start from: Riley et al.'s guitar model (Kong's piano model fine-tuned on the Leduc jazz
+# recordings; never saw GuitarSet or EGDB), from huggingface.co/xavriley/midi-transcription-models.
+init: models/riley/fl.pth
 seed: 0
 # A checkpoint of a stopped run to continue from (model, optimizer, step); overrides init.
 resume: null

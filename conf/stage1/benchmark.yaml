@@ -4,7 +4,7 @@ defaults:
 
 name: benchmark
 # Note-model checkpoints, relative to the repo.
-checkpoints: [models/finetuned/step_0070000_final.pth]
+checkpoints: [models/finetuned/z3_step_0055000.pth]
 benchmarks: [guitarset, guitarset_test, egdb, gaps_test, goat_di, goat_amp, guitarset_noisy, egdb_noisy, val_evh, val_les_paul]
 onset_tolerance: 0.05
 device: null
