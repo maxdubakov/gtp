@@ -7,6 +7,9 @@ PROCESSED_DIRS = {
     'guitartoday': REPO_ROOT / 'data' / 'guitartoday' / 'processed',
     'guitarset': REPO_ROOT / 'data' / 'guitarset' / 'processed',
     'leduc': REPO_ROOT / 'data' / 'leduc' / 'processed',
+    'goat': REPO_ROOT / 'data' / 'goat' / 'processed',
+    'gaps': REPO_ROOT / 'data' / 'gaps_hf' / 'processed',
+    'guitar_techs': REPO_ROOT / 'data' / 'guitar_techs' / 'processed',
 }
 
 AUG_DATA_DIR = REPO_ROOT / 'data' / 'stage2_aug'

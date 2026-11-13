@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+goat_dir: data/goat/GOAT
+gaps_dir: data/gaps_hf
+index_dir: data/string_index
+out_dirs:
+  goat: data/goat/processed
+  gaps: data/gaps_hf/processed
+  guitar_techs: data/guitar_techs/processed
+# GAPS scores this share of whose notes sit on their lowest possible fret look generated from the score, not fingered
+# (the GAPS paper allows that some of its ClassClef tabs were).
+gaps_max_lowest_share: 0.9
+# Guitar-TECHS recordings whose tabs are used: one chain per take, from the index's train split.
+guitar_techs_chain: di
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
