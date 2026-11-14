@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: label_alignment
+goat_dir: data/goat/GOAT
+shifts: data/goat/test_label_shifts.csv
+# Manifests with GOAT's shipped (fine-aligned, filtered) and our re-timed training labels.
+shipped_manifest: data/stage1_notes_z
+refined_manifest: data/stage1_notes_z_refined
+refine_report: data/stage1_notes_z_refined/refine_report.csv
+# Training items: the ones re-timing moved most, plus as many picked at random.
+train_largest: 3
+train_random: 3
+clip_s: 8.0
+sr: 44100
+# Label plucks: peak relative to the recording's peak, and pan (0 = centre, 1 = hard right).
+label_gain: 0.5
+label_pan: 0.6
+seed: 0
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/listen/alignment/${now:%Y-%m-%d_%H-%M-%S}_${name}
