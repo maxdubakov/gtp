@@ -58,7 +58,7 @@ STAGE1_DEFAULT = REPO_ROOT / 'models' / 'finetuned' / 'z3_step_0055000.pth'
 STAGE2_DEFAULT = (
     REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_baseline' / 'checkpoints' / 'step_0060000_final.pth'
 )
-CLASSIFIER_RUNS_DEFAULT = 'results/strings/runs/*al-roomfar_s*'
+CLASSIFIER_RUNS_DEFAULT = 'results/strings/runs/*goatexp-di_s*'
 DEFAULT_OUT_DIR = REPO_ROOT / 'results' / 'demo_takes'
 DEFAULT_TAKES_DIR = REPO_ROOT / 'data' / 'takes'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
