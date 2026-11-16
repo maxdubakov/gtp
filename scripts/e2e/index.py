@@ -10,6 +10,8 @@ it is matched and its string is right; Tab P/R/F1 count those. On the matched no
 accuracy of metrics.py (a recording's most common string shift forgiven) and the number of separate runs of wrong
 notes per 100 notes, as a measure of how many corrections the tab needs.
 
+Besides notes.csv.gz, evidence.npz holds each note's `fused_probs` and `classifier_probs` (N, 6) in the same row order.
+
 `classifier_runs` may contain `{guitar}`: then each guitar is scored by its own runs (leave-one-guitar-out folds).
 
 Usage:
@@ -160,8 +162,10 @@ def main(cfg):
                 strings, _ = valid_tabs(t['pitch'], TUNING, vocab)
                 t['classifier'], t['fused'] = int(p.argmax()) + 1, int(f.argmax()) + 1
                 t['ratio'] = log_ratio(f[None], q, strings, cfg.prob_floor)
+                t['fused_probs'], t['classifier_probs'] = f, p
             info(f'{guitar} {source}: {len(sub)} recordings, {len(probs)} notes, {family}, constants {const.round(2)}')
 
+    evidence = {k: np.stack([t.pop(k) for t in table]) for k in ('fused_probs', 'classifier_probs')}
     df = pd.DataFrame(table)
     rows = [
         row
@@ -218,6 +222,7 @@ def main(cfg):
     df.to_csv(f'{out}/notes.csv.gz', index=False)
     counts.to_csv(f'{out}/counts.csv', index=False)
     summary.to_csv(f'{out}/summary.csv', index=False)
+    np.savez_compressed(f'{out}/evidence.npz', **evidence)
     info(f'Saved {out}')
 
 

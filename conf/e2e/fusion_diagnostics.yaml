@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: fusion_diagnostics
+# An index.py run directory; the chord, shape and confidence tables need its evidence.npz.
+run: ???
+inputs: [gt, stage1]
+# Restrict to these guitars; empty = all in the run.
+guitars: []
+methods: [stage2, classifier, fused, pipeline]
+by: [input, guitar, chain]
+# A chord: notes of one recording starting within this many seconds of its first note, two or more of them.
+chord_window_s: 0.03
+# Shape decoder: highest fret allowed, and the fretted spans tried (open strings are outside the span).
+max_fret: 22
+spans: [4, 5]
+prob_floor: 1.0e-4
+# Upper edges of the fused-confidence bins (max fused probability); the last bin runs to 1.
+confidence_edges: [0.5, 0.7, 0.9]
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/e2e/fusion_diagnostics/${now:%Y-%m-%d_%H-%M-%S}_${name}
