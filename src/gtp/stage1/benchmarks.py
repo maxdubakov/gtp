@@ -1,7 +1,9 @@
 """Note-transcription benchmarks with the labels each dataset ships, as published Stage 1 work scores them.
 
 A benchmark is a list of `Recording(rec, audio, notes)`; `audio` is a path, and `notes` an (n, 3) array of onset,
-offset and MIDI pitch. The `_corrected` GOAT suites move each recording's labels by one constant (label_shifts.py). The noisy variants follow TART (Gupta et al. 2026): a random EchoThief room response, an 80 Hz
+offset and MIDI pitch. GOAT's labels sit up to 60 ms off its audio: the `_retimed` suites score against labels
+re-timed to each render (retime_goat_test.py, and the re-timed manifest for the val items), the `_corrected` ones
+against labels moved by one constant per recording (label_shifts.py). The noisy variants follow TART (Gupta et al. 2026): a random EchoThief room response, an 80 Hz
 zero-phase high-pass, a random mix of white, pink and 60 Hz hum noise at 25 to 45 dB SNR, peak at 0.9. They are
 rendered once, deterministically per recording, into `cache_dir`.
 
@@ -154,6 +156,12 @@ def corrected(recordings, path):
     return [Recording(r.rec, r.audio, r.notes + np.array([1.0, 1.0, 0.0]) * shifts.get(r.rec, 0.0)) for r in recordings]
 
 
+def retimed(recordings, path):
+    """`recordings` with their notes re-timed by retime_goat_test.py (same notes, same order)."""
+    notes = dict(tuple(pd.read_csv(REPO_ROOT / path).groupby('rec', sort=False)))
+    return [Recording(r.rec, r.audio, notes[r.rec][['onset', 'offset', 'pitch']].to_numpy(float)) for r in recordings]
+
+
 def load(path):
     return librosa.load(path, sr=SR, mono=True)[0]
 
@@ -221,6 +229,12 @@ def build(name, cfg):
             return corrected(goat(['di_audio_path']), cfg.goat_shifts)
         case 'goat_amp_corrected':
             return corrected(goat(amps), cfg.goat_shifts)
+        case 'goat_di_retimed':
+            return retimed(goat(['di_audio_path']), cfg.goat_retimed)
+        case 'goat_amp_retimed':
+            return retimed(goat(amps), cfg.goat_retimed)
+        case 'val_goat_retimed':
+            return manifest_val(cfg.retimed_manifest, 'goat')
         case 'guitarset_noisy':
             return noisy(guitarset(audio='audio_hex-pickup_debleeded', suffix='_hex_cln'), name, cfg.noise)
         case 'egdb_noisy':

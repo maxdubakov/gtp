@@ -4,10 +4,13 @@ GOAT's labels in time are its fine-aligned MIDI; its strings are in the Guitar P
 and lists tied notes separately. The tab's chords (notes sharing a score time) are aligned to the MIDI's onset
 clusters by dynamic time warping on pitch-set overlap, and inside each aligned pair notes are matched by pitch; a MIDI
 note without a match stays out of the index, so the labels keep GOAT's timing and only gain strings. Every render
-(DI and the five amps) is a recording of its own chain, so each is calibrated apart.
+(DI and the five amps) is a recording of its own chain, so each is calibrated apart. With `retimed_notes` set, each
+render's notes take the times re-timed to its audio (scripts/stage1/retime_goat_test.py) in place of the MIDI's.
 
 Usage:
   uv run scripts/stage1/strings/build_goat_index.py
+  uv run scripts/stage1/strings/build_goat_index.py retimed_notes=data/goat/test_retimed/notes.csv.gz \
+      out_dir=data/string_index_goat_retimed
 """
 
 import json
@@ -71,6 +74,7 @@ def strings_by_alignment(tab, midi, cfg):
 def main(cfg):
     root = REPO_ROOT / cfg.goat_dir
     meta = pd.read_csv(root / 'metadata.csv')
+    retimed = cfg.retimed_notes and dict(tuple(pd.read_csv(REPO_ROOT / cfg.retimed_notes).groupby('rec', sort=False)))
     recs, notes, coverage = [], [], []
     for r in meta[meta.split == 'test'].itertuples():
         tab = parse_gp_track(root / 'data' / r.gp5_path.split('/', 1)[1], 0)
@@ -84,7 +88,11 @@ def main(cfg):
             recs.append({'rec': rec, 'dataset': 'goat', 'audio': str(audio.relative_to(REPO_ROOT)), 'player': r.player,
                          'guitar': f'goat-{r.guitar_brand}', 'chain': chain, 'content': 'pieces', 'split': 'test',
                          'duration': librosa.get_duration(path=audio)})  # fmt: skip
-            notes += [{'rec': rec, 'onset': midi[k].start, 'offset': midi[k].end, 'pitch': midi[k].pitch,
+            times = [(n.start, n.end) for n in midi]
+            if retimed:
+                times = retimed[f'goat/{r.item}/{audio.stem}'][['onset', 'offset']].to_numpy()
+                assert len(times) == len(midi), rec
+            notes += [{'rec': rec, 'onset': times[k][0], 'offset': times[k][1], 'pitch': midi[k].pitch,
                        'string': t['string'], 'fret': midi[k].pitch - tab['tuning'][t['string'] - 1]}
                       for k, t in sorted(matched.items())]  # fmt: skip
     out = REPO_ROOT / cfg.out_dir

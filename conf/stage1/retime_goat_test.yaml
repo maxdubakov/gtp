@@ -1,0 +1,21 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# The checkpoint that re-timed the training manifest (z1 at 10k steps: trained on GOAT's shipped labels, train split).
+checkpoint: ???
+split: test
+renders: [di_audio_path, amp_audio_path_1, amp_audio_path_2, amp_audio_path_3, amp_audio_path_4, amp_audio_path_5]
+out_dir: data/goat/test_retimed
+device: null
+batch: 8
+# As conf/stage1/refine_labels.yaml.
+lag_window_s: 0.15
+max_shift_s: 0.06
+onset_threshold: 0.3
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

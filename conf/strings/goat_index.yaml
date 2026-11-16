@@ -5,6 +5,9 @@ defaults:
 
 goat_dir: data/goat/GOAT
 out_dir: data/string_index_goat
+# Notes re-timed to each render's audio (scripts/stage1/retime_goat_test.py) to take the note times from; null keeps
+# the fine-aligned MIDI's times.
+retimed_notes: null
 # Audio columns of metadata.csv that become recordings, with the chain each is calibrated as.
 renders:
   di_audio_path: di
