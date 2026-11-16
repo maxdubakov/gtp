@@ -33,6 +33,8 @@ augment:
 pitch_shift:
   prob: 0.5
   max_semitones: 2
+  # A shifted segment is also detuned by a uniform draw within this many cents; its labels keep the whole semitones.
+  detune_cents: 0
 # Share of training segments drawn from each dataset (relative; datasets left out get 1). null = in proportion to
 # their hours.
 dataset_weights:

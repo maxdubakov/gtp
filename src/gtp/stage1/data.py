@@ -325,7 +325,7 @@ class ManifestDataset(GuitarDataset):
     `augment` maps a recording chain to the probability that a segment is rendered through a random recording
     chain (chains.py) before the model hears it; chains absent from it are never augmented. With probability
     `pitch_shift.prob` a segment is first shifted by a whole number of semitones up to `pitch_shift.max_semitones`,
-    its labels with it.
+    its labels with it, and detuned by up to `pitch_shift.detune_cents` either way with the labels left alone.
     """
 
     def __init__(self, root, entries, augment=None, pitch_shift=None, **kwargs):
@@ -354,11 +354,13 @@ class ManifestDataset(GuitarDataset):
         path, notes, start = self.segments[idx]
         waveform, _ = librosa.load(path, sr=self.sample_rate, offset=start, duration=self.segment_seconds, mono=True)
         waveform = librosa.util.fix_length(waveform, size=self.segment_samples)
-        steps = 0
+        steps, shift = 0, 0.0
         if self._rng.random() < self.pitch_shift['prob']:
             steps = int(self._rng.integers(-self.pitch_shift['max_semitones'], self.pitch_shift['max_semitones'] + 1))
+            shift = steps + self._rng.uniform(-1, 1) * self.pitch_shift.get('detune_cents', 0) / 100
+        if shift:
+            waveform = librosa.effects.pitch_shift(waveform, sr=self.sample_rate, n_steps=shift)
         if steps:
-            waveform = librosa.effects.pitch_shift(waveform, sr=self.sample_rate, n_steps=steps)
             notes = [{**n, 'midi_note': n['midi_note'] + steps} for n in notes]
         targets = self.target_processor.process_notes(start, notes)
         if self._rng.random() < self.augment.get(self.chain_of[path], 0.0):
