@@ -7,11 +7,14 @@ Writes <run>/bootstrap.csv.
 
 Usage:
   uv run scripts/e2e/bootstrap.py run=results/e2e/index/<run>
+  uv run scripts/e2e/bootstrap.py run=results/e2e/index/<run> "by=[split,dataset,chain]" \
+      "+pool.chain={amp1:amp,amp2:amp,amp3:amp,amp4:amp,amp5:amp}"
 """
 
 import hydra
 import numpy as np
 import pandas as pd
+from omegaconf import OmegaConf
 
 from gtp import REPO_ROOT
 from gtp.log import info
@@ -32,7 +35,7 @@ def main(cfg):
     notes = pd.read_csv(run / 'notes.csv.gz')
     notes = notes[(notes['input'] == cfg.input) & notes['ref_string'].notna()]
     counts = pd.read_csv(run / 'counts.csv')
-    counts = counts[counts['input'] == cfg.input].set_index('rec')
+    counts = counts[counts['input'] == cfg.input].set_index('rec').replace(OmegaConf.to_container(cfg.pool))
     ok = notes.assign(**{f'{m}_ok': notes[m] == notes['ref_string'] for m in cfg.methods})
     per_rec = counts.join(ok.groupby('rec')[[f'{m}_ok' for m in cfg.methods]].sum()).fillna(0)
     rng = np.random.default_rng(cfg.seed)

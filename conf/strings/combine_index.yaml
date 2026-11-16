@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# Cached index directories, joined in this order.
+indexes: ???
+out_dir: ???
+feature: logmel229
+# Windows copied at a time.
+chunk: 65536
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -7,6 +7,8 @@ index_dir: data/string_index
 # Run directories (relative to the repo) of train_index.py.
 runs: []
 splits: [val, test]
+# Directory for the runs' predictions and accuracy.csv; null = into each run's own directory.
+out_dir: null
 
 hydra:
   output_subdir: null

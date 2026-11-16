@@ -79,7 +79,7 @@ def main(cfg):
         if 'stage1' in cfg.inputs
         else None
     )
-    stage1_cache = REPO_ROOT / 'results' / 'e2e' / 'stage1' / f'index_{(REPO_ROOT / cfg.stage1_checkpoint).stem}'
+    stage1_cache = REPO_ROOT / cfg.stage1_cache / f'index_{(REPO_ROOT / cfg.stage1_checkpoint).stem}'
 
     pool = ProcessPoolExecutor(cfg.workers)
     table, pieces, counts = [], [], []

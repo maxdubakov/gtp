@@ -8,6 +8,8 @@ run: ???
 methods: [stage2, classifier, fused, pipeline]
 # Groups scored: rows of recordings sharing these columns.
 by: [split, guitar, chain]
+# {column: {value: pooled value}} renamed before grouping, e.g. GOAT's five amp chains scored as one group.
+pool: {}
 input: stage1
 resamples: 2000
 seed: 0
