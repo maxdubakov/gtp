@@ -2,7 +2,8 @@
 
 Splits come from the index (by player or guitar, never by clip). Training uses every cached variant of the
 training notes (the real recording plus its augmented renders); val and test use the real recordings only.
-The checkpoint is chosen on the mean of the per-dataset val NLLs, so the largest val set doesn't decide alone.
+The checkpoint is chosen on the mean of the per-dataset val NLLs, so the largest val set doesn't decide alone
+(`select=last` keeps the final epoch instead).
 Test metrics are reported per (dataset, chain), each next to the pitch prior on the same notes.
 
 With `holdout` (a list of guitars), those guitars are the test set and every other recording trains, whatever its
@@ -177,7 +178,7 @@ def main(cfg):
         }
         history.append(record)
         run.log({**record, 'lr': sched.get_last_lr()[0], 'epoch_s': time.time() - t0}, step=epoch)
-        if cfg.holdout or macro < best:
+        if cfg.holdout or cfg.select == 'last' or macro < best:
             best, best_epoch = macro, epoch
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         accs = ' '.join(f'{d} {m["acc"]:.3f}' for d, m in per.items())

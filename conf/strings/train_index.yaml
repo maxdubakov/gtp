@@ -23,6 +23,9 @@ holdout: []
 families: null
 # Family of a guitar the file doesn't list (one too small to hold out: the 88-note Ibanez RG, an electric).
 family_default: plain_g
+# Checkpoint kept: `nll` = the epoch with the lowest mean per-dataset val NLL, `last` = the final epoch (the
+# one-cycle schedule has annealed there; mid-cycle epochs are snapshots at a high learning rate).
+select: nll
 seed: 0
 
 # Paper recipe (see model/stringnet.yaml): standard conv-BN-ReLU-pool order, 30 epochs.
