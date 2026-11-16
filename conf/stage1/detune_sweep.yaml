@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: detune_sweep
+checkpoint: models/finetuned/z3_step_0055000.pth
+benchmarks: [guitarset, egdb]
+# Pitch moves in cents; each recording is played back 2^(cents/1200) times faster.
+cents: [-50, -25, -10, 0, 10, 25, 50]
+onset_tolerance: 0.05
+postprocess: {name: min30ms, onset: 0.3, offset: 0.3, frame: 0.1, min_duration_s: 0.03}
+# Recordings drawn per benchmark (seeded), or null for all of them.
+subset: null
+seed: 0
+device: null
+batch: 8
+# Model outputs per checkpoint, detune and recording; kept apart from benchmark.py's bench_cache.
+cache_dir: results/stage1/detune_cache
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/stage1/detune_sweep/${now:%Y-%m-%d_%H-%M-%S}_${name}
