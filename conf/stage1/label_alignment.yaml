@@ -10,6 +10,10 @@ shipped_manifest: data/stage1_notes_z
 refined_manifest: data/stage1_notes_z_refined
 refine_report: data/stage1_notes_z_refined/refine_report.csv
 # Training items: the ones re-timing moved most, plus as many picked at random.
+# Non-empty: clips are training items at these quantiles of the mean onset change of re-timing (two windows each).
+train_quantiles: []
+min_notes: 8
+versions: [shipped, ours, unaligned]
 train_largest: 3
 train_random: 3
 clip_s: 8.0
