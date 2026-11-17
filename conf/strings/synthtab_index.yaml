@@ -1,0 +1,77 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+synthtab_dir: data/synthtab
+# SynthTab's labels for every rendered track (JAMS plus the per-string MIDI that was rendered), about 1 GB:
+# https://rochester.app.box.com/v/SynthTab-Full, file all_jams_midi_V2_60000_tracks.zip. Read in place.
+jams_zip: data/synthtab/archives/all_jams_midi_V2_60000_tracks.zip
+# A Box shared file's download link; the timbre zips are read from it by byte ranges.
+box_url: https://rochester.app.box.com/index.php?rm=box_download_shared_file&vanity_name=SynthTab-Full&file_id=f_{id}
+# Bytes per range request.
+block_bytes: 8388608
+# Timbres used (acoustic and clean electric; distortion and muted are out of scope), each with the chain it is
+# calibrated as and its Box zips. Acoustic timbres render the Acoustic Nylon/Steel tracks, electric ones the
+# Electric Clean/Jazz tracks.
+timbres:
+  gibson_thumb: {chain: acoustic-mic, zips: [1495775819575, 1495775584339, 1495776229503, 1495759899644]}
+  luthier_finger: {chain: acoustic-mic, zips: [1494553197405, 1494546289602, 1494552023588, 1494546393584]}
+  luthier_pick: {chain: acoustic-mic, zips: [1494595988409, 1494592758112, 1494593123486, 1494594371502]}
+  martin_finger: {chain: acoustic-mic, zips: [1494526387003, 1494523376790, 1494527865228, 1494522524994]}
+  martin_pick: {chain: acoustic-mic, zips: [1494574223441, 1494573760277, 1494571076520, 1494571694257]}
+  taylor_finger: {chain: acoustic-mic, zips: [1494528181972, 1494524840614, 1494547691243, 1494547461190]}
+  taylor_pick: {chain: acoustic-mic, zips: [1494570875062, 1494571775919, 1494593149531, 1494588874860]}
+  eclipse_clean_neck: {chain: di, zips: [1486928751963]}
+  lespaul_clean_both: {chain: di, zips: [1486932690265]}
+  lespaul_clean_bridge: {chain: di, zips: [1486945645725]}
+  lespaul_clean_neck: {chain: di, zips: [1486942813271]}
+  peregrine_clean_both: {chain: di, zips: [1488211768673]}
+  peregrine_clean_bridge: {chain: di, zips: [1488207523130]}
+  peregrine_clean_neck: {chain: di, zips: [1486910663772]}
+  semihollow_clean_finger: {chain: di, zips: [1488320932342]}
+  semihollow_clean_pick: {chain: di, zips: [1488312800976]}
+  stratocaster_clean_bridge: {chain: di, zips: [1489463132802]}
+  stratocaster_clean_bridgemid: {chain: di, zips: [1489472442594]}
+  stratocaster_clean_neck: {chain: di, zips: [1489347478898]}
+  stratocaster_clean_neckmid: {chain: di, zips: [1489332498339]}
+  telecaster_clean_bridge: {chain: di, zips: [1489296321312]}
+  telecaster_clean_neck: {chain: di, zips: [1486912951184]}
+  vintage_clean_bridge: {chain: di, zips: [1489382524106]}
+  vintage_clean_neck: {chain: di, zips: [1489387458700]}
+instruments: [Acoustic Nylon Guitar, Acoustic Steel Guitar, Electric Clean Guitar, Electric Jazz Guitar]
+# Open pitches, string 1 first; the pipeline decodes in standard tuning.
+tuning: [64, 59, 55, 50, 45, 40]
+# DadaGP, to read each track's capo (SynthTab's labels ignore it) and to know which songs Stage 2 trained on.
+dadagp_dir: data/DadaGP-v1.1
+stage2_train: [data/stage2_p05/train.jsonl]
+
+# The chosen excerpts; built (seeded) when missing, else reused as they are.
+selection: data/synthtab/selection.csv
+seed: 0
+per_timbre: 6
+excerpt_s: 45
+# An excerpt starts this long before a note onset.
+preroll_s: 0.25
+min_notes_per_s: 1.5
+# Longest stretch without an onset inside an excerpt (its end included).
+max_rest_s: 4.0
+# Notes with these effects sound away from the fretted pitch: left out of the labels, and an excerpt may hold at
+# most this fraction of them.
+drop_effects: [harmonic, bend]
+max_dropped_fraction: 0.03
+
+# Labels move per timbre when their median lag differs from GuitarSet's by more than shift_threshold_ms. The lag is
+# the onset envelope's (GuitarSet's from the main index's report), or, once note_lags.py has written
+# <out_dir>/note_lags.csv, the one Stage 1's notes give, against `note_bias_ms`: the same checkpoint's median lag on
+# GuitarSet's val/test recordings (z7: -8.5 ms over 118 recordings). null = envelope only.
+bias_report: data/string_index/report.json
+note_bias_ms: -8.5
+shift_threshold_ms: 6
+workers: 8
+out_dir: data/string_index_synthtab
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

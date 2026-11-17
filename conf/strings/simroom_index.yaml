@@ -1,0 +1,48 @@
+defaults:
+  - _self_
+  - simroom: evh
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+# Recordings to copy through the simulated room: each source index's rows whose columns take the listed values.
+# Set by the `simroom` group (evh, music).
+sources: ???
+out_dir: ???
+# The copies are named <prefix>/<source rec> and get this chain. index.py caches Stage 1's notes by recording name,
+# so a build with other room settings needs its own prefix (or its own stage1_cache).
+prefix: simroom
+chain: simroom
+sample_rate: 44100
+# Mixed into each recording's name to draw its room; another value gives an independent copy.
+seed: 0
+# ACE corpus (zenodo.org/records/6257551, CC BY 4.0): <device>/<room>/<position>/*_RIR.wav and *_Noise_<kind>.wav.
+ace_dir: data/ace
+devices: [Mobile, Chromebook]
+# Rooms of ordinary size (T60 0.3 to 0.7 s); Lecture_Room_2 (1.3 s) and Building_Lobby are left out.
+rooms: [Office_1, Office_2, Meeting_Room_1, Meeting_Room_2, Lecture_Room_1]
+# The device's noise recordings mixed in (ACE also has Babble), at an SNR drawn from this range against the
+# recording's active level.
+noises: [Ambient, Fan]
+snr_db: [15, 35]
+# Seconds of each response kept after its direct sound.
+response_s: 1.5
+# Chains of direct-input recordings: these go through the clean amp and cabinet before the room.
+direct_chains: [di]
+# The clean amp and cabinet: matched to one guitar's rig, from its direct and miked recordings of the same takes.
+cabinet:
+  index_dir: data/string_index
+  guitar: evh-wolfgang
+  direct: di
+  miked: amp-mic
+  n_fft: 8192
+  smooth_octaves: 0.1667
+  # Above this the direct-input recordings are 70+ dB down: the response falls 24 dB per octave, as a guitar
+  # speaker's does, instead of following the noise.
+  top_hz: 4000
+  floor_db: -50
+workers: 8
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -1,0 +1,6 @@
+# @package _global_
+# Guitar-TECHS player 2's amp-mic recordings: their real room-mic copies (chains ego, exo) are the realism check.
+sources:
+  - index_dir: data/string_index
+    where: {split: [val], guitar: [evh-wolfgang], chain: [amp-mic]}
+out_dir: data/string_index_simroom_evh

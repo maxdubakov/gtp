@@ -1,0 +1,8 @@
+# @package _global_
+# Validation music: GuitarSet player 04 (acoustic, already miked), the IDMT Les Paul licks and GOAT val (both DI).
+sources:
+  - index_dir: data/string_index
+    where: {split: [val], guitar: [gs04, gibson-les-paul]}
+  - index_dir: data/string_index_goat_val
+    where: {split: [val], chain: [di]}
+out_dir: data/string_index_simroom_music
