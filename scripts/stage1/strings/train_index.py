@@ -22,6 +22,7 @@ import time
 
 import hydra
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
@@ -50,6 +51,19 @@ def to_device(x, idx, n_frames, device, chunk=8192):
     for i in range(0, len(idx), chunk):
         out[i : i + chunk] = torch.from_numpy(np.ascontiguousarray(x[idx[i : i + chunk], ..., :n_frames])).to(device)
     return out
+
+
+@torch.no_grad()
+def centre(xs, groups, chunk=8192):
+    """Subtract each group's mean spectrum (per frequency bin, over its windows and frames) from xs, in place."""
+    g = torch.from_numpy(groups).to(xs.device)
+    sums = torch.zeros(int(groups.max()) + 1, xs.shape[2], device=xs.device)
+    for i in range(0, len(xs), chunk):
+        sums.index_add_(0, g[i : i + chunk], xs[i : i + chunk].float().sum(dim=(1, 3)))
+    means = sums / (torch.bincount(g, minlength=len(sums)) * xs.shape[1] * xs.shape[3])[:, None]
+    for i in range(0, len(xs), chunk):
+        # .float() first: on MPS, arithmetic on a slice view runs over the whole tensor, past its 2^31 element limit.
+        xs[i : i + chunk] = (xs[i : i + chunk].float() - means[g[i : i + chunk]][:, None, :, None]).to(xs.dtype)
 
 
 def grouped(frame, probs, keys):
@@ -86,6 +100,8 @@ def main(cfg):
     }
     if cfg.holdout:
         held = rows['note'].map(notes['guitar']).isin(list(cfg.holdout))
+        if cfg.holdout_train_split:
+            usable &= split == 'train'
         idx = {'train': np.flatnonzero(usable & ~held), 'test': np.flatnonzero(real & held)}
         idx['val'] = idx['test']
     if cfg.limit:
@@ -114,6 +130,12 @@ def main(cfg):
             torch.from_numpy(label[n]).to(device),
         )
     info(f'windows {sizes} on {device} in {time.time() - t0:.0f}s')
+    if cfg.centre:
+        size = notes.groupby('rec')['rec'].transform('size')
+        group = notes['rec'].where(size >= cfg.centre_min_notes, notes['rec'].str.rsplit('/', n=1).str[0]).to_numpy()
+        for k, v in idx.items():
+            key = pd.Series(group[note_of[k]]) + '#' + rows['variant'].to_numpy()[v].astype(str)
+            centre(data[k][0], pd.factorize(key)[0])
 
     # Chunk sums in float32 on the device (MPS has no float64), accumulated in float64 on the host.
     xs = data['train'][0]

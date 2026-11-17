@@ -19,6 +19,13 @@ exclude_chains: []
 exclude_datasets: []
 # Guitars (recordings.csv `guitar`) to hold out as the test set; every other recording trains. Empty = index splits.
 holdout: []
+# With holdout: train only on the index's train split, so the fold is the deployed recipe minus the held-out guitars.
+holdout_train_split: false
+# Subtract each recording's mean log-mel spectrum (per frequency bin, over its windows; per rendered variant) from
+# its windows, here and at inference, to remove a fixed microphone or room colouring. Recordings of fewer than
+# centre_min_notes notes (EGFxSet's and IDMT's single-note files) are centred over their folder instead.
+centre: false
+centre_min_notes: 10
 # {guitar: string-set family} (physics_fusion.py's families.json); read when model.use_family is set.
 families: null
 # Family of a guitar the file doesn't list (one too small to hold out: the 88-note Ibanez RG, an electric).

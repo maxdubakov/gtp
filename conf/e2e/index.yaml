@@ -27,6 +27,16 @@ use_classifier: true
 # Exponent on the classifier's probabilities (renormalised) before they start and join the fusion; below 1 softens
 # an overconfident classifier.
 classifier_temper: 1.0
+# AdaBN: the classifiers' BatchNorm statistics are re-estimated on the notes being scored, per `recording` or per
+# calibration `group` (all recordings of a guitar and chain); null = the training statistics.
+adapt_bn: null
+# Weight of the training statistics in that estimate, in notes: n notes get n / (n + prior) of their own.
+adapt_bn_prior: 0
+# Temperature for every classifier in place of the one each run fitted on its val notes; null = the runs' own.
+classifier_temperature: null
+# [a, b]: each recording's temperature is exp(a + b * mean entropy of a classifier's untempered predictions on it)
+# (StringClassifier.reliability), in place of the runs' own; null = off.
+classifier_reliability: null
 beams: 8
 # Overrides of conf/strings/b_profiles.yaml, physics_fusion.yaml and harmonic_levels.yaml, for trying settings
 # without editing them.

@@ -9,6 +9,8 @@ runs: []
 splits: [val, test]
 # Directory for the runs' predictions and accuracy.csv; null = into each run's own directory.
 out_dir: null
+# AdaBN: each recording is scored with BatchNorm statistics re-estimated on its own notes.
+adapt_bn: false
 
 hydra:
   output_subdir: null

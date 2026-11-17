@@ -21,7 +21,7 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.strings import StringClassifier, summarize
+from gtp.stage1.strings import N_STRINGS, StringClassifier, summarize
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'strings'), config_name='predict_index')
@@ -34,7 +34,14 @@ def main(cfg):
         keep = np.flatnonzero((rows['variant'] == 0) & rows['note'].map(notes['split']).isin(list(cfg.splits)))
         note = rows['note'].to_numpy()[keep]
         order = np.argsort(keep)
-        probs = clf.predict_windows(x[keep[order]], notes['pitch'].to_numpy()[note[order]])
+        windows, pitches = x[keep[order]], notes['pitch'].to_numpy()[note[order]]
+        if cfg.adapt_bn or clf.centre:
+            probs = np.zeros((len(order), N_STRINGS), np.float32)
+            rec = notes['rec'].to_numpy()[note[order]]
+            for i in pd.Series(rec).groupby(rec).indices.values():
+                probs[i] = clf.predict_windows(windows[i], pitches[i], adapt=windows[i] if cfg.adapt_bn else None)
+        else:
+            probs = clf.predict_windows(windows, pitches)
         out = REPO_ROOT / (run if cfg.out_dir is None else Path(cfg.out_dir) / Path(run).name)
         out.mkdir(parents=True, exist_ok=True)
         np.savez(out / 'index_probs.npz', note=note[order], probs=probs)

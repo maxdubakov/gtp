@@ -37,11 +37,22 @@ def physical(audio, onsets, ends, pitches, profiles, envelope):
     )
 
 
-def classifier_probs(audio, onsets, pitches, classifiers):
-    """(notes, 6) string probabilities, averaged over the classifiers."""
+def recording_windows(audio, onsets, feature):
+    """The classifier's input windows (notes, 1, freq, frames) at `onsets` of one recording."""
     y, _ = librosa.load(audio, sr=st.SAMPLE_RATE, mono=True)
-    spec = st.spectrogram(y[None], classifiers[0].feature)
-    return np.mean([c.predict(spec, onsets, pitches) for c in classifiers], axis=0)
+    return st.note_windows(st.spectrogram(y[None], feature), np.asarray(onsets))
+
+
+def ensemble_probs(windows, pitches, classifiers, adapt=None):
+    """(notes, 6) string probabilities, averaged over the classifiers; `adapt` as in StringClassifier.predict_windows."""
+    return np.mean([c.predict_windows(windows, pitches, adapt=adapt) for c in classifiers], axis=0)
+
+
+def classifier_probs(audio, onsets, pitches, classifiers, adapt_bn=False):
+    """(notes, 6) string probabilities, averaged over the classifiers; `adapt_bn` takes the BatchNorm statistics from
+    this recording's notes."""
+    windows = recording_windows(audio, onsets, classifiers[0].feature)
+    return ensemble_probs(windows, pitches, classifiers, windows if adapt_bn else None)
 
 
 def fuse_recordings(probs, curves, levels, pitches, profiles, physics, envelope):

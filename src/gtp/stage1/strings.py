@@ -290,6 +290,13 @@ def fit_temperature(logits, labels):
     return float(log_t.exp())
 
 
+def mean_entropy(logits):
+    """Mean entropy (nats) of the untempered predictions on the notes with more than one candidate string; 0 if none."""
+    multi = torch.isfinite(logits).sum(dim=1) > 1
+    p = torch.softmax(logits[multi], dim=1)
+    return float(-(p * torch.log(p.clamp_min(1e-12))).sum(dim=1).mean()) if multi.any() else 0.0
+
+
 @dataclass
 class StringClassifier:
     """A trained string-classifier run, ready to score arbitrary (onset, pitch) notes."""
@@ -303,6 +310,14 @@ class StringClassifier:
     feature: str
     prior_counts: np.ndarray
     device: str
+    # Trained on recording-centred windows (train_index.py `centre`): predict_windows must get a whole recording.
+    centre: bool = False
+    # adapt_bn's weight on the training statistics, in windows: n windows get n / (n + bn_prior) of their own
+    # (Schneider et al. 2020), so a short recording stays close to the trained model.
+    bn_prior: float = 0.0
+    # (a, b): each predict_windows call (one recording) is tempered by exp(a + b * mean_entropy of its logits) instead
+    # of `temperature`, so a recording the model is unsure of gets softened more.
+    reliability: tuple | None = None
 
     @classmethod
     def from_run(cls, run_dir, device):
@@ -334,6 +349,7 @@ class StringClassifier:
             cfg.data.feature,
             counts,
             device,
+            cfg.get('centre', False),
         )
 
     def prior(self, pitches):
@@ -343,24 +359,60 @@ class StringClassifier:
     def uses_family(self):
         return self.model.family_emb is not None
 
-    def predict(self, spec, onsets, pitches, batch=512, family=None):
+    def predict(self, spec, onsets, pitches, batch=512, family=None, adapt=None):
         """Calibrated (N, 6) string probabilities for notes in one track's spectrogram."""
-        return self.predict_windows(note_windows(spec, np.asarray(onsets)), pitches, batch, family)
+        return self.predict_windows(note_windows(spec, np.asarray(onsets)), pitches, batch, family, adapt)
+
+    def inputs(self, windows, batch):
+        """Normalized network inputs, batch by batch; a `centre` model first has the windows' mean spectrum removed."""
+        shift = self.mean
+        if self.centre:
+            spectrum = windows[..., : self.n_frames].mean(axis=(0, 1, 3), dtype=np.float64)
+            shift = shift + torch.from_numpy(spectrum).float().to(self.device)[None, None, :, None]
+        for i in range(0, len(windows), batch):
+            w = np.ascontiguousarray(windows[i : i + batch, ..., : self.n_frames])
+            yield (torch.from_numpy(w).to(self.device).float() - shift) / self.std
 
     @torch.no_grad()
-    def predict_windows(self, windows, pitches, batch=512, family=None):
+    def adapt_bn(self, windows, batch=512):
+        """Replace every BatchNorm's running statistics with those of `windows` (AdaBN, Li et al. 2016), layer by
+        layer so each layer sees the inputs of the already adapted ones. Returns the replaced statistics."""
+        saved = {k: v.clone() for k, v in self.model.state_dict().items() if 'running_' in k}
+        own = len(windows) / (len(windows) + self.bn_prior)
+        encoder = self.model.encoder
+        for i, bn in enumerate(encoder):
+            if not isinstance(bn, nn.BatchNorm2d):
+                continue
+            total, total_sq, n = 0.0, 0.0, 0
+            for x in self.inputs(windows, batch):
+                h = encoder[:i](x)
+                total = total + h.sum(dim=(0, 2, 3)).cpu().double()
+                total_sq = total_sq + (h**2).sum(dim=(0, 2, 3)).cpu().double()
+                n += h.numel() // h.shape[1]
+            mean, var = total / n, (total_sq / n - (total / n) ** 2).clamp_min(0)
+            bn.running_mean.lerp_(mean.to(bn.running_mean), own)
+            bn.running_var.lerp_(var.to(bn.running_var), own)
+        return saved
+
+    @torch.no_grad()
+    def predict_windows(self, windows, pitches, batch=512, family=None, adapt=None):
         """Calibrated (N, 6) string probabilities for cached note windows (N, 1, freq, >= n_frames).
 
-        `family` (a name in FAMILIES) is required by a model trained with use_family.
+        `family` (a name in FAMILIES) is required by a model trained with use_family. With `adapt` (windows, e.g. the
+        whole recording's), the BatchNorm statistics are re-estimated on those windows for this call (adapt_bn).
         """
+        saved = None if adapt is None else self.adapt_bn(adapt, batch)
         pitch = torch.as_tensor(np.asarray(pitches), dtype=torch.long)
         cand = torch.as_tensor(candidates(pitches))
         fam = torch.full((batch,), FAMILIES.index(family) if self.uses_family else 0, device=self.device)
         out = []
-        for i in range(0, len(windows), batch):
-            w = np.ascontiguousarray(windows[i : i + batch, ..., : self.n_frames])
-            x = (torch.from_numpy(w).to(self.device).float() - self.mean) / self.std
+        for i, x in zip(range(0, len(windows), batch), self.inputs(windows, batch), strict=True):
             p, c = pitch[i : i + batch].to(self.device), cand[i : i + batch].to(self.device)
-            logits = self.model(x, p, c, fam[: len(p)])
-            out.append(torch.softmax(logits / self.temperature, dim=1).cpu())
-        return torch.cat(out).numpy()
+            out.append(self.model(x, p, c, fam[: len(p)]).cpu())
+        if saved is not None:
+            self.model.load_state_dict(saved, strict=False)
+        logits = torch.cat(out)
+        t = self.temperature
+        if self.reliability is not None:
+            t = float(np.exp(self.reliability[0] + self.reliability[1] * mean_entropy(logits)))
+        return torch.softmax(logits / t, dim=1).numpy()

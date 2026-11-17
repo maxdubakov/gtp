@@ -38,7 +38,7 @@ from gtp.stage1 import strings as st
 from gtp.stage1.bprofile import grid
 from gtp.stage1.inference import PianoTranscription, transcribe_cached
 from gtp.stage1.inharmonicity import fuse_guitar
-from gtp.stage1.string_evidence import classifier_probs, physical, settings
+from gtp.stage1.string_evidence import ensemble_probs, physical, recording_windows, settings
 from gtp.stage2.fusion import decode_beam, jump_of, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.inference import load_checkpoint
 from gtp.stage2.metrics import aggregate_drift_buckets
@@ -65,6 +65,7 @@ def prf(tp, n_est, n_ref):
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'e2e'), config_name='index')
 def main(cfg):
+    assert cfg.adapt_bn in (None, 'recording', 'group'), cfg.adapt_bn
     device = auto_device()
     profiles, physics, envelope = settings(cfg.profiles, cfg.physics, cfg.envelope)
     index = REPO_ROOT / cfg.index_dir
@@ -89,9 +90,13 @@ def main(cfg):
         )
         assert runs, f'no classifier runs for {guitar}'
         classifiers = [st.StringClassifier.from_run(r, device) for r in runs]
+        for c in classifiers:
+            c.bn_prior = cfg.adapt_bn_prior
+            c.temperature = cfg.classifier_temperature or c.temperature
+            c.reliability = cfg.classifier_reliability
         for source, (_, sub) in itertools.product(cfg.inputs, group.groupby(list(cfg.calibrate_by), sort=False)):
             first = len(table)
-            probs, jobs = [], []
+            windows, note_pitches, jobs = [], [], []
             for r in sub.itertuples():
                 ref = [
                     {'pitch': int(n.pitch), 'start': n.onset, 'end': n.offset, 'string': int(n.string)}
@@ -124,13 +129,9 @@ def main(cfg):
                 onsets, pitches = [n['start'] for n in notes], [n['pitch'] for n in notes]
                 ends = [n['end'] for n in notes]
                 jobs.append(pool.submit(physical, REPO_ROOT / r.audio, onsets, ends, pitches, profiles, envelope))
-                p = (
-                    classifier_probs(REPO_ROOT / r.audio, onsets, pitches, classifiers)
-                    if cfg.use_classifier
-                    else classifiers[0].prior(pitches)
-                )
-                p = p**cfg.classifier_temper
-                probs.append(p / p.sum(axis=1, keepdims=True))
+                if cfg.use_classifier:
+                    windows.append(recording_windows(REPO_ROOT / r.audio, onsets, classifiers[0].feature))
+                note_pitches.append(pitches)
                 ids = list(range(len(table), len(table) + len(notes)))
                 piece = {
                     'source': 'index',
@@ -151,9 +152,20 @@ def main(cfg):
                      'rec': r.rec, 'pitch': n['pitch'], 'start': n['start'], 'ref_string': n['ref_string']}
                     for n in notes
                 ]  # fmt: skip
-            if not probs:
+            if not note_pitches:
                 continue
-            probs = np.concatenate(probs)
+            if cfg.use_classifier and cfg.adapt_bn == 'group':
+                group = np.concatenate(windows)
+                probs = ensemble_probs(group, np.concatenate(note_pitches), classifiers, group)
+            elif cfg.use_classifier:
+                probs = np.concatenate([
+                    ensemble_probs(w, p, classifiers, w if cfg.adapt_bn == 'recording' else None)
+                    for w, p in zip(windows, note_pitches, strict=True)
+                ])  # fmt: skip
+            else:
+                probs = classifiers[0].prior(np.concatenate(note_pitches))
+            probs = probs**cfg.classifier_temper
+            probs /= probs.sum(axis=1, keepdims=True)
             curves, levels = (np.concatenate(x) for x in zip(*(j.result() for j in jobs), strict=True))
             pitch = np.array([t['pitch'] for t in table[first:]])
             fused, const, family = fuse_guitar(probs, curves, grid(profiles), pitch, physics, levels, envelope)
