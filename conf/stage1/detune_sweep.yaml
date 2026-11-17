@@ -3,7 +3,7 @@ defaults:
   - override hydra/job_logging: none
 
 name: detune_sweep
-checkpoint: models/finetuned/z3_step_0055000.pth
+checkpoint: models/finetuned/z7_step_0052500.pth
 benchmarks: [guitarset, egdb]
 # Pitch moves in cents; each recording is played back 2^(cents/1200) times faster.
 cents: [-50, -25, -10, 0, 10, 25, 50]
@@ -16,6 +16,10 @@ device: null
 batch: 8
 # Model outputs per checkpoint, detune and recording; kept apart from benchmark.py's bench_cache.
 cache_dir: results/stage1/detune_cache
+# Needed by benchmarks.build for the val_<dataset> and re-timed GOAT suites.
+val_manifest: data/stage1_notes_z
+retimed_manifest: data/stage1_notes_z_refined
+goat_retimed: data/goat/test_retimed/notes.csv.gz
 
 hydra:
   run:

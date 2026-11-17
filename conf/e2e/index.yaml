@@ -8,7 +8,7 @@ splits: [val, test]
 # Restrict to these guitars (recordings.csv `guitar`); empty = all of the splits.
 guitars: []
 inputs: [stage1, gt]
-stage1_checkpoint: models/finetuned/z3_step_0055000.pth
+stage1_checkpoint: models/finetuned/z7_step_0052500.pth
 # Stage 1's recurrent layers run about six times faster on the CPU than on Apple's GPU.
 stage1_device: cpu
 # Stage 1's notes per recording are cached under <stage1_cache>/index_<checkpoint>/.
