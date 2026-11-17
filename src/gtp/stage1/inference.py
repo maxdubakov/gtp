@@ -8,7 +8,8 @@ import numpy as np
 import torch
 
 from gtp.log import trace
-from gtp.stage1.model.kong import Note_pedal, Regress_onset_offset_frame_velocity_CRNN
+from gtp.stage1.model.harmonic import note_model
+from gtp.stage1.model.kong import Note_pedal
 from gtp.stage1.model.utils import forward
 from gtp.stage1.postprocess import RegressionPostProcessor, write_events_to_midi
 
@@ -66,12 +67,8 @@ class PianoTranscription:
             )
             self.model.load_state_dict(state)
         else:
-            # Fine-tuned checkpoint (flat): note model only
-            self.model = Regress_onset_offset_frame_velocity_CRNN(
-                frames_per_second=self.frames_per_second,
-                classes_num=self.classes_num,
-            )
-            self.model.load_state_dict(state)
+            # Fine-tuned checkpoint (flat): note model only, with its harmonic branch if it has one
+            self.model = note_model(state)
 
         self.model.to(self.device)
         self.model.eval()

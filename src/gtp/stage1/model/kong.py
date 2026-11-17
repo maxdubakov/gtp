@@ -123,10 +123,11 @@ class AcousticModelCRnn8Dropout(nn.Module):
         init_gru(self.gru)
         init_layer(self.fc)
 
-    def forward(self, input):
+    def forward(self, input, extra=None):
         """
         Args:
           input: (batch_size, channels_num, time_steps, freq_bins)
+          extra: (batch_size, time_steps, 768) or None, added to the GRU input before its ReLU
 
         Outputs:
           output: (batch_size, time_steps, classes_num)
@@ -142,7 +143,10 @@ class AcousticModelCRnn8Dropout(nn.Module):
         x = F.dropout(x, p=0.2, training=self.training)
 
         x = x.transpose(1, 2).flatten(2)
-        x = F.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2))
+        x = self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2)
+        if extra is not None:
+            x = x + extra
+        x = F.relu(x)
         x = F.dropout(x, p=0.5, training=self.training, inplace=False)
 
         (x, _) = self.gru(x)
@@ -230,6 +234,9 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
         )
         self.frame_fc = nn.Linear(512, classes_num, bias=True)
 
+        # Optional harmonic.HarmonicBranch, attached by harmonic.note_model
+        self.harmonic = None
+
         self.init_weight()
 
     def init_weight(self):
@@ -253,17 +260,18 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
           }
         """
 
-        x = self.spectrogram_extractor(input)  # (batch_size, 1, time_steps, freq_bins)
-        x = self.logmel_extractor(x)  # (batch_size, 1, time_steps, mel_bins)
+        spec = self.spectrogram_extractor(input)  # (batch_size, 1, time_steps, freq_bins)
+        x = self.logmel_extractor(spec)  # (batch_size, 1, time_steps, mel_bins)
 
         x = x.transpose(1, 3)
         x = self.bn0(x)
         x = x.transpose(1, 3)
 
-        frame_output = self.frame_model(x)  # (batch_size, time_steps, classes_num)
-        reg_onset_output = self.reg_onset_model(x)  # (batch_size, time_steps, classes_num)
-        reg_offset_output = self.reg_offset_model(x)  # (batch_size, time_steps, classes_num)
-        velocity_output = self.velocity_model(x)  # (batch_size, time_steps, classes_num)
+        extra = self.harmonic(input, spec) if self.harmonic is not None else [None] * 4
+        frame_output = self.frame_model(x, extra[0])  # (batch_size, time_steps, classes_num)
+        reg_onset_output = self.reg_onset_model(x, extra[1])  # (batch_size, time_steps, classes_num)
+        reg_offset_output = self.reg_offset_model(x, extra[2])  # (batch_size, time_steps, classes_num)
+        velocity_output = self.velocity_model(x, extra[3])  # (batch_size, time_steps, classes_num)
 
         # Use velocities to condition onset regression
         x = torch.cat((reg_onset_output, (reg_onset_output**0.5) * velocity_output.detach()), dim=2)

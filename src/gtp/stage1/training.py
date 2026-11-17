@@ -3,7 +3,7 @@
 import numpy as np
 import torch
 
-from gtp.stage1.model.kong import Regress_onset_offset_frame_velocity_CRNN
+from gtp.stage1.model.harmonic import note_model
 
 TARGET_KEYS = [
     'reg_onset_roll',
@@ -25,20 +25,17 @@ def collate_fn(batch):
     return result
 
 
-def load_note_model(checkpoint_path):
+def load_note_model(checkpoint_path, harmonic=None):
     """Load the note model from either a pretrained or fine-tuned checkpoint.
 
     Pretrained checkpoints have nested format: checkpoint['model']['note_model'].
     Fine-tuned checkpoints have flat format: checkpoint['model'] is a state dict.
+    A checkpoint with a harmonic branch loads with it; `harmonic` (HarmonicBranch settings) adds a new one to a
+    checkpoint without.
 
     Returns (model, checkpoint) where checkpoint is the full dict (may be used
     by the caller to restore optimizer state and step count).
     """
-    model = Regress_onset_offset_frame_velocity_CRNN(frames_per_second=100, classes_num=88)
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     state = checkpoint['model']
-    if 'note_model' in state:
-        model.load_state_dict(state['note_model'])
-    else:
-        model.load_state_dict(state)
-    return model, checkpoint
+    return note_model(state.get('note_model', state), harmonic), checkpoint

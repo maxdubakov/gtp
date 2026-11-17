@@ -79,18 +79,25 @@ def main(cfg):
         info(f'segments per dataset { ({d: of.count(d) for d in sorted(set(of))}) }')
 
     val_loaders = {g: loader(s, False) for g, s in val.items()}
-    model, ckpt = load_note_model(REPO_ROOT / (cfg.resume or cfg.init))
+    h = cfg.harmonic
+    branch = dict(channels=h.channels, blocks=h.blocks, harmonics=h.harmonics, out_channels=h.out_channels)
+    model, ckpt = load_note_model(REPO_ROOT / (cfg.resume or cfg.init), branch if h.enabled else None)
     model.to(device).train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, amsgrad=True)
+    groups = [([p for n, p in model.named_parameters() if not n.startswith('harmonic.')], cfg.lr)]
+    if model.harmonic is not None:
+        groups.append((list(model.harmonic.parameters()), h.lr or cfg.lr))
+        info(f'harmonic branch: {sum(p.numel() for p in groups[1][0])} parameters, lr {groups[1][1]:.2e}')
+    optimizer = torch.optim.Adam([{'params': ps, 'lr': lr} for ps, lr in groups], amsgrad=True)
     step = 0
     if cfg.resume:
         step = int(ckpt['iteration'])
         if 'optimizer' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer'])
         else:
-            for group in optimizer.param_groups:
-                group['lr'] = cfg.lr * cfg.lr_decay ** (step // cfg.lr_decay_steps)
-        info(f'resumed {cfg.resume} at step {step}, lr {optimizer.param_groups[0]["lr"]:.2e}')
+            for group, (_, lr) in zip(optimizer.param_groups, groups, strict=True):
+                group['lr'] = lr * cfg.lr_decay ** (step // cfg.lr_decay_steps)
+        lrs = ', '.join(f'{g["lr"]:.2e}' for g in optimizer.param_groups)
+        info(f'resumed {cfg.resume} at step {step}, lr {lrs}')
     (run.dir / 'checkpoints').mkdir(exist_ok=True)
 
     def save(step, final=False):

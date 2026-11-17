@@ -35,6 +35,18 @@ pitch_shift:
   max_semitones: 2
   # A shifted segment is also detuned by a uniform draw within this many cents; its labels keep the whole semitones.
   detune_cents: 0
+# Harmonic branch (src/gtp/stage1/model/harmonic.py): a log-frequency trunk with harmonic convolutions at `blocks`
+# depths, added to each sub-model's GRU input through zero-initialised projections. A checkpoint that has one always
+# loads with it; `enabled` adds a new one to a checkpoint that has none.
+harmonic:
+  enabled: false
+  channels: 32
+  blocks: 4
+  # Highest harmonic aggregated (with the matching subharmonics).
+  harmonics: 8
+  out_channels: 8
+  # Learning rate of the branch's parameters; null = lr. Decays with the same schedule.
+  lr: null
 # Share of training segments drawn from each dataset (relative; datasets left out get 1). null = in proportion to
 # their hours.
 dataset_weights:
