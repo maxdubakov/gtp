@@ -44,3 +44,13 @@ def spectrogram(y, sr, note, start, cfg, path):
     box = ax.get_position()
     plt.close(fig)
     return {'x0': round(box.x0, 4), 'x1': round(box.x1, 4), 'y0': round(1 - box.y1, 4), 'y1': round(1 - box.y0, 4)}
+
+
+def labels_around(notes, note, before_s, after_s):
+    """The recording's labelled notes sounding in the clip around `note`, with times relative to its onset."""
+    near = notes[(notes['offset'] > note.onset - before_s) & (notes['onset'] < note.onset + after_s)]
+    return [
+        {'name': librosa.midi_to_note(int(m.pitch), unicode=False), 'at': round(float(m.onset - note.onset), 2),
+         'string': int(m.string), 'fret': int(m.fret), 'marks': m.techniques if isinstance(m.techniques, str) else ''}
+        for m in near.sort_values('onset').itertuples()
+    ]  # fmt: skip

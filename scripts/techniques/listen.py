@@ -26,7 +26,7 @@ from omegaconf import OmegaConf
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
 from gtp.log import info
-from gtp.stage1.listening import clip, spectrogram
+from gtp.stage1.listening import clip, labels_around, spectrogram
 from gtp.stage1.string_data import load_cached_index
 from gtp.stage1.strings import HOP, PRE_FRAMES, SAMPLE_RATE
 from gtp.stage1.techniques import class_of
@@ -132,8 +132,6 @@ def main(cfg):
             sf.write(f'{out}/{cid}_{chain}.mp3', seg.astype(np.float32), sr, format='MP3')
             if axes is None:
                 axes = spectrogram(seg, sr, m, start, cfg, f'{out}/{cid}.png')
-        around = by_rec[n.rec]
-        around = around[(around['offset'] > n.onset - cfg.before_s) & (around['onset'] < n.onset + cfg.after_s)]
         clips.append({
             'id': cid, 'reference': reference, 'dataset': n.dataset, 'guitar': n.guitar, 'rec': n.rec,
             'content': n.content, 'onset': round(float(n.onset), 3), 'duration': round(float(n.offset - n.onset), 3),
@@ -146,12 +144,7 @@ def main(cfg):
                 for chain, m in takes.items()
             },
             'lead_s': cfg.before_s, 'axes': axes, 'span': [-cfg.before_s, cfg.after_s],
-            'labels': [
-                {'name': librosa.midi_to_note(int(m.pitch), unicode=False), 'at': round(float(m.onset - n.onset), 2),
-                 'string': int(m.string), 'fret': int(m.fret),
-                 'marks': m.techniques if isinstance(m.techniques, str) else ''}
-                for m in around.sort_values('onset').itertuples()
-            ],
+            'labels': labels_around(by_rec[n.rec], n, cfg.before_s, cfg.after_s),
         })  # fmt: skip
     summary = {
         'classes': classes,

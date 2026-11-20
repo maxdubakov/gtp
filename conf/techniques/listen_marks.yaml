@@ -1,0 +1,48 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: marks
+index_dir: data/technique_index
+datasets: [goat, idmt]
+# GOAT's test player stays unheard.
+splits: [train, val]
+# Marks that do not change how a note is started or what its pitch does; a note's `mark` is what is left.
+ignore_marks: [let_ring, hammer]
+# Clips per group: `n` notes of `dataset` whose mark is exactly `mark` ('' for none). With `follows`, only notes
+# that do (or do not) start within `follows_s` of a picked note at another fret of their string.
+groups:
+  - {name: hammered, dataset: goat, mark: hammered, n: 18}
+  - {name: slide, dataset: goat, mark: slide, n: 14}
+  - {name: bend, dataset: goat, mark: bend, n: 10}
+  - {name: plain_follows, dataset: goat, mark: '', follows: true, n: 10}
+  - {name: plain, dataset: goat, mark: '', follows: false, n: 4}
+follows_s: 0.4
+max_per_rec: 2
+# Two picked notes of one recording are at least this far apart.
+min_gap_s: 1.0
+# Notes starting within this of each other count as struck together.
+together_s: 0.03
+before_s: 1.2
+after_s: 1.8
+fmin_midi: 36
+fmax_midi: 96
+seed: 0
+
+pitch:
+  sr: 22050
+  frame: 2048
+  hop: 256
+  # The pitch is searched from `below` semitones under the tab pitch to `above` over it.
+  below: 1.5
+  above: 4.5
+  # Notes shorter than `min_s` are not measured; a longer note is measured over its first `max_s`.
+  min_s: 0.15
+  max_s: 1.5
+  min_frames: 5
+  plain_per_dataset: 800
+  thresholds: [0.5, 0.8]
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/listen/techniques/${now:%Y-%m-%d_%H-%M-%S}_${name}
