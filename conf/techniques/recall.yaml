@@ -1,0 +1,29 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+stage1_checkpoint: models/finetuned/z8_step_0045000.pth
+# The note model's validation recordings: the Stage 1 manifest's `split` entries, direct recordings only.
+manifest: data/stage1_notes_z_refined/manifest.jsonl
+split: val
+datasets: [idmt, guitar_techs, goat]
+out: results/techniques/recall_val.csv
+
+# A label counts as found by a note of its pitch starting within this of it.
+onset_tolerance: 0.05
+# Labels that are not timed to the audio (IDMT, Guitar-TECHS) are first moved by the recording's median distance
+# to the transcribed notes of the same pitch, measured over pairs closer than this.
+max_lag_s: 0.3
+# A bend or slide label can sit this many semitones from what sounds.
+near_pitch: 2
+
+goat_dir: data/goat/GOAT
+# Matching of the tab to the aligned MIDI, as conf/strings/goat_index.yaml.
+cluster_gap_s: 0.03
+band: 400
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

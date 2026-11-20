@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+datasets: [idmt, guitar_techs, goat, gaps, dadagp]
+out: results/techniques/survey.csv
+
+goat_dir: data/goat/GOAT
+# Train items GOAT aligned worse than this are not in the note model's training data (conf/stage1/notes_dataset.yaml).
+goat_min_alignment: 0.7
+# Matching of the tab to the aligned MIDI, as conf/strings/goat_index.yaml.
+cluster_gap_s: 0.03
+band: 400
+
+gaps_dir: data/gaps_hf
+
+# Tabs without audio: token files drawn at random, to see how often tab writers mark each technique.
+dadagp_dir: data/DadaGP-v1.1
+dadagp_files: 3000
+seed: 0
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
