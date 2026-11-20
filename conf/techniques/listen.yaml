@@ -6,6 +6,8 @@ name: techniques
 # The classifier run whose validation predictions (val_logits.npz) are sampled.
 run: results/techniques/runs/2026-11-20_11-03-31_muted3
 index_dir: data/technique_index
+# Marks the run left out of training and scoring (its `other_marks`).
+other_marks: [bend, slide, hammered, vibrato, harmonic, pinch_harmonic, ghost, tie, grace, tremolo_picking, whammy]
 feature: logmel229
 # Clips per group of validation notes: `n` notes of `dataset` on `chain` that the labels call `label` and the
 # classifier called `predicted`, optionally from one kind of recording (`content`). Notes of `reference` groups are

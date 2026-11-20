@@ -5,6 +5,10 @@ defaults:
 
 index_dir: data/string_index
 feature: logmel229
+# A cache with a window of its own, named after this; null = the string classifier's window, named after the feature.
+cache: null
+pre_frames: null
+post_frames: null
 # Augmented renders per training recording, on top of the real one.
 augment: 4
 # And this many more through far-field chains (a distant microphone in a reverberant, noisy room).

@@ -3,14 +3,36 @@ defaults:
   - override hydra/job_logging: none
 
 name: techniques
-index_dir: data/technique_index
+index_dir: data/technique_index2
 feature: logmel229
-window_ms: 400
-# The note's class is the last of these marks it carries (a palm-muted dead note is dead); `plain` is a note with
-# none of them and no mark in `other_marks`.
-classes: [plain, palm_mute, dead]
-# Notes with one of these marks (and none of `classes`) are left out: they are neither plain nor a class.
-other_marks: [bend, slide, hammered, vibrato, harmonic, pinch_harmonic, ghost, tie, grace, tremolo_picking, whammy]
+# The window cache: 16 frames (0.19 s) before the onset, to hear the note before, and 68 (0.79 s) after, to hear
+# the pitch move.
+cache: logmel229_wide
+# What the classifier says about a note. A head's class is the last of its classes one of whose marks the note
+# carries, the first class for a note with none; a note with a mark in `unknown` has no label for the head.
+heads:
+  muting:
+    classes: {plain: [], palm_mute: [palm_mute], dead: [dead]}
+    unknown: [harmonic, pinch_harmonic, ghost, tie]
+  start:
+    classes: {picked: [], legato: [hammered], slide: [slid, slide_in]}
+    unknown: [dead, tie, grace, tapping, harmonic, pinch_harmonic]
+  pitch:
+    classes: {steady: [], vibrato: [vibrato], bend: [bend]}
+    unknown: [dead, tie, bend_take, slide_out, whammy, trill, tremolo_picking, harmonic, pinch_harmonic]
+# Labels that are missing or not trusted, so the notes do not count for these heads in training or scoring:
+# GOAT's dead marks are mostly not played dead (listening test, 20 Nov); an IDMT slide is one note whose pitch
+# glides, not a note slid into.
+unlabelled:
+  - {dataset: goat, marks: [dead], heads: [muting]}
+  - {dataset: idmt, marks: [slide], heads: [start, pitch]}
+# Players whose recordings validate instead of train. All of GOAT's own validation and test pieces are played by
+# player1, who also plays most of its training pieces; player2 (32 pieces on another guitar) is a new player.
+validate_on:
+  - {dataset: goat, player: player2}
+# Partials of the note's pitch marked in a second input channel, so the network knows which of the sounding notes
+# it is asked about; 0 = no such channel.
+pitch_harmonics: 8
 # Cached variants to train on (0 real, then augmented, then far-field renders); null = all.
 variants: null
 # Datasets and chains left out of training (their validation recordings are still scored).
@@ -27,8 +49,7 @@ seed: 0
 model:
   _target_: gtp.stage1.strings.StringNet
   width: 1.0
-  # The pitch of a dead note is not known when the classifier is used, so it reads the audio alone.
-  use_pitch: false
+  use_pitch: true
   pool: flatten
   pool_first: false
 

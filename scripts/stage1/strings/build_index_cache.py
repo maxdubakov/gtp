@@ -4,7 +4,8 @@ Every note gets its real window (variant 0). Training recordings also get `augme
 through its own random chain (chains.py) drawn from a seed fixed by (recording, variant), so a rebuild is
 identical and a window can be traced back to its chain; then `augment_far` more through far-field chains
 (variants augment+1 and up). Val and test stay real recordings only, and so do the room recordings, which
-are far-field already.
+are far-field already. With `cache` set, the windows take `pre_frames` before the onset and `post_frames` after
+it in place of the string classifier's, and the files are named after `cache` in place of the feature.
 
 Writes to <index_dir>/cache/:
   <feature>.npy        (rows, 1, freq, PRE+MAX_POST frames) float16
@@ -31,7 +32,7 @@ from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage1 import chains
 from gtp.stage1.string_data import ROOM_CHAINS
-from gtp.stage1.strings import SAMPLE_RATE, cache_layout, note_windows, spectrogram
+from gtp.stage1.strings import MAX_POST_FRAMES, PRE_FRAMES, SAMPLE_RATE, cache_layout, note_windows, spectrogram
 from gtp.track import git_state
 
 
@@ -40,7 +41,7 @@ def chain_seed(rec, variant):
 
 
 def recording_windows(job):
-    rec, audio, chain, onsets, variants, first_far, feature = job
+    rec, audio, chain, onsets, variants, first_far, feature, pre, post = job
     y, _ = librosa.load(REPO_ROOT / audio, sr=SAMPLE_RATE, mono=True)
     out, params = [], []
     for v in variants:
@@ -51,7 +52,7 @@ def recording_windows(job):
             p = chains.draw(rng, chains.stages_for(chain, far=v >= first_far))
             x = chains.render(y, SAMPLE_RATE, p, rng)
             params.append({'rec': rec, 'variant': v, 'chain': p})
-        out.append(note_windows(spectrogram(x[None], feature), onsets).astype(np.float16))
+        out.append(note_windows(spectrogram(x[None], feature), onsets, pre, post).astype(np.float16))
     return out, params
 
 
@@ -63,13 +64,16 @@ def main(cfg):
     if cfg.limit:
         recs = recs.groupby('dataset').head(cfg.limit)
     by_rec = notes.groupby('rec').indices
+    pre, post = (cfg.pre_frames, cfg.post_frames) if cfg.cache else (PRE_FRAMES, MAX_POST_FRAMES)
+    name = cfg.cache or cfg.feature
 
     jobs, rows = [], []
     for r in recs.itertuples():
         idx = by_rec[r.rec]
         augmented = r.split == 'train' and r.chain not in ROOM_CHAINS
         variants = list(range(1 + (cfg.augment + cfg.augment_far if augmented else 0)))
-        jobs.append((r.rec, r.audio, r.chain, notes['onset'].to_numpy()[idx], variants, cfg.augment + 1, cfg.feature))
+        onsets = notes['onset'].to_numpy()[idx]
+        jobs.append((r.rec, r.audio, r.chain, onsets, variants, cfg.augment + 1, cfg.feature, pre, post))
         rows += [(i, v) for v in variants for i in idx]
     rows = pd.DataFrame(rows, columns=['note', 'variant'])
     info(
@@ -78,10 +82,10 @@ def main(cfg):
 
     out_dir = index / 'cache'
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f'{cfg.feature}.npy'
+    path = out_dir / f'{name}.npy'
     tmp = path.with_suffix('.tmp.npy')
     x, k = None, 0
-    with ProcessPoolExecutor(cfg.workers) as pool, open(out_dir / f'{cfg.feature}_chains.jsonl', 'w') as log:
+    with ProcessPoolExecutor(cfg.workers) as pool, open(out_dir / f'{name}_chains.jsonl', 'w') as log:
         for i, (windows, params) in enumerate(pool.map(recording_windows, jobs, chunksize=8)):
             if x is None:
                 x = np.lib.format.open_memmap(
@@ -97,14 +101,14 @@ def main(cfg):
     x.flush()
     del x
     tmp.rename(path)
-    rows.to_csv(out_dir / f'{cfg.feature}_rows.csv.gz', index=False)
+    rows.to_csv(out_dir / f'{name}_rows.csv.gz', index=False)
     sha, diff = git_state()
     meta = {
         'feature': cfg.feature,
         'augment': cfg.augment,
         'augment_far': cfg.augment_far,
         'limit': cfg.limit,
-        'layout': cache_layout(),
+        'layout': cache_layout(pre, post),
         'n_windows': len(rows),
         'librosa': librosa.__version__,
         'git_sha': sha,

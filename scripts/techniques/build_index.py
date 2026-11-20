@@ -5,7 +5,10 @@ Recordings and note times come from indexes that are already aligned to the audi
   * IDMT: its per-note styles, and the notes the string index leaves out (dead notes, bends, slides, harmonics),
     placed with the recording's shift; a recording of such notes only is not in the string index and takes the
     median shift of its guitar's recordings;
-  * Guitar-TECHS: one technique per take, from the take's name;
+  * Guitar-TECHS: one technique per take, from the take's name. Its bend takes are not in the string index; they
+    are added (direct and amp microphone) with their guitar's median shift. Their pickup labels cut a bend into a
+    note per semitone crossed, so each run of notes following one another on a string is joined into one `bend`
+    note at the run's first pitch; a note in no run is marked `bend_take`, a bend the labels do not show;
   * GOAT: the tab's marks, as build_goat_index.py matched them to the audio.
 Splits are the sources' own: by guitar (IDMT), by player (Guitar-TECHS, GOAT's test player), GOAT validation by item.
 
@@ -13,11 +16,12 @@ Writes <out_dir>/recordings.csv and notes.csv.gz; scripts/stage1/strings/build_i
 
 Usage:
   uv run scripts/stage1/strings/build_goat_index.py manifest=data/stage1_notes_z_refined/manifest.jsonl \
-      "splits=[train,val]" out_dir=data/technique_index/goat_trainval
+      "splits=[train,val]" out_dir=data/technique_index2/goat_trainval
   uv run scripts/stage1/strings/build_goat_index.py retimed_notes=data/goat/test_retimed/notes.csv.gz \
-      out_dir=data/technique_index/goat_test
+      out_dir=data/technique_index2/goat_test
   uv run scripts/techniques/build_index.py
-  uv run scripts/stage1/strings/build_index_cache.py index_dir=data/technique_index augment=2 augment_far=1
+  uv run scripts/stage1/strings/build_index_cache.py index_dir=data/technique_index2 augment=1 augment_far=1 \
+      cache=logmel229_wide pre_frames=16 post_frames=68
 """
 
 import re
@@ -35,6 +39,7 @@ from gtp.stage1 import string_data
 
 IDMT_STYLES = {'MU': 'palm_mute', 'BE': 'bend', 'SL': 'slide', 'VI': 'vibrato', 'HA': 'harmonic', 'DN': 'dead'}
 TECHS_TAKES = {'PalmMute': 'palm_mute', 'Vibrato': 'vibrato'}
+TECHS_BEND_TAKE = 'Bendings'
 RECORDING_COLUMNS = ['rec', 'dataset', 'audio', 'player', 'guitar', 'chain', 'content', 'split', 'duration']
 
 
@@ -78,6 +83,32 @@ def idmt_notes(rec, audio, notes, match_s):
     return pd.concat([notes, pd.DataFrame(extra)], ignore_index=True)
 
 
+def joined_bends(notes, gap_s):
+    """A bend take's notes with each run on a string as one: a note continues the run when it starts within `gap_s`
+    of the last one's end, no more than a whole tone from it."""
+    out = []
+    for _, on_string in notes.sort_values('onset').groupby(['rec', 'string'], sort=False):
+        apart = (on_string['onset'] - on_string['offset'].shift() > gap_s) | (on_string['pitch'].diff().abs() > 2)
+        run = apart.cumsum()
+        for _, g in on_string.groupby(run):
+            first = g.iloc[0]
+            out.append({**first, 'offset': g['offset'].max(), 'techniques': 'bend' if len(g) > 1 else 'bend_take'})
+    return pd.DataFrame(out)
+
+
+def techs_bend_takes(recs, cfg):
+    """Recordings and notes of Guitar-TECHS's bend takes, shifted as their guitar's indexed recordings are."""
+    every, notes = string_data.guitar_techs()
+    takes = every[every['rec'].str.endswith(f'/{TECHS_BEND_TAKE}')].copy()
+    takes['duration'] = [sf.info(str(REPO_ROOT / a)).duration for a in takes['audio']]
+    shift = takes['guitar'].map(recs[recs['dataset'] == 'guitar_techs'].groupby('guitar')['shift_ms'].median() / 1000)
+    notes = notes[notes['rec'].isin(takes['rec'])]
+    notes = notes[(notes['fret'] >= 0) & (notes['fret'] <= string_data.MAX_FRET)]
+    notes = joined_bends(notes, cfg.bend_gap_s)
+    moved = notes['rec'].map(shift.set_axis(takes['rec']))
+    return takes, notes.assign(onset=notes['onset'] + moved, offset=notes['offset'] + moved)
+
+
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'techniques'), config_name='index')
 def main(cfg):
     base = REPO_ROOT / cfg.string_index
@@ -102,6 +133,10 @@ def main(cfg):
             events = idmt_events(r.audio)
             parts.append(events.assign(rec=r.rec, onset=events['onset'] + shift, offset=events['offset'] + shift))
         recs = pd.concat([recs, left_out])
+    if 'guitar_techs' in cfg.datasets:
+        takes, bends = techs_bend_takes(recs, cfg)
+        recs = pd.concat([recs, takes])
+        parts.append(bends)
     recs = [recs[RECORDING_COLUMNS]]
     for d in cfg.goat_indexes:
         goat = pd.read_csv(REPO_ROOT / d / 'recordings.csv')

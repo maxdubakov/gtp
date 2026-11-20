@@ -406,17 +406,19 @@ def load_index():
     return pd.read_csv(INDEX_DIR / 'recordings.csv'), pd.read_csv(INDEX_DIR / 'notes.csv.gz')
 
 
-def load_cached_index(index_dir, feature):
-    """Notes joined with their recordings, plus the feature cache: its row table, windows (memmap) and metadata."""
+def load_cached_index(index_dir, feature, cache=None):
+    """Notes joined with their recordings, plus the feature cache: its row table, windows (memmap) and metadata.
+    `cache` names a cache built with a window of its own (build_index_cache.py's `cache`); its metadata says which."""
     index = REPO_ROOT / index_dir
     recs = pd.read_csv(index / 'recordings.csv')
     notes = pd.read_csv(index / 'notes.csv.gz').join(
         recs.set_index('rec')[['dataset', 'player', 'guitar', 'chain', 'content', 'split']], on='rec'
     )
-    cache = index / 'cache'
-    meta = json.loads((cache / f'{feature}.json').read_text())
-    rows = pd.read_csv(cache / f'{feature}_rows.csv.gz')
-    if meta['layout'] != cache_layout() or rows['note'].max() >= len(notes):
-        raise ValueError(f'{cache} is stale against the index or the layout: rebuild it')
-    x = np.load(cache / f'{feature}.npy', mmap_mode='r')
+    stem = index / 'cache' / (cache or feature)
+    meta = json.loads(stem.with_suffix('.json').read_text())
+    rows = pd.read_csv(f'{stem}_rows.csv.gz')
+    layout = cache_layout(meta['layout']['pre_frames'], meta['layout']['max_post_frames']) if cache else cache_layout()
+    if meta['feature'] != feature or meta['layout'] != layout or rows['note'].max() >= len(notes):
+        raise ValueError(f'{stem} is stale against the index or the layout: rebuild it')
+    x = np.load(stem.with_suffix('.npy'), mmap_mode='r')
     return notes, rows, x, meta

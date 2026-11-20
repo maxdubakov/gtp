@@ -1,12 +1,14 @@
-"""Train a per-note classifier of playing technique on the technique index (build_index.py and its window cache).
+"""Train a per-note classifier of playing techniques on the technique index (build_index.py and its window cache).
 
-The input is the spectrogram window around a labelled note's onset, as for the string classifier; the output is one
-of `classes`. Note times are the labels' own, so this measures whether the classes can be told apart when the note
-is given, apart from whether the note model finds it. Splits are the index's (by guitar or player; GOAT validation
-by item). No checkpoint is selected: the last epoch is kept.
+The input is the spectrogram window around a labelled note's onset; the output is one class per head (`heads`):
+how the note is muted, how it starts, what its pitch does. A note can lack a label for a head (an unknown mark, a
+dataset whose labels for it are missing or not trusted); it then counts for the other heads only. Note times are
+the labels' own, so this measures whether the classes can be told apart when the note is given, apart from whether
+the note model finds it. Splits are the index's (by guitar or player; GOAT validation by item), with the players of
+`validate_on` moved from training to validation. No checkpoint is selected: the last epoch is kept.
 
-Reports, per validation dataset and chain, each class's precision, recall and F1 and their mean (macro F1); the test
-split only with `report_test=true`.
+Reports, per head, validation dataset and chain, each class's precision, recall and F1 and their mean (macro F1);
+the test split only with `report_test=true`.
 
 Usage:
   uv run scripts/techniques/train.py
@@ -29,26 +31,26 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.strings import PRE_FRAMES, post_frames
-from gtp.stage1.techniques import class_of
+from gtp.stage1.techniques import head_labels, pitch_comb
 from gtp.track import start_run
 
 
 def scores(labels, predicted, classes):
-    """Per-class precision, recall, F1 and count, and the macro F1 over the classes present."""
+    """Per-class precision, recall, F1 and count over the labelled notes, and the macro F1 over the classes present."""
+    labels, predicted = labels[labels >= 0], predicted[labels >= 0]
     out = {}
     for k, name in enumerate(classes):
         tp = int(((predicted == k) & (labels == k)).sum())
         p, r = tp / max(int((predicted == k).sum()), 1), tp / max(int((labels == k).sum()), 1)
         out[name] = {'n': int((labels == k).sum()), 'P': p, 'R': r, 'F1': 2 * p * r / max(p + r, 1e-9)}
     present = [m['F1'] for m in out.values() if m['n']]
-    return out | {'macro_F1': float(np.mean(present)), 'accuracy': float((predicted == labels).mean())}
+    return out | {'macro_F1': float(np.mean(present)) if present else float('nan')}
 
 
 def table(report, classes):
     rows = []
     for group, m in report.items():
-        row = {'group': group, 'macro F1': m['macro_F1'], 'accuracy': m['accuracy']}
+        row = {'group': group, 'macro F1': m['macro_F1']}
         for c in classes:
             row |= {f'{c} n': m[c]['n'], f'{c} P': m[c]['P'], f'{c} R': m[c]['R']}
         rows.append(row)
@@ -61,13 +63,16 @@ def main(cfg):
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     device = auto_device()
-    classes = list(cfg.classes)
-    notes, rows, x, cache_meta = load_cached_index(cfg.index_dir, cfg.feature)
-    label = class_of(notes['techniques'], classes, list(cfg.other_marks))
+    heads = {name: list(head.classes) for name, head in cfg.heads.items()}
+    notes, rows, x, cache_meta = load_cached_index(cfg.index_dir, cfg.feature, cfg.cache)
+    for held in cfg.validate_on:
+        notes.loc[(notes['dataset'] == held.dataset) & (notes['player'] == held.player), 'split'] = 'val'
+    label = np.stack(list(head_labels(notes, cfg.heads, cfg.unlabelled).values()), axis=1)
     note = rows['note'].to_numpy()
     split, real = notes['split'].to_numpy()[note], rows['variant'].to_numpy() == 0
+    labelled = (label[note] >= 0).any(axis=1)
     trainable = (
-        (label[note] >= 0)
+        labelled
         & ~notes['dataset'].isin(list(cfg.exclude_datasets)).to_numpy()[note]
         & ~notes['chain'].isin(list(cfg.exclude_chains)).to_numpy()[note]
     )
@@ -75,24 +80,24 @@ def main(cfg):
         trainable &= rows['variant'].isin(list(cfg.variants)).to_numpy()
     idx = {'train': np.flatnonzero(trainable & (split == 'train'))}
     for k in ['val'] + (['test'] if cfg.report_test else []):
-        idx[k] = np.flatnonzero(real & (split == k) & (label[note] >= 0))
+        idx[k] = np.flatnonzero(real & (split == k) & labelled)
     if cfg.limit:
         idx['train'] = np.sort(np.random.permutation(idx['train'])[: cfg.limit])
     sizes = {k: len(v) for k, v in idx.items()}
     run = start_run(cfg, job_type='techniques', device=device, extra={'cache': cache_meta, 'windows': sizes})
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')
 
-    n_frames = PRE_FRAMES + post_frames(cfg.window_ms)
     t0 = time.time()
+    pitch = torch.tensor(notes['pitch'].to_numpy())
     data = {}
     for k, v in idx.items():
-        xs = torch.empty((len(v), *x.shape[1:3], n_frames), dtype=torch.float16, device=device)
+        xs = torch.empty((len(v), *x.shape[1:]), dtype=torch.float16, device=device)
         for i in range(0, len(v), 8192):
-            xs[i : i + 8192] = torch.from_numpy(np.ascontiguousarray(x[v[i : i + 8192], ..., :n_frames])).to(device)
-        data[k] = (xs, torch.from_numpy(label[note[v]]).to(device))
-    info(f'windows {sizes} on {device} in {time.time() - t0:.0f}s')
+            xs[i : i + 8192] = torch.from_numpy(np.ascontiguousarray(x[v[i : i + 8192]])).to(device)
+        data[k] = (xs, pitch[note[v]].to(device), torch.from_numpy(label[note[v]]).to(device))
+    info(f'windows {sizes} of {x.shape[2]} x {x.shape[3]} on {device} in {time.time() - t0:.0f}s')
 
-    xs, ys = data['train']
+    xs, _, ys = data['train']
     total, total_sq = np.zeros(xs.shape[2]), np.zeros(xs.shape[2])
     for i in range(0, len(xs), 8192):
         b = xs[i : i + 8192].float()
@@ -102,35 +107,50 @@ def main(cfg):
     mean = torch.from_numpy(total / count).float().to(device)[None, None, :, None]
     std = torch.from_numpy(np.sqrt(np.maximum(total_sq / count - (total / count) ** 2, 1e-6))).float().to(device)
     std = std[None, None, :, None]
-    share = torch.bincount(ys, minlength=len(classes)).float() / len(ys)
-    weight = share.clamp_min(1e-6) ** -cfg.class_weight_power
-    weight = weight / (weight * share).sum()
-    info(f'training share per class {dict(zip(classes, share.tolist(), strict=True))}, loss weights {weight.tolist()}')
+    weights = []
+    for h, (name, classes) in enumerate(heads.items()):
+        share = torch.bincount(ys[ys[:, h] >= 0, h], minlength=len(classes)).float()
+        share = share / share.sum()
+        weight = share.clamp_min(1e-6) ** -cfg.class_weight_power
+        weights.append(weight / (weight * share).sum())
+        info(f'{name}: training share {dict(zip(classes, [round(v, 4) for v in share.tolist()], strict=True))}')
+    comb = torch.from_numpy(pitch_comb(x.shape[2], cfg.pitch_harmonics)).to(device) if cfg.pitch_harmonics else None
 
     def batches(k, shuffle=False):
-        xs, ys = data[k]
+        xs, ps, ys = data[k]
         order = torch.randperm(len(xs), device=device) if shuffle else torch.arange(len(xs), device=device)
         for i in range(0, len(xs), cfg.optim.batch):
             b = order[i : i + cfg.optim.batch]
-            yield (xs[b].float() - mean) / std, ys[b]
+            xb = (xs[b].float() - mean) / std
+            if comb is not None:
+                xb = torch.cat([xb, comb[ps[b]][:, None, :, None].expand(-1, 1, -1, xb.shape[3])], dim=1)
+            yield xb, ps[b], ys[b]
 
+    sizes_of = [len(c) for c in heads.values()]
     model = instantiate(
-        cfg.model, in_channels=x.shape[1], n_freq=x.shape[2], n_frames=n_frames, n_classes=len(classes)
+        cfg.model,
+        in_channels=x.shape[1] + (comb is not None),
+        n_freq=x.shape[2],
+        n_frames=x.shape[3],
+        n_classes=sum(sizes_of),
     ).to(device)
-    every = torch.ones(1, len(classes), dtype=torch.bool, device=device)
+    every = torch.ones(1, sum(sizes_of), dtype=torch.bool, device=device)
 
     def logits_of(k):
         model.eval()
         with torch.no_grad():
-            return torch.cat([model(xb, None, every).cpu() for xb, _ in batches(k)])
+            return torch.cat([model(xb, pb, every).cpu() for xb, pb, _ in batches(k)]).split(sizes_of, dim=1)
 
     def report(k):
         frame = notes.iloc[note[idx[k]]].reset_index(drop=True)
-        predicted, labels = logits_of(k).argmax(dim=1).numpy(), label[note[idx[k]]]
-        out = {'all': scores(labels, predicted, classes)}
-        for keys in (['dataset'], ['dataset', 'chain']):
-            for name, g in frame.groupby(keys, sort=True):
-                out['/'.join(name)] = scores(labels[g.index], predicted[g.index], classes)
+        out = {}
+        for h, ((name, classes), logits) in enumerate(zip(heads.items(), logits_of(k), strict=True)):
+            predicted, labels = logits.argmax(dim=1).numpy(), label[note[idx[k]], h]
+            out[name] = {'all': scores(labels, predicted, classes)}
+            for keys in (['dataset'], ['dataset', 'player', 'chain']):
+                for group, g in frame.groupby(keys, sort=True):
+                    if (labels[g.index] >= 0).any():
+                        out[name]['/'.join(group)] = scores(labels[g.index], predicted[g.index], classes)
         return out
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
@@ -140,29 +160,36 @@ def main(cfg):
     for epoch in range(cfg.optim.epochs):
         model.train()
         t0, loss_sum, n_batches = time.time(), 0.0, 0
-        for xb, yb in batches('train', shuffle=True):
-            loss = F.cross_entropy(model(xb, None, every), yb, weight=weight)
+        for xb, pb, yb in batches('train', shuffle=True):
+            parts = model(xb, pb, every).split(sizes_of, dim=1)
+            loss = sum(
+                F.cross_entropy(part, yb[:, h], weight=weights[h], ignore_index=-1)
+                for h, part in enumerate(parts)
+                if (yb[:, h] >= 0).any()
+            )
             opt.zero_grad()
             loss.backward()
             opt.step()
             sched.step()
             loss_sum, n_batches = loss_sum + loss.item(), n_batches + 1
         val = report('val')
-        per = {k: round(v['macro_F1'], 3) for k, v in val.items() if k.count('/') == 0}
+        per = {name: round(m['all']['macro_F1'], 3) for name, m in val.items()}
         history.append({'epoch': epoch, 'train_loss': loss_sum / n_batches, 'val_macro_F1': per})
         run.log({'train_loss': loss_sum / n_batches, **{f'val_macro_F1/{k}': v for k, v in per.items()}}, step=epoch)
         info(f'epoch {epoch:2d} loss {loss_sum / n_batches:.3f} val macro F1 {per} ({time.time() - t0:.0f}s)')
 
     torch.save(model.state_dict(), run.dir / 'model.pt')
     np.savez(run.dir / 'classifier.npz', mean=mean.cpu().numpy(), std=std.cpu().numpy())
-    metrics = {'classes': classes, 'windows': sizes, 'history': history}
+    metrics = {'heads': heads, 'windows': sizes, 'history': history}
     for k in idx:
         if k != 'train':
             metrics[k] = report(k)
-            np.savez(run.dir / f'{k}_logits.npz', note=note[idx[k]], logits=logits_of(k).numpy())
-            info(f'{k}\n{table(metrics[k], classes)}')
+            logits = dict(zip(heads, (part.numpy() for part in logits_of(k)), strict=True))
+            np.savez(run.dir / f'{k}_logits.npz', note=note[idx[k]], **logits)
+            for name, classes in heads.items():
+                info(f'{k}, {name}\n{table(metrics[k][name], classes)}')
     (run.dir / 'metrics.json').write_text(json.dumps(metrics, indent=1))
-    run.finish({'val_macro_F1': metrics['val']['all']['macro_F1']})
+    run.finish({f'val_macro_F1/{name}': m['all']['macro_F1'] for name, m in metrics['val'].items()})
 
 
 if __name__ == '__main__':

@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 import soundfile as sf
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import OmegaConf
 
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
@@ -83,7 +82,7 @@ def main(cfg):
     out = HydraConfig.get().runtime.output_dir
     run = REPO_ROOT / cfg.run
     classes = json.loads((run / 'metrics.json').read_text())['classes']
-    other_marks = list(OmegaConf.load(REPO_ROOT / 'conf' / 'techniques' / 'train.yaml').other_marks)
+    other_marks = list(cfg.other_marks)
     notes, rows, x, _ = load_cached_index(cfg.index_dir, cfg.feature)
     recs = pd.read_csv(REPO_ROOT / cfg.index_dir / 'recordings.csv').set_index('rec')
     saved = np.load(run / 'val_logits.npz')

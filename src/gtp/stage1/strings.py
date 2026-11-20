@@ -121,12 +121,12 @@ def load_audio(track, source):
     return librosa.resample(audio.T, orig_sr=sr, target_sr=SAMPLE_RATE)
 
 
-def note_windows(spec, onsets):
-    """Crop (channels, freq, PRE+MAX_POST) windows starting PRE_FRAMES before each onset."""
-    starts = np.round(onsets * SAMPLE_RATE / HOP).astype(int) - PRE_FRAMES
-    pad = WINDOW_FRAMES + PRE_FRAMES
+def note_windows(spec, onsets, pre=PRE_FRAMES, post=MAX_POST_FRAMES):
+    """Crop (channels, freq, pre+post) windows starting `pre` frames before each onset."""
+    starts = np.round(onsets * SAMPLE_RATE / HOP).astype(int) - pre
+    pad = 2 * pre + post
     padded = np.pad(spec, ((0, 0), (0, 0), (pad, pad)), constant_values=spec.min())
-    return np.stack([padded[:, :, s + pad : s + pad + WINDOW_FRAMES] for s in starts])
+    return np.stack([padded[:, :, s + pad : s + pad + pre + post] for s in starts])
 
 
 def split_players(test_player, exclude=()):
@@ -164,9 +164,9 @@ def cache_path(source, feature):
     return CACHE_DIR / f'{source}_{feature}.npy'
 
 
-def cache_layout():
+def cache_layout(pre=PRE_FRAMES, post=MAX_POST_FRAMES):
     """Constants a cache was built with; a cache built under different ones is stale."""
-    return {'sample_rate': SAMPLE_RATE, 'hop': HOP, 'pre_frames': PRE_FRAMES, 'max_post_frames': MAX_POST_FRAMES}
+    return {'sample_rate': SAMPLE_RATE, 'hop': HOP, 'pre_frames': pre, 'max_post_frames': post}
 
 
 def load_cache(source, feature, n_notes):
