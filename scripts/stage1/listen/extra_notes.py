@@ -18,7 +18,6 @@ import json
 
 import hydra
 import librosa
-import matplotlib
 import mir_eval
 import numpy as np
 import pandas as pd
@@ -28,9 +27,7 @@ from hydra.core.hydra_config import HydraConfig
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
 from gtp.log import info
-
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from gtp.stage1.listening import clip, spectrogram
 
 
 def match(ref, est, tolerance):
@@ -68,35 +65,6 @@ def notes_of(rec, ref, cfg):
     return est
 
 
-def spectrogram(y, sr, note, start, cfg, path):
-    fmin = librosa.midi_to_hz(cfg.fmin_midi)
-    bins = (cfg.fmax_midi - cfg.fmin_midi) * 3
-    c = librosa.amplitude_to_db(
-        np.abs(librosa.cqt(y, sr=sr, hop_length=256, fmin=fmin, n_bins=bins, bins_per_octave=36)), ref=np.max
-    )
-    t = np.arange(c.shape[1]) * 256 / sr + start - note.onset
-    ink = '#c9ceda'
-    fig, ax = plt.subplots(figsize=(7.2, 3.0), dpi=110, facecolor='#14161c')
-    ax.tick_params(colors=ink)
-    ax.xaxis.label.set_color(ink)
-    for side in ax.spines.values():
-        side.set_color('#3a3f4b')
-    ax.imshow(c, origin='lower', aspect='auto', cmap='magma', vmin=-70, vmax=0,
-              extent=[t[0], t[-1], cfg.fmin_midi - 1 / 6, cfg.fmax_midi - 1 / 6])  # fmt: skip
-    p, d = note.pitch, max(note.offset - note.onset, 0.05)
-    ax.add_patch(plt.Rectangle((0, p - 0.5), d, 1, fill=False, ec='#39d0ff', lw=1.6))
-    ax.axvline(0, color='#39d0ff', lw=0.8, ls=':')
-    ticks = [m for m in range(cfg.fmin_midi, cfg.fmax_midi + 1) if m % 12 == 4]
-    ax.set_yticks(ticks, [librosa.midi_to_note(m, unicode=False) for m in ticks])
-    ax.set_xlabel('seconds from the note')
-    ax.set_xlim(-cfg.before_s, cfg.after_s)
-    fig.tight_layout()
-    fig.savefig(path)
-    box = ax.get_position()
-    plt.close(fig)
-    return {'x0': round(box.x0, 4), 'x1': round(box.x1, 4), 'y0': round(1 - box.y1, 4), 'y1': round(1 - box.y0, 4)}
-
-
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'stage1'), config_name='extra_notes')
 def main(cfg):
     out = HydraConfig.get().runtime.output_dir
@@ -128,10 +96,7 @@ def main(cfg):
     for i, n in enumerate(picked.itertuples()):
         r = recs.set_index('rec').loc[n.rec]
         y, sr = librosa.load(REPO_ROOT / r.audio, sr=None, mono=True)
-        start = max(n.onset - cfg.before_s, 0.0)
-        seg = y[int(start * sr) : int((n.onset + cfg.after_s) * sr)]
-        ramp = np.minimum(1, np.minimum(np.arange(len(seg)), np.arange(len(seg))[::-1]) / (0.01 * sr))
-        seg = seg / max(np.abs(seg).max(), 1e-6) * 0.9 * ramp
+        seg, start = clip(y, sr, n.onset, cfg.before_s, cfg.after_s)
         cid = f'c{i + 1:02d}'
         sf.write(f'{out}/{cid}.mp3', seg.astype(np.float32), sr, format='MP3')
         axes = spectrogram(seg, sr, n, start, cfg, f'{out}/{cid}.png')

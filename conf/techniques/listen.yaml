@@ -1,0 +1,41 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: techniques
+# The classifier run whose validation predictions (val_logits.npz) are sampled.
+run: results/techniques/runs/2026-11-20_11-03-31_muted3
+index_dir: data/technique_index
+feature: logmel229
+# Clips per group of validation notes: `n` notes of `dataset` on `chain` that the labels call `label` and the
+# classifier called `predicted`, optionally from one kind of recording (`content`). Notes of `reference` groups are
+# shown with their label; the rest are judged blind.
+groups:
+  - {dataset: idmt, chain: di, label: plain, predicted: plain, n: 2, reference: true}
+  - {dataset: idmt, chain: di, label: palm_mute, predicted: palm_mute, n: 3, reference: true}
+  - {dataset: idmt, chain: di, label: dead, predicted: dead, n: 3, reference: true}
+  - {dataset: guitar_techs, chain: di, label: palm_mute, predicted: palm_mute, n: 5}
+  - {dataset: guitar_techs, chain: di, label: palm_mute, predicted: plain, n: 8}
+  - {dataset: guitar_techs, chain: di, label: plain, predicted: plain, n: 5, content: singlenotes}
+  - {dataset: goat, chain: di, label: dead, predicted: dead, n: 8}
+  - {dataset: goat, chain: di, label: dead, predicted: plain, n: 12}
+  - {dataset: goat, chain: di, label: palm_mute, predicted: palm_mute, n: 4}
+  - {dataset: goat, chain: di, label: palm_mute, predicted: plain, n: 4}
+  - {dataset: goat, chain: di, label: plain, predicted: dead, n: 4}
+  - {dataset: goat, chain: di, label: plain, predicted: palm_mute, n: 4}
+  - {dataset: goat, chain: di, label: plain, predicted: plain, n: 4}
+# The same note is also cut from these chains of its take, where the take has them.
+other_chains: [amp-mic]
+# Two picked notes of one recording are at least this far apart.
+min_gap_s: 1.0
+# Notes starting within this of each other count as struck together.
+together_s: 0.03
+before_s: 1.2
+after_s: 1.8
+fmin_midi: 36
+fmax_midi: 96
+seed: 0
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/listen/techniques/${now:%Y-%m-%d_%H-%M-%S}_${name}

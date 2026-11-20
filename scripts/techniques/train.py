@@ -30,19 +30,8 @@ from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
 from gtp.stage1.strings import PRE_FRAMES, post_frames
+from gtp.stage1.techniques import class_of
 from gtp.track import start_run
-
-
-def class_of(techniques, classes, other_marks):
-    """Index into `classes` per note, or -1 for a note to leave out."""
-    out = np.full(len(techniques), -1)
-    for i, marks in enumerate(techniques.fillna('').str.split(',')):
-        named = [classes.index(m) for m in marks if m in classes]
-        if named:
-            out[i] = max(named)
-        elif not set(marks) & set(other_marks):
-            out[i] = classes.index('plain')
-    return out
 
 
 def scores(labels, predicted, classes):
