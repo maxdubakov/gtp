@@ -3,7 +3,7 @@ defaults:
   - override hydra/job_logging: none
   - override hydra/hydra_logging: none
 
-datasets: [idmt, guitar_techs, goat, gaps, dadagp]
+datasets: [idmt, guitar_techs, goat, gaps, dadagp, ag_pt, eg_ipt]
 out: results/techniques/survey.csv
 
 goat_dir: data/goat/GOAT
@@ -14,6 +14,8 @@ cluster_gap_s: 0.03
 band: 400
 
 gaps_dir: data/gaps_hf
+ag_pt_dir: data/ag_pt_set/unpacked/aGPTset
+eg_ipt_dir: data/eg_ipt/unpacked/EG-IPT
 
 # Tabs without audio: token files drawn at random, to see how often tab writers mark each technique.
 dadagp_dir: data/DadaGP-v1.1

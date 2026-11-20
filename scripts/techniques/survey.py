@@ -1,8 +1,10 @@
 """Count the playing-technique labels each dataset carries, by split.
 
-A dataset labels techniques per note (IDMT's annotations, GOAT's tab matched to its aligned MIDI), per recording
-(Guitar-TECHS records one technique per take) or only in a score the player read (GAPS, GOAT's unmatched tab notes).
-DadaGP has no audio: a sample of its tabs shows how often tab writers mark each technique.
+A dataset labels techniques per note (IDMT's annotations, GOAT's tab matched to its aligned MIDI, AG-PT-set's onset
+labels, EG-IPT's one file per note), per recording (Guitar-TECHS records one technique per take) or only in a score
+the player read (GAPS, GOAT's unmatched tab notes). DadaGP has no audio: a sample of its tabs shows how often tab
+writers mark each technique. AG-PT-set and EG-IPT have no split of ours yet: theirs is the guitar (AG-PT-set) or the
+pickup setting (EG-IPT, whose six channels of one performance count once).
 
 Writes `out`: dataset, split, labelled, technique, notes, recordings; technique `(all notes)` is the total.
 
@@ -47,6 +49,17 @@ XML_MARKS = {
     'tremolo': 'tremolo_picking',
     'trill-mark': 'trill',
 }
+AG_PT_MARKS = {
+    'Palm Mute': ['palm_mute'],
+    'nat_harm': ['harmonic'],
+    'near_bridge': [],
+    'over_soundhole': [],
+    'snare-b': ['muted_string_hit'],
+    'kick': ['body_hit'],
+    'snare-a': ['body_hit'],
+    'tom': ['body_hit'],
+}
+EG_IPT_MARKS = {'ordinario': [], 'muted': ['palm_mute'], 'harmonics': ['harmonic']}
 DADAGP_GUITAR = re.compile(r'^(clean|distorted)\d+:note:')
 DADAGP_MARKS = {'ghost_note': 'ghost', 'tremoloPicking': 'tremolo_picking', 'tremolo_picking': 'tremolo_picking'}
 
@@ -106,6 +119,21 @@ def gaps(cfg):
             yield 'gaps', splits.get(xml.stem, 'unassigned'), 'score', xml.stem, sorted(marks)
 
 
+def ag_pt(cfg):
+    meta = REPO_ROOT / cfg.ag_pt_dir / 'metadata'
+    names = pd.read_csv(meta / 'expressive_techniques.csv').set_index('expressive_technique_id')['name_nospace']
+    guitar = pd.read_csv(meta / 'files.csv').set_index('filename')['guitar_id']
+    for n in pd.read_csv(meta / 'note_labels.csv').itertuples():
+        marks = AG_PT_MARKS[names[n.expressive_technique_id]]
+        yield 'ag_pt', f'guitar{guitar[n.audio_file_path]}', 'note', n.audio_file_path, marks
+
+
+def eg_ipt(cfg):
+    for wav in sorted((REPO_ROOT / cfg.eg_ipt_dir).glob('*/DI/*/*.wav')):
+        pickup, _, technique = wav.parts[-4:-1]
+        yield 'eg_ipt', pickup, 'note', str(wav), EG_IPT_MARKS.get(technique, [technique.replace('-', '_')])
+
+
 def dadagp(cfg):
     files = sorted((REPO_ROOT / cfg.dadagp_dir).rglob('*.tokens.txt'))
     for path in random.Random(cfg.seed).sample(files, min(cfg.dadagp_files, len(files))):
@@ -123,7 +151,15 @@ def dadagp(cfg):
             yield 'dadagp', sound, 'tab only', str(path), marks
 
 
-LOADERS = {'idmt': idmt, 'guitar_techs': guitar_techs, 'goat': goat, 'gaps': gaps, 'dadagp': dadagp}
+LOADERS = {
+    'idmt': idmt,
+    'guitar_techs': guitar_techs,
+    'goat': goat,
+    'gaps': gaps,
+    'dadagp': dadagp,
+    'ag_pt': ag_pt,
+    'eg_ipt': eg_ipt,
+}
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'techniques'), config_name='survey')
