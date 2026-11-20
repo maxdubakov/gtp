@@ -22,7 +22,7 @@ the onset envelope's at first, and the lag to Stage 1's notes once note_lags.py 
 Usage:
   uv run scripts/stage1/strings/build_synthtab_index.py
   uv run scripts/stage1/strings/note_lags.py index_dir=data/string_index_synthtab "datasets=[synthtab]" \
-      stage1_checkpoint=models/finetuned/z7_step_0052500.pth
+      stage1_checkpoint=models/finetuned/z8_step_0045000.pth
   uv run scripts/stage1/strings/build_synthtab_index.py
 """
 

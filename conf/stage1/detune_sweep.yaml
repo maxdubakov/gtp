@@ -3,7 +3,7 @@ defaults:
   - override hydra/job_logging: none
 
 name: detune_sweep
-checkpoint: models/finetuned/z7_step_0052500.pth
+checkpoint: models/finetuned/z8_step_0045000.pth
 benchmarks: [guitarset, egdb]
 # Pitch moves in cents; each recording is played back 2^(cents/1200) times faster.
 cents: [-50, -25, -10, 0, 10, 25, 50]

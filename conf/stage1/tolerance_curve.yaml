@@ -3,7 +3,7 @@ defaults:
   - override hydra/job_logging: none
 
 name: tolerance_curve
-checkpoint: models/finetuned/z7_step_0052500.pth
+checkpoint: models/finetuned/z8_step_0045000.pth
 benchmarks: [guitarset, egdb, gaps_test, goat_di, goat_amp, goat_di_corrected, goat_amp_corrected, val_evh, val_les_paul]
 # Onset tolerances in seconds; 0.05 is the published protocol.
 tolerances: [0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2]

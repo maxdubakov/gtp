@@ -17,7 +17,7 @@ import soundfile as sf
 from gtp import REPO_ROOT
 from gtp.stage1.inference import PianoTranscription
 
-DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'finetuned', 'z7_step_0052500.pth')
+DEFAULT_CHECKPOINT = os.path.join(REPO_ROOT, 'models', 'finetuned', 'z8_step_0045000.pth')
 SOUNDFONT_PATH = os.path.join(REPO_ROOT, 'models', 'soundfonts', 'ms_basic.sf3')
 GUITAR_PROGRAM = 24  # General MIDI: Acoustic Guitar (nylon)
 MODEL_SR = 16000
