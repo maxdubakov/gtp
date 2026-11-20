@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GTP riffs</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/riff.css">
+</head>
+<body>
+  <main id="record-view" hidden>
+    <h1>Riffs</h1>
+    <div id="recorder">
+      <div id="stage">
+        <video id="preview" autoplay muted playsinline></video>
+        <div id="rec-badge" hidden>&#9679; REC <span id="elapsed" class="mono">0:00.0</span></div>
+      </div>
+      <div id="controls">
+        <button id="record" title="Start / stop recording (Space)">&#9679; Record</button>
+        <span id="rec-status" class="hint">Press Space or the button to start; again to stop.</span>
+        <div id="levels">
+          <span class="hint">Input</span>
+          <div id="meter"><div id="meter-bar"></div></div>
+          <span id="peak" class="mono hint"></span>
+        </div>
+        <div id="devices">
+          <label>Microphone <select id="mic"></select></label>
+          <label>Camera <select id="cam"></select></label>
+        </div>
+        <div id="audio-settings" class="hint mono"></div>
+      </div>
+    </div>
+    <div id="message"></div>
+
+    <h2>Earlier riffs</h2>
+    <table id="riff-table">
+      <thead>
+        <tr><th>Riff</th><th>Recorded</th><th>Length</th><th>Notes</th><th>Status</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint">Folders under the server's <code>riffs_dir</code>; correct a tab with
+      <code>uv run scripts/takes/editor.py takes_dir=data/riffs</code>.</p>
+  </main>
+
+  <main id="riff-view" hidden>
+    <div id="toolbar">
+      <a href="#/" id="back">&larr; Riffs</a>
+      <strong id="riff-title"></strong>
+      <span class="group">
+        <button id="play" title="Play / pause (Space)">&#9654;</button>
+        <span id="time" class="mono"></span>
+      </span>
+      <span class="group">
+        <button id="zoom-out" title="Zoom out (Ctrl/Cmd + wheel)">&minus;</button>
+        <button id="zoom-in" title="Zoom in (Ctrl/Cmd + wheel)">+</button>
+        <label><input type="checkbox" id="follow" checked> Follow</label>
+      </span>
+      <span id="riff-info" class="group right hint"></span>
+    </div>
+    <div id="processing" hidden></div>
+    <video id="video" controls playsinline hidden></video>
+    <canvas id="canvas" hidden></canvas>
+    <div id="hscroll" hidden><div id="hspacer"></div></div>
+  </main>
+  <script src="/wav.js"></script>
+  <script src="/riff.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+riffs_dir: data/riffs
+host: 127.0.0.1
+port: 8766
+device: null
+lam: 1.3
+beams: 8
+ffmpeg: /opt/homebrew/bin/ffmpeg
+
+# A server writes nothing but riff folders: no Hydra run dir or saved config.
+hydra:
+  output_subdir: null
+  run:
+    dir: .
