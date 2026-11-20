@@ -9,8 +9,8 @@ Every run also writes a take folder (data/takes/<take_id>/, see gtp.takes) that 
 opens: scripts/takes/editor.py.
 
 Usage:
-  python scripts/demo.py                           # record 10s, run pipeline
-  python scripts/demo.py --duration 15
+  python scripts/demo.py                           # SPACE starts the recording, SPACE ends it, then the pipeline runs
+  python scripts/demo.py --duration 15             # record a fixed 15s instead
   python scripts/demo.py --audio path/to/take.wav  # skip recording
   python scripts/demo.py --capo 3 --tuning 64 59 55 50 45 38
   python scripts/demo.py --guitar hagstrom         # fit the evidence together with earlier takes of this guitar
@@ -24,8 +24,12 @@ Requires `sounddevice` for the recording path:
 
 import argparse
 import glob
+import os
+import select
 import sys
+import termios
 import time
+import tty
 from datetime import datetime
 from pathlib import Path
 
@@ -70,7 +74,43 @@ SR = 44100
 # ---------------------------------------------------------------------------
 
 
+def space_pressed(fd, timeout):
+    """True if SPACE arrives on the terminal within `timeout` seconds (None waits for a key); q quits."""
+    if not select.select([fd], [], [], timeout)[0]:
+        return False
+    key = os.read(fd, 1)
+    if key == b'q':
+        sys.exit(0)
+    return key == b' '
+
+
+def record_between_spaces(sd, sr):
+    """Record from one SPACE press to the next."""
+    if not sys.stdin.isatty():
+        sys.exit('Recording by SPACE needs a terminal: pass --duration or --audio')
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    chunks = []
+    try:
+        tty.setcbreak(fd)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        print('\nPress SPACE to start recording (q quits)... ', end='', flush=True)
+        while not space_pressed(fd, None):
+            pass
+        with sd.InputStream(
+            samplerate=sr, channels=1, dtype='float32', callback=lambda data, *_: chunks.append(data[:, 0].copy())
+        ):
+            t0 = time.time()
+            while not space_pressed(fd, 0.1):
+                print(f'\rRecording {time.time() - t0:5.1f}s, press SPACE to stop ', end='', flush=True)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    print()
+    return np.concatenate(chunks) if chunks else np.zeros(0, dtype='float32')
+
+
 def record_with_retry(duration, sr=SR):
+    """One accepted recording: `duration` seconds, or from one SPACE press to the next when it is None."""
     try:
         import sounddevice as sd
     except ImportError as e:
@@ -78,13 +118,16 @@ def record_with_retry(duration, sr=SR):
         sys.exit(1)
 
     while True:
-        input(f'\nPress ENTER to record {duration}s... ')
-        print('Recording... go!')
-        audio = sd.rec(int(duration * sr), samplerate=sr, channels=1, dtype='float32')
-        sd.wait()
-        audio = audio.flatten()
-        peak = float(np.max(np.abs(audio)))
-        print(f'Done. Duration={duration}s peak={peak:.3f}')
+        if duration is None:
+            audio = record_between_spaces(sd, sr)
+        else:
+            input(f'\nPress ENTER to record {duration}s... ')
+            print('Recording... go!')
+            audio = sd.rec(int(duration * sr), samplerate=sr, channels=1, dtype='float32')
+            sd.wait()
+            audio = audio.flatten()
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        print(f'Done. Duration={len(audio) / sr:.1f}s peak={peak:.3f}')
 
         # print('Playing back...')
         # sd.play(audio, sr)
@@ -458,7 +501,9 @@ def write_take(args, take_id, audio, sr, tuning, placed, unplaced, pipeline):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--duration', type=int, default=10, help='Recording length in seconds')
+    ap.add_argument(
+        '--duration', type=int, default=None, help='Fixed recording length in seconds (default: SPACE starts and ends)'
+    )
     ap.add_argument('--audio', default=None, help='Audio file path (skips mic recording)')
     ap.add_argument('--output-dir', default=str(DEFAULT_OUT_DIR))
     ap.add_argument('--takes-dir', default=str(DEFAULT_TAKES_DIR), help='Root of the take folders for the editor')
