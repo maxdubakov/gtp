@@ -3,7 +3,8 @@
 GOAT's labels in time are its fine-aligned MIDI; its strings are in the Guitar Pro 5 tab, which runs in score time
 and lists tied notes separately. The tab's chords (notes sharing a score time) are aligned to the MIDI's onset
 clusters by dynamic time warping on pitch-set overlap, and inside each aligned pair notes are matched by pitch; a MIDI
-note without a match stays out of the index, so the labels keep GOAT's timing and only gain strings. Every render
+note without a match stays out of the index, so the labels keep GOAT's timing and only gain strings and the tab's
+technique marks (gtp.stage2.guitarpro.note_techniques). Every render
 (DI and the five amps) is a recording of its own chain, so each is calibrated apart. With `retimed_notes` set, each
 render's notes take the times re-timed to its audio (scripts/stage1/retime_goat_test.py) in place of the MIDI's.
 With `manifest` set, the Stage 1 notes manifest's GOAT entries choose the items and their train/val split and give
@@ -49,7 +50,7 @@ def main(cfg):
     recs, notes, coverage, skipped = [], [], [], {}
     for r in meta[meta.split.isin(list(cfg.splits))].itertuples():
         try:
-            tab = parse_gp_track(root / 'data' / r.gp5_path.split('/', 1)[1], 0)
+            tab = parse_gp_track(root / 'data' / r.gp5_path.split('/', 1)[1], 0, techniques=True)
         except ValueError as e:
             skipped[r.item] = f'tab unreadable: {e}'
             continue
@@ -71,7 +72,8 @@ def main(cfg):
                 times = np.asarray(retimed[f'goat/{r.item}/{audio.stem}'])
                 assert len(times) == len(midi) and (times[:, 2] == [n.pitch for n in midi]).all(), rec
             notes += [{'rec': rec, 'onset': times[k][0], 'offset': times[k][1], 'pitch': midi[k].pitch,
-                       'string': t['string'], 'fret': midi[k].pitch - tab['tuning'][t['string'] - 1]}
+                       'string': t['string'], 'fret': midi[k].pitch - tab['tuning'][t['string'] - 1],
+                       'techniques': ','.join(t['techniques'])}
                       for k, t in sorted(matched.items())]  # fmt: skip
     out = REPO_ROOT / cfg.out_dir
     out.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,55 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: techniques
+index_dir: data/technique_index
+feature: logmel229
+window_ms: 400
+# The note's class is the last of these marks it carries (a palm-muted dead note is dead); `plain` is a note with
+# none of them and no mark in `other_marks`.
+classes: [plain, palm_mute, dead]
+# Notes with one of these marks (and none of `classes`) are left out: they are neither plain nor a class.
+other_marks: [bend, slide, hammered, vibrato, harmonic, pinch_harmonic, ghost, tie, grace, tremolo_picking, whammy]
+# Cached variants to train on (0 real, then augmented, then far-field renders); null = all.
+variants: null
+# Datasets and chains left out of training (their validation recordings are still scored).
+exclude_datasets: []
+exclude_chains: []
+# Train on a random subset of this many windows (0 = all); for smoke tests.
+limit: 0
+# The loss weighs a class by (its share of the training windows) ** -power, so rare classes are not drowned out.
+class_weight_power: 0.5
+# Score the test split too. Off while settings are still being chosen: test runs once, for the final configuration.
+report_test: false
+seed: 0
+
+model:
+  _target_: gtp.stage1.strings.StringNet
+  width: 1.0
+  # The pitch of a dead note is not known when the classifier is used, so it reads the audio alone.
+  use_pitch: false
+  pool: flatten
+  pool_first: false
+
+optim:
+  epochs: 30
+  batch: 256
+  lr: 0.001
+  weight_decay: 0.0001
+
+wandb:
+  project: gtp
+  entity: null
+  mode: disabled
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/techniques/runs/${now:%Y-%m-%d_%H-%M-%S}_${name}
+  sweep:
+    dir: ${repo_root:}/results/techniques/sweeps/${name}/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        exclude_keys: [name, wandb.mode]
