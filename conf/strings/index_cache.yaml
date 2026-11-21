@@ -9,6 +9,9 @@ feature: logmel229
 cache: null
 pre_frames: null
 post_frames: null
+# With feature cqt36 and a `cache`: cut each window around its note's pitch, `semitones` below and above it and
+# above each of its first `harmonics` partials, e.g. {semitones: 5, harmonics: 4}; null = the whole spectrum.
+pitch_relative: null
 # Augmented renders per training recording, on top of the real one.
 augment: 4
 # And this many more through far-field chains (a distant microphone in a reverberant, noisy room).

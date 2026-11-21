@@ -5,7 +5,8 @@ through its own random chain (chains.py) drawn from a seed fixed by (recording, 
 identical and a window can be traced back to its chain; then `augment_far` more through far-field chains
 (variants augment+1 and up). Val and test stay real recordings only, and so do the room recordings, which
 are far-field already. With `cache` set, the windows take `pre_frames` before the onset and `post_frames` after
-it in place of the string classifier's, and the files are named after `cache` in place of the feature.
+it in place of the string classifier's, and the files are named after `cache` in place of the feature. With
+`pitch_relative` as well, each window is cut around its note's pitch and partials (gtp.stage1.techniques.pitch_windows).
 
 Writes to <index_dir>/cache/:
   <feature>.npy        (rows, 1, freq, PRE+MAX_POST frames) float16
@@ -33,6 +34,7 @@ from gtp.log import info
 from gtp.stage1 import chains
 from gtp.stage1.string_data import ROOM_CHAINS
 from gtp.stage1.strings import MAX_POST_FRAMES, PRE_FRAMES, SAMPLE_RATE, cache_layout, note_windows, spectrogram
+from gtp.stage1.techniques import pitch_windows
 from gtp.track import git_state
 
 
@@ -41,7 +43,7 @@ def chain_seed(rec, variant):
 
 
 def recording_windows(job):
-    rec, audio, chain, onsets, variants, first_far, feature, pre, post = job
+    rec, audio, chain, onsets, pitches, variants, first_far, feature, pre, post, relative = job
     y, _ = librosa.load(REPO_ROOT / audio, sr=SAMPLE_RATE, mono=True)
     out, params = [], []
     for v in variants:
@@ -52,7 +54,12 @@ def recording_windows(job):
             p = chains.draw(rng, chains.stages_for(chain, far=v >= first_far))
             x = chains.render(y, SAMPLE_RATE, p, rng)
             params.append({'rec': rec, 'variant': v, 'chain': p})
-        out.append(note_windows(spectrogram(x[None], feature), onsets, pre, post).astype(np.float16))
+        spec = spectrogram(x[None], feature)
+        if relative:
+            windows = pitch_windows(spec, onsets, pitches, pre, post, relative['semitones'], relative['harmonics'])
+        else:
+            windows = note_windows(spec, onsets, pre, post)
+        out.append(windows.astype(np.float16))
     return out, params
 
 
@@ -66,14 +73,17 @@ def main(cfg):
     by_rec = notes.groupby('rec').indices
     pre, post = (cfg.pre_frames, cfg.post_frames) if cfg.cache else (PRE_FRAMES, MAX_POST_FRAMES)
     name = cfg.cache or cfg.feature
+    relative = dict(cfg.pitch_relative) if cfg.pitch_relative else None
 
     jobs, rows = [], []
     for r in recs.itertuples():
         idx = by_rec[r.rec]
         augmented = r.split == 'train' and r.chain not in ROOM_CHAINS
         variants = list(range(1 + (cfg.augment + cfg.augment_far if augmented else 0)))
-        onsets = notes['onset'].to_numpy()[idx]
-        jobs.append((r.rec, r.audio, r.chain, onsets, variants, cfg.augment + 1, cfg.feature, pre, post))
+        onsets, pitches = notes['onset'].to_numpy()[idx], notes['pitch'].to_numpy()[idx]
+        jobs.append(
+            (r.rec, r.audio, r.chain, onsets, pitches, variants, cfg.augment + 1, cfg.feature, pre, post, relative)
+        )
         rows += [(i, v) for v in variants for i in idx]
     rows = pd.DataFrame(rows, columns=['note', 'variant'])
     info(
@@ -109,6 +119,7 @@ def main(cfg):
         'augment_far': cfg.augment_far,
         'limit': cfg.limit,
         'layout': cache_layout(pre, post),
+        'pitch_relative': relative,
         'n_windows': len(rows),
         'librosa': librosa.__version__,
         'git_sha': sha,

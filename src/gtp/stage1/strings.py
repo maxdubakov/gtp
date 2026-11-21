@@ -45,7 +45,8 @@ SOURCES = {
     'mix': ('audio_mono-pickup_mix', '_mix.wav'),
     'hex': ('audio_hex-pickup_debleeded', '_hex_cln.wav'),
 }
-FEATURES = ('logmel64', 'logmel229', 'cqt')
+FEATURES = ('logmel64', 'logmel229', 'cqt', 'cqt36')
+CQT36_LOWEST = 33
 PLAYERS = ('00', '01', '02', '03', '04', '05')
 
 
@@ -106,6 +107,22 @@ def spectrogram(audio, feature):
             np.abs(
                 librosa.cqt(
                     audio, sr=SAMPLE_RATE, hop_length=HOP, fmin=librosa.midi_to_hz(36), n_bins=168, bins_per_octave=24
+                )
+            )
+            ** 2
+        )
+    elif feature == 'cqt36':
+        # A third of a semitone per bin from A1, with filters half the usual length so fast notes stay apart.
+        spec = (
+            np.abs(
+                librosa.cqt(
+                    audio,
+                    sr=SAMPLE_RATE,
+                    hop_length=HOP,
+                    fmin=librosa.midi_to_hz(CQT36_LOWEST),
+                    n_bins=252,
+                    bins_per_octave=36,
+                    filter_scale=0.5,
                 )
             )
             ** 2

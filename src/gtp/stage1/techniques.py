@@ -3,7 +3,7 @@
 import librosa
 import numpy as np
 
-from gtp.stage1.strings import SAMPLE_RATE
+from gtp.stage1.strings import CQT36_LOWEST, HOP, SAMPLE_RATE
 
 
 def class_of(techniques, classes, other_marks):
@@ -58,3 +58,21 @@ def pitch_comb(n_mels, harmonics):
         partials = partials[(partials > centres[0]) & (partials < centres[-1])]
         table[pitch, np.abs(centres[None, :] - partials[:, None]).argmin(axis=1)] = 1
     return table
+
+
+def pitch_windows(spec, onsets, pitches, pre, post, semitones, harmonics):
+    """Windows of a 'cqt36' spectrogram that follow each note's pitch: (notes, harmonics, bins, pre + post), the
+    bins reaching `semitones` below and above the pitch (channel 0) and above its next partials (the others), from
+    `pre` frames before the onset. A bend, a slide or the note before then looks the same at every pitch."""
+    reach = 3 * semitones
+    partial = np.round(36 * np.log2(np.arange(1, harmonics + 1))).astype(int)
+    pad_t, pad_f = 2 * pre + post, reach + 36
+    padded = np.pad(spec[0], ((pad_f, pad_f + partial[-1]), (pad_t, pad_t)), constant_values=spec.min())
+    starts = np.round(onsets * SAMPLE_RATE / HOP).astype(int) - pre + pad_t
+    rows = (np.asarray(pitches) - CQT36_LOWEST) * 3 + pad_f
+    return np.stack(
+        [
+            np.stack([padded[r + k - reach : r + k + reach + 1, s : s + pre + post] for k in partial])
+            for r, s in zip(rows, starts, strict=True)
+        ]
+    )
