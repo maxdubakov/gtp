@@ -1,0 +1,19 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+corpus_dir: data/technique_tabs
+goat_dir: data/goat/GOAT
+# Notes per run compared; a run is the same when its strings and frets are, in order.
+run_notes: 16
+# A run with more artists than this is a scale or a chug that many songs share.
+common_artists: 5
+# A corpus file holds a GOAT piece when at least this share of the piece's runs are in one of its tracks. Low on
+# purpose: GOAT's tabs are other transcriptions of songs the corpus has (a true match was seen at 0.09), and a file
+# left out by mistake costs nothing.
+min_share: 0.05
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

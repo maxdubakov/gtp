@@ -1,0 +1,20 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+dadagp_dir: data/DadaGP-v1.1
+out_dir: data/technique_tabs
+# General MIDI programs kept: the guitars, nylon to harmonics.
+programs: [24, 31]
+strings: 6
+min_notes: 50
+# Share of artists whose tracks validate the prior instead of training it.
+val_share: 0.03
+workers: 28
+# Read only this many files (0 = all); for smoke tests.
+limit: 0
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

@@ -5,6 +5,12 @@ import guitarpro as gp
 from gtp.stage2.metrics import pitch_of
 
 TICKS_PER_QUARTER = 960
+# Every technique name a note can get from note_techniques and parse_gp_track.
+MARKS = (
+    'dead', 'tie', 'palm_mute', 'bend', 'slide', 'slide_shift', 'slide_in', 'slide_out', 'hammer', 'vibrato',
+    'harmonic', 'pinch_harmonic', 'ghost', 'let_ring', 'staccato', 'tremolo_picking', 'trill', 'grace', 'tapping',
+    'whammy', 'hammered', 'slid', 'slid_shift',
+)  # fmt: skip
 
 
 def note_techniques(note, beat):
@@ -47,7 +53,11 @@ def parse_gp_track(gp_path, track_idx, techniques=False):
     lists its techniques (note_techniques).
     """
     song = gp.parse(str(gp_path))
-    track = song.tracks[track_idx]
+    return track_notes(song, song.tracks[track_idx], techniques)
+
+
+def track_notes(song, track, techniques=False):
+    """parse_gp_track for a track of a song that is already parsed."""
     tuning = [s.value for s in track.strings]
     capo = track.offset if hasattr(track, 'offset') else 0
     tempo = song.tempo
