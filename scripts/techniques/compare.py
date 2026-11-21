@@ -28,7 +28,8 @@ def main(cfg):
         val = json.loads((run / 'metrics.json').read_text())['val']
         row = {'setting': re.sub(r'_s\d+$', '', name)}
         for c in cfg.columns:
-            row[c.name] = val[c.head].get(c.group, {}).get(c['class'], {}).get(cfg.metric, float('nan'))
+            of_class = val.get(c.head, {}).get(c.group, {}).get(c['class'], {})
+            row[c.name] = of_class.get(cfg.metric, float('nan'))
         rows.append(row)
     runs = pd.DataFrame(rows)
     table = runs.groupby('setting', sort=False).mean().assign(runs=runs.groupby('setting', sort=False).size())
