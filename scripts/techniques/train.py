@@ -5,7 +5,8 @@ how the note is muted, how it starts, what its pitch does. A note can lack a lab
 dataset whose labels for it are missing or not trusted); it then counts for the other heads only. Note times are
 the labels' own, so this measures whether the classes can be told apart when the note is given, apart from whether
 the note model finds it. Splits are the index's (by guitar or player; GOAT validation by item), with the players of
-`validate_on` moved from training to validation. No checkpoint is selected: the last epoch is kept.
+`validate_on` moved from training to validation. No checkpoint is selected: the last epoch is kept. Training
+batches are changed at random as `augment` says, so that the network cannot memorise its training notes.
 
 Reports, per head, validation dataset and chain, each class's precision, recall and F1 and their mean (macro F1);
 the test split only with `report_test=true`.
@@ -56,6 +57,31 @@ def table(report, classes):
         rows.append(row)
     with pd.option_context('display.width', 250, 'display.float_format', '{:.3f}'.format):
         return pd.DataFrame(rows).to_string(index=False)
+
+
+def stretches(n, length, most, device):
+    """(n, length) mask of one random stretch per row, 0 to `most` cells long."""
+    start = torch.randint(0, length, (n, 1), device=device)
+    cells = torch.arange(length, device=device)[None]
+    return (cells >= start) & (cells < start + torch.randint(0, most + 1, (n, 1), device=device))
+
+
+def augmented(x, cfg):
+    """A normalised training batch (notes, channels, bins, frames) moved in time and frequency (the same move for
+    the whole batch, the vacated edge at the mean), with stretches of frames and bins set to the mean and a level
+    offset per note."""
+    for dim, most in ((3, cfg.shift_frames), (2, cfg.shift_bins)):
+        by = int(torch.randint(-most, most + 1, ())) if most else 0
+        if by:
+            x = torch.roll(x, by, dims=dim)
+            x.narrow(dim, 0 if by > 0 else x.shape[dim] + by, abs(by)).zero_()
+    for _ in range(cfg.time_masks):
+        x = x.masked_fill(stretches(len(x), x.shape[3], cfg.time_mask, x.device)[:, None, None, :], 0.0)
+    for _ in range(cfg.freq_masks):
+        x = x.masked_fill(stretches(len(x), x.shape[2], cfg.freq_mask, x.device)[:, None, :, None], 0.0)
+    if cfg.gain:
+        x = x + cfg.gain * torch.randn(len(x), 1, 1, 1, device=x.device)
+    return x
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'techniques'), config_name='train')
@@ -122,6 +148,8 @@ def main(cfg):
         for i in range(0, len(xs), cfg.optim.batch):
             b = order[i : i + cfg.optim.batch]
             xb = (xs[b].float() - mean) / std
+            if shuffle:
+                xb = augmented(xb, cfg.augment)
             if comb is not None:
                 xb = torch.cat([xb, comb[ps[b]][:, None, :, None].expand(-1, 1, -1, xb.shape[3])], dim=1)
             yield xb, ps[b], ys[b]
@@ -163,7 +191,9 @@ def main(cfg):
         for xb, pb, yb in batches('train', shuffle=True):
             parts = model(xb, pb, every).split(sizes_of, dim=1)
             loss = sum(
-                F.cross_entropy(part, yb[:, h], weight=weights[h], ignore_index=-1)
+                F.cross_entropy(
+                    part, yb[:, h], weight=weights[h], ignore_index=-1, label_smoothing=cfg.optim.label_smoothing
+                )
                 for h, part in enumerate(parts)
                 if (yb[:, h] >= 0).any()
             )

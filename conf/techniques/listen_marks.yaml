@@ -10,7 +10,8 @@ splits: [train, val]
 # Marks that do not change how a note is started or what its pitch does; a note's `mark` is what is left.
 ignore_marks: [let_ring, hammer]
 # Clips per group: `n` notes of `dataset` whose mark is exactly `mark` ('' for none). With `follows`, only notes
-# that do (or do not) start within `follows_s` of a picked note at another fret of their string.
+# that do (or do not) start within `follows_s` of a picked note at another fret of their string. With `players`,
+# only those players' notes; with `min_s`, only notes at least that long.
 groups:
   - {name: hammered, dataset: goat, mark: hammered, n: 18}
   - {name: slide, dataset: goat, mark: slide, n: 14}
@@ -30,6 +31,8 @@ fmax_midi: 96
 seed: 0
 
 pitch:
+  # Notes carrying exactly one of these marks are measured, next to a sample of unmarked ones.
+  marks: [bend]
   sr: 22050
   frame: 2048
   hop: 256
@@ -42,6 +45,9 @@ pitch:
   min_frames: 5
   plain_per_dataset: 800
   thresholds: [0.5, 0.8]
+  # The wobble is what is left of the pitch track after a running median over this many frames (0.36 s).
+  wobble_frames: 31
+  wobble_thresholds: [0.2, 0.3, 0.5]
 
 hydra:
   run:

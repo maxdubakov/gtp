@@ -1,16 +1,18 @@
-"""Listening clips for judging whether a tab's technique marks (hammer-on or pull-off, slide, bend) were played.
+"""Listening clips for judging whether a tab's technique marks (hammer-on or pull-off, slide, bend, vibrato) were played.
 
 Notes are sampled per group from the technique index: notes carrying one mark, and unmarked notes as controls,
 among them ones that follow another fret on their string closely (where an unmarked hammer-on or slide would be).
 Each is cut with its surroundings into an MP3 and a spectrogram with the note marked.
 
-Bends are also checked without ears. For every bend-marked note and a sample of unmarked ones, where no other
-note starts while the note sounds, a pitch track (pYIN, searched from below the tab pitch to a major third above)
-gives two figures in semitones: `rise`, how far the pitch gets above the tab pitch, and `travel`, how far it moves
-during the note. Prints both per dataset and mark. Writes <id>_di.mp3, <id>.png, clips.json and pitch.csv.
+Pitch marks are also checked without ears. For every note carrying one of `pitch.marks` and a sample of unmarked
+ones, where no other note starts while the note sounds, a pitch track (pYIN, searched from below the tab pitch to a
+major third above) gives three figures in semitones: `rise`, how far the pitch gets above the tab pitch, `travel`,
+how far it moves during the note, and `wobble`, how far it swings around its own slow course. Prints them per
+dataset, player and mark. Writes <id>_di.mp3, <id>.png, clips.json and pitch.csv.
 
 Usage:
   uv run scripts/techniques/listen_marks.py
+  uv run scripts/techniques/listen_marks.py --config-name listen_vibrato
 """
 
 import json
@@ -21,6 +23,7 @@ import numpy as np
 import pandas as pd
 import soundfile as sf
 from hydra.core.hydra_config import HydraConfig
+from scipy.ndimage import median_filter
 
 import gtp.track  # noqa: F401  registers the repo_root resolver the config's output dir uses
 from gtp import REPO_ROOT
@@ -35,7 +38,7 @@ def load_notes(cfg):
     index = REPO_ROOT / cfg.index_dir
     recs = pd.read_csv(index / 'recordings.csv').set_index('rec')
     notes = pd.read_csv(index / 'notes.csv.gz', keep_default_na=False).join(
-        recs[['dataset', 'guitar', 'chain', 'split', 'audio']], on='rec'
+        recs[['dataset', 'player', 'guitar', 'chain', 'split', 'audio']], on='rec'
     )
     notes = notes[notes['chain'] == 'di'].reset_index(drop=True)
     ignore = set(cfg.ignore_marks)
@@ -64,6 +67,10 @@ def pick(notes, cfg, rng):
         pool = notes[(notes['dataset'] == g.dataset) & (notes['mark'] == g.mark) & (notes['onset'] >= cfg.before_s)]
         if g.get('follows') is not None:
             pool = pool[follows(pool, cfg) == g.follows]
+        if g.get('players') is not None:
+            pool = pool[pool['player'].isin(list(g.players))]
+        if g.get('min_s') is not None:
+            pool = pool[pool['offset'] - pool['onset'] >= g.min_s]
         taken = {}
         for i, n in pool.sample(frac=1, random_state=int(rng.integers(1 << 31))).iterrows():
             near = [notes.loc[j] for j, _ in picked if notes.at[j, 'rec'] == n.rec]
@@ -78,10 +85,11 @@ def pick(notes, cfg, rng):
 
 
 def pitch_figures(y, sr, note, cfg):
-    """(rise, travel) in semitones from the note's pitch track, or NaNs where too little of it is voiced."""
+    """(rise, travel, wobble) in semitones from the note's pitch track, or NaNs where too little of it is voiced.
+    The wobble is the swing left after a running median over `wobble_frames` is taken out."""
     seg = y[int(note.onset * sr) : int(min(note.offset, note.onset + cfg.pitch.max_s) * sr)]
     if len(seg) < cfg.pitch.frame:
-        return np.nan, np.nan
+        return np.nan, np.nan, np.nan
     f0, voiced, _ = librosa.pyin(
         seg,
         sr=sr,
@@ -92,20 +100,21 @@ def pitch_figures(y, sr, note, cfg):
     )
     midi = librosa.hz_to_midi(f0[voiced])
     if len(midi) < cfg.pitch.min_frames:
-        return np.nan, np.nan
+        return np.nan, np.nan, np.nan
     low, high = np.percentile(midi, [5, 95])
-    return high - note.pitch, high - low
+    swing = np.percentile(midi - median_filter(midi, size=cfg.pitch.wobble_frames, mode='nearest'), [5, 95])
+    return high - note.pitch, high - low, swing[1] - swing[0]
 
 
 def pitch_check(notes, picked, cfg, rng):
-    """Pitch figures of bend-marked notes, a sample of unmarked ones and every picked note, for notes long enough
-    and with no other note starting while they sound."""
+    """Pitch figures of notes carrying one of `pitch.marks`, a sample of unmarked ones and every picked note, for
+    notes long enough and with no other note starting while they sound."""
     long = notes[notes['offset'] - notes['onset'] >= cfg.pitch.min_s]
     plain = [
         g.sample(min(len(g), cfg.pitch.plain_per_dataset), random_state=int(rng.integers(1 << 31)))
         for _, g in long[long['mark'] == ''].groupby('dataset')
     ]
-    chosen = pd.concat([long[long['mark'] == 'bend'], *plain, notes.loc[[i for i, _ in picked]]])
+    chosen = pd.concat([long[long['mark'].isin(list(cfg.pitch.marks))], *plain, notes.loc[[i for i, _ in picked]]])
     chosen = chosen[~chosen.index.duplicated()]
     rows = []
     for rec, group in chosen.groupby('rec', sort=False):
@@ -114,8 +123,8 @@ def pitch_check(notes, picked, cfg, rng):
         for i, n in group.iterrows():
             end = min(n.offset, n.onset + cfg.pitch.max_s)
             alone = ((onsets > n.onset - cfg.together_s) & (onsets < end)).sum() == 1
-            rise, travel = pitch_figures(y, sr, n, cfg) if alone else (np.nan, np.nan)
-            rows.append({'note': i, 'alone': alone, 'rise': rise, 'travel': travel})
+            rise, travel, wobble = pitch_figures(y, sr, n, cfg) if alone else (np.nan, np.nan, np.nan)
+            rows.append({'note': i, 'alone': alone, 'rise': rise, 'travel': travel, 'wobble': wobble})
     return chosen.join(pd.DataFrame(rows).set_index('note'))
 
 
@@ -127,19 +136,22 @@ def main(cfg):
     picked = pick(notes, cfg, rng)
 
     pitch = pitch_check(notes, picked, cfg, rng)
-    pitch[['rec', 'onset', 'offset', 'pitch', 'string', 'fret', 'dataset', 'split', 'mark', 'alone', 'rise', 'travel']].to_csv(
-        f'{out}/pitch.csv'
-    )  # fmt: skip
-    measured = pitch[pitch['mark'].isin(['bend', '']) & pitch['rise'].notna()]
+    columns = ['rec', 'onset', 'offset', 'pitch', 'string', 'fret', 'dataset', 'player', 'split', 'mark']
+    pitch[[*columns, 'alone', 'rise', 'travel', 'wobble']].to_csv(f'{out}/pitch.csv')
+    measured = pitch[pitch['mark'].isin([*cfg.pitch.marks, '']) & pitch['rise'].notna()]
     measured = measured.assign(moves=measured[['rise', 'travel']].max(axis=1))
-    table = measured.groupby(['dataset', 'mark']).agg(
+    table = measured.groupby(['dataset', 'player', 'mark']).agg(
         notes=('moves', 'size'),
         rise=('rise', 'median'),
         travel=('travel', 'median'),
+        wobble=('wobble', 'median'),
         **{f'moves >= {t}': ('moves', lambda m, t=t: (m >= t).mean()) for t in cfg.pitch.thresholds},
+        **{f'wobble >= {t}': ('wobble', lambda m, t=t: (m >= t).mean()) for t in cfg.pitch.wobble_thresholds},
     )
-    marked = pitch[pitch['mark'] == 'bend']
-    info(f'bend-marked notes: {len(marked)}, measured (alone and voiced): {marked["rise"].notna().sum()}')
+    marked = pitch[pitch['mark'].isin(list(cfg.pitch.marks))]
+    info(
+        f'{"/".join(cfg.pitch.marks)}-marked notes: {len(marked)}, measured (alone and voiced): {marked["rise"].notna().sum()}'
+    )
     info(f'pitch movement in semitones\n{table.round(2).to_string()}')
 
     order = rng.permutation(len(picked))
@@ -154,7 +166,7 @@ def main(cfg):
         axes = spectrogram(seg, sr, n, start, cfg, f'{out}/{cid}.png')
         figures = pitch.loc[i]
         clips.append({
-            'id': cid, 'group': g.name, 'dataset': n.dataset, 'guitar': n.guitar, 'rec': n.rec, 'split': n.split,
+            'id': cid, 'group': g.name, 'dataset': n.dataset, 'player': n.player, 'guitar': n.guitar, 'rec': n.rec, 'split': n.split,
             'onset': round(float(n.onset), 3), 'duration': round(float(n.offset - n.onset), 3),
             'pitch': int(n.pitch), 'name': librosa.midi_to_note(int(n.pitch), unicode=False),
             'string': int(n.string), 'fret': int(n.fret), 'marks': n.techniques,
@@ -162,6 +174,7 @@ def main(cfg):
                 {'fret': int(n.previous_fret), 'ago': round(float(n.since_previous), 2), 'marks': n.previous_mark},
             'rise': None if np.isnan(figures.rise) else round(float(figures.rise), 2),
             'travel': None if np.isnan(figures.travel) else round(float(figures.travel), 2),
+            'wobble': None if np.isnan(figures.wobble) else round(float(figures.wobble), 2),
             'lead_s': cfg.before_s, 'axes': axes, 'span': [-cfg.before_s, cfg.after_s],
             'labels': labels_around(by_rec[n.rec], n, cfg.before_s, cfg.after_s),
         })  # fmt: skip

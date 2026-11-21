@@ -33,6 +33,18 @@ validate_on:
 # Partials of the note's pitch marked in a second input channel, so the network knows which of the sounding notes
 # it is asked about; 0 = no such channel.
 pitch_harmonics: 8
+# Random changes to each training batch, against memorising the training notes. The window is moved by up to
+# `shift_frames` in time and `shift_bins` in frequency; `time_masks` stretches of up to `time_mask` frames and
+# `freq_masks` of up to `freq_mask` bins are blanked per note; `gain` is the spread of a level offset per note, in
+# units of a bin's own spread. All off by default.
+augment:
+  shift_frames: 0
+  shift_bins: 0
+  time_masks: 0
+  time_mask: 8
+  freq_masks: 0
+  freq_mask: 4
+  gain: 0.0
 # Cached variants to train on (0 real, then augmented, then far-field renders); null = all.
 variants: null
 # Datasets and chains left out of training (their validation recordings are still scored).
@@ -52,12 +64,15 @@ model:
   use_pitch: true
   pool: flatten
   pool_first: false
+  dropout: 0.3
+  conv_dropout: 0.0
 
 optim:
   epochs: 30
   batch: 256
   lr: 0.001
   weight_decay: 0.0001
+  label_smoothing: 0.0
 
 wandb:
   project: gtp

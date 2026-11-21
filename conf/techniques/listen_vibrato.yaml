@@ -1,0 +1,18 @@
+defaults:
+  - listen_marks
+  - _self_
+
+name: vibrato
+index_dir: data/technique_index2
+ignore_marks: [let_ring, hammer, hammered, slid]
+# Player 2 carries 314 of GOAT's 334 vibrato marks outside the test pieces.
+groups:
+  - {name: vibrato_p2, dataset: goat, mark: vibrato, players: [player2], n: 16}
+  - {name: vibrato_others, dataset: goat, mark: vibrato, players: [player1, player4], n: 6}
+  - {name: plain_long, dataset: goat, mark: '', min_s: 0.5, n: 8}
+before_s: 1.0
+after_s: 2.5
+
+pitch:
+  marks: [vibrato]
+  max_s: 3.0
