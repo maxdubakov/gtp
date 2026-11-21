@@ -33,20 +33,9 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.techniques import attack_burst, head_labels, pitch_comb, string_context
+from gtp.stage1.tab_prior import index_prior
+from gtp.stage1.techniques import attack_burst, grouped_scores, head_labels, pitch_comb, string_context
 from gtp.track import start_run
-
-
-def scores(labels, predicted, classes):
-    """Per-class precision, recall, F1 and count over the labelled notes, and the macro F1 over the classes present."""
-    labels, predicted = labels[labels >= 0], predicted[labels >= 0]
-    out = {}
-    for k, name in enumerate(classes):
-        tp = int(((predicted == k) & (labels == k)).sum())
-        p, r = tp / max(int((predicted == k).sum()), 1), tp / max(int((labels == k).sum()), 1)
-        out[name] = {'n': int((labels == k).sum()), 'P': p, 'R': r, 'F1': 2 * p * r / max(p + r, 1e-9)}
-    present = [m['F1'] for m in out.values() if m['n']]
-    return out | {'macro_F1': float(np.mean(present)) if present else float('nan')}
 
 
 def table(report, classes):
@@ -175,6 +164,10 @@ def main(cfg):
     if cfg.attack:
         numbers, attack_scale = attack_numbers(cfg.index_dir, cfg.attack, notes, rows)
         context.append(numbers)
+    if cfg.prior:
+        gains, _ = index_prior(REPO_ROOT / cfg.prior.run, notes, heads, device)
+        odds = [gains[h][:, 1:] - gains[h][:, :1] for h in cfg.prior.heads]
+        context.append((np.concatenate(odds, axis=1).clip(-8, 8) / 4)[note])
     context = torch.from_numpy(np.concatenate(context, axis=1)) if context else None
     data = {}
     for k, v in idx.items():
@@ -226,12 +219,7 @@ def main(cfg):
         frame = notes.iloc[note[idx[k]]].reset_index(drop=True)
         out = {}
         for h, ((name, classes), logits) in enumerate(zip(heads.items(), logits_of(k), strict=True)):
-            predicted, labels = logits.argmax(dim=1).numpy(), label[note[idx[k]], h]
-            out[name] = {'all': scores(labels, predicted, classes)}
-            for keys in (['dataset'], ['dataset', 'player', 'chain']):
-                for group, g in frame.groupby(keys, sort=True):
-                    if (labels[g.index] >= 0).any():
-                        out[name]['/'.join(group)] = scores(labels[g.index], predicted[g.index], classes)
+            out[name] = grouped_scores(frame, label[note[idx[k]], h], logits.argmax(dim=1).numpy(), classes)
         return out
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)

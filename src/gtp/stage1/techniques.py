@@ -21,6 +21,18 @@ def class_of(techniques, classes, other_marks):
     return out
 
 
+def labels_by_head(carrying, n, heads):
+    """head_labels' rule for `n` notes whose marks are read by `carrying`: given mark names, which notes carry one."""
+    out = {}
+    for name, head in heads.items():
+        label = np.zeros(n, dtype=np.int64)
+        for k, of in enumerate(head.classes.values()):
+            label[carrying(of)] = k
+        label[carrying(head.unknown)] = -1
+        out[name] = label
+    return out
+
+
 def head_labels(notes, heads, unlabelled):
     """{head: class index per note}, -1 where the head has no label for the note.
 
@@ -34,13 +46,7 @@ def head_labels(notes, heads, unlabelled):
     def carrying(names):
         return np.array([bool(m & set(names)) for m in marks])
 
-    out = {}
-    for name, head in heads.items():
-        label = np.zeros(len(notes), dtype=np.int64)
-        for k, of in enumerate(head.classes.values()):
-            label[carrying(of)] = k
-        label[carrying(head.unknown)] = -1
-        out[name] = label
+    out = labels_by_head(carrying, len(notes), heads)
     for rule in unlabelled:
         hit = (notes['dataset'] == rule.dataset).to_numpy()
         if rule.get('content'):
@@ -51,6 +57,29 @@ def head_labels(notes, heads, unlabelled):
             hit = hit & carrying(rule.marks)
         for name in rule.heads:
             out[name][hit] = -1
+    return out
+
+
+def scores(labels, predicted, classes):
+    """Per-class precision, recall, F1 and count over the labelled notes, and the macro F1 over the classes present."""
+    labels, predicted = labels[labels >= 0], predicted[labels >= 0]
+    out = {}
+    for k, name in enumerate(classes):
+        tp = int(((predicted == k) & (labels == k)).sum())
+        p, r = tp / max(int((predicted == k).sum()), 1), tp / max(int((labels == k).sum()), 1)
+        out[name] = {'n': int((labels == k).sum()), 'P': p, 'R': r, 'F1': 2 * p * r / max(p + r, 1e-9)}
+    present = [m['F1'] for m in out.values() if m['n']]
+    return out | {'macro_F1': float(np.mean(present)) if present else float('nan')}
+
+
+def grouped_scores(frame, labels, predicted, classes):
+    """scores over all notes of `frame` (dataset, player and chain per note, index 0..n-1), per dataset, and per
+    dataset, player and chain, keyed 'all', '<dataset>' and '<dataset>/<player>/<chain>'."""
+    out = {'all': scores(labels, predicted, classes)}
+    for keys in (['dataset'], ['dataset', 'player', 'chain']):
+        for group, g in frame.groupby(keys, sort=True):
+            if (labels[g.index] >= 0).any():
+                out['/'.join(group)] = scores(labels[g.index], predicted[g.index], classes)
     return out
 
 

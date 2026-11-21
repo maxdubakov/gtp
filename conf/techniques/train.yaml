@@ -49,6 +49,10 @@ context: true
 # of the index, as it is and against a strong attack of the same recording. A pick stroke has the burst; a hammer-on,
 # a pull-off or a legato slide has next to none. E.g. {feature: attack48, cache: attack48_onset}; null = not told.
 attack: null
+# Tell it what the tab around the note says: for each of `heads`, how much a tab prior (train_prior.py's run
+# directory `run`) raises each class's odds against the head's first class. E.g. {run: results/techniques/priors/
+# <run>, heads: [attack, glide, pitch]}; null = not told.
+prior: null
 # Partials of the note's pitch marked in a second input channel, so the network knows which of the sounding notes
 # it is asked about (log-mel first view only); 0 = no such channel.
 pitch_harmonics: 0

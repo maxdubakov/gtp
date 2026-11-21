@@ -1,0 +1,43 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: tab_prior
+corpus_dir: data/technique_tabs
+# Files the prior must not read: the ones holding GOAT's pieces (match_goat_tabs.py).
+exclude_files: data/technique_tabs/goat_files.csv
+# The technique classifier's config: the prior answers the same heads, so that the two can be multiplied.
+train_config: conf/techniques/train.yaml
+# Notes per training window.
+window: 128
+steps: 20000
+batch: 256
+lr: 0.002
+weight_decay: 0.0001
+# Against reading exact tab timing, which a recording does not have: each note's start and end are moved at random
+# by about `jitter_s` (redrawn every `jitter_every` steps), and each window is played up to e^`tempo` times faster
+# or slower.
+jitter_s: 0.008
+jitter_every: 500
+tempo: 0.25
+eval_every: 2000
+seed: 0
+
+model:
+  _target_: gtp.stage1.tab_prior.TabPrior
+  width: 128
+  layers: 2
+  dropout: 0.1
+
+wandb:
+  project: gtp
+  entity: null
+  mode: disabled
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/techniques/priors/${now:%Y-%m-%d_%H-%M-%S}_${name}
+  job:
+    config:
+      override_dirname:
+        exclude_keys: [name, wandb.mode]

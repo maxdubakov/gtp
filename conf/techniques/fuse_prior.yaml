@@ -1,0 +1,21 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+runs_dir: results/techniques/runs
+# Classifier runs to fuse: their names after the timestamp.
+pattern: 'd_ex_s*'
+# The tab prior's run directory (train_prior.py).
+prior: ???
+# How much the prior counts next to the classifier, one fused run per weight; 1 = as much as it says.
+weights: [1.0, 2.0, 3.0, 4.0]
+# The heads the prior is fused into. Not muting: on artists it has not read, a tab says next to nothing about which
+# notes are palm-muted (average precision 0.05 at a share of 0.03), and fusing it cost palm mutes 10 points.
+heads: [attack, glide, pitch]
+# Also score the prior with no audio at all.
+alone: true
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
