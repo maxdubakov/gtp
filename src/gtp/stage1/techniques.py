@@ -26,7 +26,8 @@ def head_labels(notes, heads, unlabelled):
 
     A head's class is the last of its `classes` one of whose marks the note carries, the first class for a note
     with none; a note with a mark in the head's `unknown` has no label. Each rule of `unlabelled` removes the
-    labels of its `heads` from the notes of a `dataset` (and `content`, and carrying one of `marks`, where given).
+    labels of its `heads` from the notes of a `dataset` (and of its `content`, of the recordings `recs`, and
+    carrying one of `marks`, where given).
     """
     marks = [set(t.split(',')) - {''} if isinstance(t, str) else set() for t in notes['techniques']]
 
@@ -44,6 +45,8 @@ def head_labels(notes, heads, unlabelled):
         hit = (notes['dataset'] == rule.dataset).to_numpy()
         if rule.get('content'):
             hit = hit & (notes['content'] == rule.content).to_numpy()
+        if rule.get('recs'):
+            hit = hit & notes['rec'].isin(list(rule.recs)).to_numpy()
         if rule.get('marks'):
             hit = hit & carrying(rule.marks)
         for name in rule.heads:
@@ -98,6 +101,19 @@ def string_context(notes):
     )
     out[before['onset'].isna().to_numpy()] = 0
     return pd.DataFrame(out, index=ordered.index).reindex(notes.index).to_numpy(dtype=np.float32)
+
+
+def attack_burst(windows, pre, reach=12, lowest_bin=24):
+    """How far the level of the upper bins jumps near each note's onset, in the spectrogram's units: the largest
+    rise of a three-frame peak over the seven frames before it, searched `reach` frames either side of frame `pre`.
+    `windows` are (notes, bins, frames) of the 'attack48' feature. A pick stroke is a burst there; a hammer-on, a
+    pull-off or a legato slide has next to none."""
+    level = windows[:, lowest_bin:].mean(axis=1)
+    rises = [
+        level[:, t : t + 3].max(axis=1) - level[:, t - 9 : t - 2].mean(axis=1)
+        for t in range(pre - reach, pre + reach + 2)
+    ]
+    return np.max(rises, axis=0)
 
 
 class TechniqueNet(nn.Module):

@@ -8,8 +8,17 @@ pattern: 'a_base_s*'
 # Validation notes counted: a dataset, a player and a chain.
 group: {dataset: goat, player: player2, chain: di}
 # These heads' matrices are also printed per number of frets between the note and the one before it on its string.
-by_frets_heads: [start, attack, glide]
+by_frets_heads: [start, attack, glide, symbol]
 by_frets: [[1, 1], [2, 2], [3, 24]]
+# Two heads read together as one, where a run has both: per joint class, the pairs [class of the first head, class
+# of the second] that make it. `symbol` is what a tab prints: a slide whether or not the note is picked again.
+joint:
+  symbol:
+    heads: [attack, glide]
+    classes:
+      picked: [[picked, none]]
+      legato: [[connected, none]]
+      slide: [[picked, slide], [connected, slide]]
 
 hydra:
   run:

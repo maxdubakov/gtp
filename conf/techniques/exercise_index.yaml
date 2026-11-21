@@ -1,0 +1,51 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+
+out_dir: data/technique_exercises
+datasets: [eg_ipt, ag_pt]
+# The note model that finds the notes of a clip where the dataset does not label them.
+stage1_checkpoint: models/finetuned/z8_step_0045000.pth
+# Transcribed notes shorter than this are dropped as blips.
+min_note_s: 0.05
+
+eg_ipt:
+  dir: data/eg_ipt/unpacked/EG-IPT
+  # Of the six channels of every clip, the direct one.
+  channel: DI
+  # Clip kinds that hold a picked note and the note it leads to: that second note's mark, and how many frets it may
+  # lie from the first (up for a hammer-on, down for a pull-off).
+  led:
+    hammer-on: {mark: hammered, steps: [1, 2, 3, 4, 5]}
+    pull-off: {mark: hammered, steps: [-1, -2, -3, -4, -5]}
+    slide-halftone: {mark: slid, steps: [1, -1]}
+    slide-wholetone: {mark: slid, steps: [2, -2]}
+  # Between the two, a note shorter than this is the pitch passing through.
+  passing_s: 0.15
+  # Clip kinds of one bent note: semitones the pitch moves over the clip (down for a bend that is released).
+  bends:
+    bend-up-halftone: 1
+    bend-up-wholetone: 2
+    bend-up-1-5-tone: 3
+    bend-down-halftone: -1
+    bend-down-wholetone: -2
+  # Clip kinds of one note per fret, from the open string up: the note's marks.
+  single: {ordinario: '', staccato: staccato, muted: palm_mute}
+
+ag_pt:
+  dir: data/ag_pt_set/unpacked/aGPTset
+  # The dataset's labelled techniques that go in the index, with their notes' marks. Picking near the bridge or over
+  # the soundhole is a plain note.
+  labelled: {Palm Mute: palm_mute, near_bridge: '', over_soundhole: ''}
+  # The labels have no offsets: a note lasts to the next one, at most this long.
+  max_note_s: 1.0
+  # In a hammer-on recording the hammered note is one fret above the picked one and starts within this of it.
+  hammer_within_s: 0.6
+  # Players whose recordings validate instead of train.
+  val_players: [lucfra]
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

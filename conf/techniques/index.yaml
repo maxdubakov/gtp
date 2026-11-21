@@ -3,13 +3,17 @@ defaults:
   - override hydra/job_logging: none
   - override hydra/hydra_logging: none
 
-out_dir: data/technique_index2
+out_dir: data/technique_index3
 # The string index whose IDMT and Guitar-TECHS recordings (labels already aligned to the audio) are reused.
 string_index: data/string_index
 datasets: [idmt, guitar_techs]
-# GOAT indexes built by scripts/stage1/strings/build_goat_index.py, which carry the tab's technique marks.
-goat_indexes: [data/technique_index2/goat_trainval, data/technique_index2/goat_test]
-goat_chains: [di]
+# Indexes that already carry technique marks: GOAT's (scripts/stage1/strings/build_goat_index.py, the tab's marks)
+# and the exercise recordings' (scripts/techniques/build_exercise_index.py). Their recordings of `chains` are added.
+labelled_indexes:
+  - data/technique_index3/goat_trainval
+  - data/technique_index3/goat_test
+  - data/technique_exercises
+chains: [di]
 # An IDMT annotation belongs to the index note of its pitch within this of it, once the recording's shift is removed.
 match_s: 0.06
 # In a Guitar-TECHS bend take, a note starting within this of the end of the last note on its string continues its bend.

@@ -69,6 +69,8 @@ def pick(notes, cfg, rng):
             pool = pool[follows(pool, cfg) == g.follows]
         if g.get('players') is not None:
             pool = pool[pool['player'].isin(list(g.players))]
+        if g.get('recs') is not None:
+            pool = pool[pool['rec'].isin(list(g.recs))]
         if g.get('min_s') is not None:
             pool = pool[pool['offset'] - pool['onset'] >= g.min_s]
         taken = {}

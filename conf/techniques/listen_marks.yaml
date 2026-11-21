@@ -11,7 +11,7 @@ splits: [train, val]
 ignore_marks: [let_ring, hammer]
 # Clips per group: `n` notes of `dataset` whose mark is exactly `mark` ('' for none). With `follows`, only notes
 # that do (or do not) start within `follows_s` of a picked note at another fret of their string. With `players`,
-# only those players' notes; with `min_s`, only notes at least that long.
+# only those players' notes; with `recs`, only those recordings'; with `min_s`, only notes at least that long.
 groups:
   - {name: hammered, dataset: goat, mark: hammered, n: 18}
   - {name: slide, dataset: goat, mark: slide, n: 14}

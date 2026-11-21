@@ -9,19 +9,21 @@ Recordings and note times come from indexes that are already aligned to the audi
     are added (direct and amp microphone) with their guitar's median shift. Their pickup labels cut a bend into a
     note per semitone crossed, so each run of notes following one another on a string is joined into one `bend`
     note at the run's first pitch; a note in no run is marked `bend_take`, a bend the labels do not show;
-  * GOAT: the tab's marks, as build_goat_index.py matched them to the audio.
+  * GOAT: the tab's marks, as build_goat_index.py matched them to the audio;
+  * EG-IPT and AG-PT-set: exercise recordings, as build_exercise_index.py labelled them.
 Splits are the sources' own: by guitar (IDMT), by player (Guitar-TECHS, GOAT's test player), GOAT validation by item.
 
 Writes <out_dir>/recordings.csv and notes.csv.gz; scripts/stage1/strings/build_index_cache.py caches its windows.
 
 Usage:
   uv run scripts/stage1/strings/build_goat_index.py manifest=data/stage1_notes_z_refined/manifest.jsonl \
-      "splits=[train,val]" out_dir=data/technique_index2/goat_trainval
+      "splits=[train,val]" out_dir=data/technique_index3/goat_trainval
   uv run scripts/stage1/strings/build_goat_index.py retimed_notes=data/goat/test_retimed/notes.csv.gz \
-      out_dir=data/technique_index2/goat_test
+      out_dir=data/technique_index3/goat_test
+  uv run scripts/techniques/build_exercise_index.py
   uv run scripts/techniques/build_index.py
-  uv run scripts/stage1/strings/build_index_cache.py index_dir=data/technique_index2 augment=1 augment_far=1 \
-      cache=logmel229_wide pre_frames=16 post_frames=68
+  uv run scripts/stage1/strings/build_index_cache.py index_dir=data/technique_index3 feature=cqt36 augment=1 \
+      augment_far=1 cache=cqt36_pitch pre_frames=16 post_frames=68 "pitch_relative={semitones: 5, harmonics: 4}"
 """
 
 import re
@@ -138,12 +140,12 @@ def main(cfg):
         recs = pd.concat([recs, takes])
         parts.append(bends)
     recs = [recs[RECORDING_COLUMNS]]
-    for d in cfg.goat_indexes:
-        goat = pd.read_csv(REPO_ROOT / d / 'recordings.csv')
-        goat = goat[goat['chain'].isin(list(cfg.goat_chains))]
-        goat_notes = pd.read_csv(REPO_ROOT / d / 'notes.csv.gz', keep_default_na=False)
-        recs.append(goat[RECORDING_COLUMNS])
-        parts.append(goat_notes[goat_notes['rec'].isin(goat['rec'])])
+    for d in cfg.labelled_indexes:
+        more = pd.read_csv(REPO_ROOT / d / 'recordings.csv')
+        more = more[more['chain'].isin(list(cfg.chains))]
+        more_notes = pd.read_csv(REPO_ROOT / d / 'notes.csv.gz', keep_default_na=False)
+        recs.append(more[RECORDING_COLUMNS])
+        parts.append(more_notes[more_notes['rec'].isin(more['rec'])])
     recs, notes = pd.concat(recs, ignore_index=True), pd.concat(parts, ignore_index=True)
     notes = notes.sort_values(['rec', 'onset', 'pitch'], kind='stable').reset_index(drop=True)
     out = REPO_ROOT / cfg.out_dir

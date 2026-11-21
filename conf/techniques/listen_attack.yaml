@@ -1,0 +1,42 @@
+defaults:
+  - listen_marks
+  - _self_
+
+name: picked_marks
+index_dir: data/technique_index2b
+# Player 1's training pieces by scripts/techniques/attack_check.py: in the `doubted` ones the notes marked as hammered
+# carry a pick's burst about as often as the picked notes do (AUC under 0.75), in the `trusted` ones almost never
+# (0.9 and over).
+groups:
+  - name: doubted
+    dataset: goat
+    mark: hammered
+    recs:
+      - goat/item_94/di
+      - goat/item_114/di
+      - goat/item_33/di
+      - goat/item_145/di
+      - goat/item_12/di
+      - goat/item_93/di
+      - goat/item_157/di
+      - goat/item_20/di
+      - goat/item_47/di
+      - goat/item_32/di
+      - goat/item_170/di
+    n: 12
+  - name: trusted
+    dataset: goat
+    mark: hammered
+    recs:
+      - goat/item_77/di
+      - goat/item_22/di
+      - goat/item_100/di
+      - goat/item_36/di
+      - goat/item_57/di
+      - goat/item_34/di
+      - goat/item_1/di
+      - goat/item_131/di
+      - goat/item_56/di
+      - goat/item_86/di
+    n: 8
+  - {name: plain_follows, dataset: goat, mark: '', follows: true, players: [player1], n: 4}

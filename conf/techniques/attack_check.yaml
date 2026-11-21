@@ -1,0 +1,19 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+index_dir: data/technique_index2b
+# The short-window cache around each onset (scripts/stage1/strings/build_index_cache.py with feature attack48).
+feature: attack48
+cache: attack48_onset
+# The head whose first class is the picked notes and whose second is the notes marked as not picked.
+train_config: conf/techniques/train.yaml
+head: attack
+# Recordings with fewer marked notes than this are not judged.
+min_marked: 15
+out: results/techniques/attack_check.csv
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
