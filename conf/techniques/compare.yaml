@@ -23,6 +23,8 @@ columns:
   - {name: evh bend, group: guitar_techs/P2/di, head: pitch, class: bend}
   - {name: idmt bend, group: idmt/christian-kehling/di, head: pitch, class: bend}
   - {name: idmt dead, group: idmt/christian-kehling/di, head: muting, class: dead}
+  - {name: acoustic connected, group: ag_pt/lucfra/di, head: attack, class: connected}
+  - {name: acoustic palm, group: ag_pt/lucfra/di, head: muting, class: palm_mute}
 metric: F1
 
 hydra:

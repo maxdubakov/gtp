@@ -3,7 +3,7 @@ defaults:
   - override hydra/job_logging: none
 
 name: techniques
-index_dir: data/technique_index2
+index_dir: data/technique_index3
 feature: cqt36
 # The window cache: 16 frames (0.19 s) before the onset, to hear the note before, and 68 (0.79 s) after, to hear
 # the pitch move. This one follows each note's pitch: 5 semitones either side of it and of its next three partials,
