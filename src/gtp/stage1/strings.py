@@ -45,8 +45,10 @@ SOURCES = {
     'mix': ('audio_mono-pickup_mix', '_mix.wav'),
     'hex': ('audio_hex-pickup_debleeded', '_hex_cln.wav'),
 }
-FEATURES = ('logmel64', 'logmel229', 'cqt', 'cqt36')
+FEATURES = ('logmel64', 'logmel229', 'cqt', 'cqt36', 'attack48')
 CQT36_LOWEST = 33
+# Features with frames closer together than HOP.
+FEATURE_HOPS = {'attack48': 64}
 PLAYERS = ('00', '01', '02', '03', '04', '05')
 
 
@@ -127,6 +129,11 @@ def spectrogram(audio, feature):
             )
             ** 2
         )
+    elif feature == 'attack48':
+        # 23 ms windows every 3 ms: fine enough in time to show a pick attack, too coarse in frequency for pitch.
+        spec = librosa.feature.melspectrogram(
+            y=audio, sr=SAMPLE_RATE, n_fft=512, hop_length=FEATURE_HOPS[feature], n_mels=48, fmin=80.0
+        )
     else:
         raise ValueError(f'Unknown feature {feature!r}, expected one of {FEATURES}')
     return np.log(spec + 1e-8).astype(np.float32)
@@ -138,9 +145,9 @@ def load_audio(track, source):
     return librosa.resample(audio.T, orig_sr=sr, target_sr=SAMPLE_RATE)
 
 
-def note_windows(spec, onsets, pre=PRE_FRAMES, post=MAX_POST_FRAMES):
+def note_windows(spec, onsets, pre=PRE_FRAMES, post=MAX_POST_FRAMES, hop=HOP):
     """Crop (channels, freq, pre+post) windows starting `pre` frames before each onset."""
-    starts = np.round(onsets * SAMPLE_RATE / HOP).astype(int) - pre
+    starts = np.round(onsets * SAMPLE_RATE / hop).astype(int) - pre
     pad = 2 * pre + post
     padded = np.pad(spec, ((0, 0), (0, 0), (pad, pad)), constant_values=spec.min())
     return np.stack([padded[:, :, s + pad : s + pad + pre + post] for s in starts])
@@ -181,9 +188,9 @@ def cache_path(source, feature):
     return CACHE_DIR / f'{source}_{feature}.npy'
 
 
-def cache_layout(pre=PRE_FRAMES, post=MAX_POST_FRAMES):
+def cache_layout(pre=PRE_FRAMES, post=MAX_POST_FRAMES, hop=HOP):
     """Constants a cache was built with; a cache built under different ones is stale."""
-    return {'sample_rate': SAMPLE_RATE, 'hop': HOP, 'pre_frames': pre, 'max_post_frames': post}
+    return {'sample_rate': SAMPLE_RATE, 'hop': hop, 'pre_frames': pre, 'max_post_frames': post}
 
 
 def load_cache(source, feature, n_notes):

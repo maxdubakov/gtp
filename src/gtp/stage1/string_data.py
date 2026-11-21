@@ -417,7 +417,8 @@ def load_cached_index(index_dir, feature, cache=None):
     stem = index / 'cache' / (cache or feature)
     meta = json.loads(stem.with_suffix('.json').read_text())
     rows = pd.read_csv(f'{stem}_rows.csv.gz')
-    layout = cache_layout(meta['layout']['pre_frames'], meta['layout']['max_post_frames']) if cache else cache_layout()
+    own = meta['layout']
+    layout = cache_layout(own['pre_frames'], own['max_post_frames'], own['hop']) if cache else cache_layout()
     if meta['feature'] != feature or meta['layout'] != layout or rows['note'].max() >= len(notes):
         raise ValueError(f'{stem} is stale against the index or the layout: rebuild it')
     x = np.load(stem.with_suffix('.npy'), mmap_mode='r')

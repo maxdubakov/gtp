@@ -5,7 +5,7 @@ through its own random chain (chains.py) drawn from a seed fixed by (recording, 
 identical and a window can be traced back to its chain; then `augment_far` more through far-field chains
 (variants augment+1 and up). Val and test stay real recordings only, and so do the room recordings, which
 are far-field already. With `cache` set, the windows take `pre_frames` before the onset and `post_frames` after
-it in place of the string classifier's, and the files are named after `cache` in place of the feature. With
+it (frames of the feature's own hop) in place of the string classifier's, and the files are named after `cache`. With
 `pitch_relative` as well, each window is cut around its note's pitch and partials (gtp.stage1.techniques.pitch_windows).
 
 Writes to <index_dir>/cache/:
@@ -33,7 +33,16 @@ from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage1 import chains
 from gtp.stage1.string_data import ROOM_CHAINS
-from gtp.stage1.strings import MAX_POST_FRAMES, PRE_FRAMES, SAMPLE_RATE, cache_layout, note_windows, spectrogram
+from gtp.stage1.strings import (
+    FEATURE_HOPS,
+    HOP,
+    MAX_POST_FRAMES,
+    PRE_FRAMES,
+    SAMPLE_RATE,
+    cache_layout,
+    note_windows,
+    spectrogram,
+)
 from gtp.stage1.techniques import pitch_windows
 from gtp.track import git_state
 
@@ -58,7 +67,7 @@ def recording_windows(job):
         if relative:
             windows = pitch_windows(spec, onsets, pitches, pre, post, relative['semitones'], relative['harmonics'])
         else:
-            windows = note_windows(spec, onsets, pre, post)
+            windows = note_windows(spec, onsets, pre, post, FEATURE_HOPS.get(feature, HOP))
         out.append(windows.astype(np.float16))
     return out, params
 
@@ -118,7 +127,7 @@ def main(cfg):
         'augment': cfg.augment,
         'augment_far': cfg.augment_far,
         'limit': cfg.limit,
-        'layout': cache_layout(pre, post),
+        'layout': cache_layout(pre, post, FEATURE_HOPS.get(cfg.feature, HOP)),
         'pitch_relative': relative,
         'n_windows': len(rows),
         'librosa': librosa.__version__,
