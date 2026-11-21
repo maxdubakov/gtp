@@ -11,11 +11,13 @@ columns:
   - {name: p2 legato, group: goat/player2/di, head: start, class: legato}
   - {name: p2 slide, group: goat/player2/di, head: start, class: slide}
   - {name: p2 bend, group: goat/player2/di, head: pitch, class: bend}
-  - {name: p2 vibrato, group: goat/player2/di, head: pitch, class: vibrato}
   - {name: p2 palm, group: goat/player2/di, head: muting, class: palm_mute}
+  - {name: p1 legato, group: goat/player1/di, head: start, class: legato}
+  - {name: p1 slide, group: goat/player1/di, head: start, class: slide}
   - {name: evh palm, group: guitar_techs/P2/di, head: muting, class: palm_mute}
+  - {name: evh palm room, group: guitar_techs/P2/ego, head: muting, class: palm_mute}
   - {name: evh bend, group: guitar_techs/P2/di, head: pitch, class: bend}
-  - {name: idmt vibrato, group: idmt/christian-kehling/di, head: pitch, class: vibrato}
+  - {name: idmt bend, group: idmt/christian-kehling/di, head: pitch, class: bend}
   - {name: idmt dead, group: idmt/christian-kehling/di, head: muting, class: dead}
 metric: F1
 

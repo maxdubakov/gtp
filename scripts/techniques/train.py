@@ -1,7 +1,8 @@
 """Train a per-note classifier of playing techniques on the technique index (build_index.py and its window cache).
 
-The input is the spectrogram window around a labelled note's onset; the output is one class per head (`heads`):
-how the note is muted, how it starts, what its pitch does. A note can lack a label for a head (an unknown mark, a
+The input is the spectrogram window around a labelled note's onset, in one or more views (window caches of the
+index), and optionally a few numbers about the note before it on its string; the output is one class per head
+(`heads`): how the note is muted, how it starts, what its pitch does. A note can lack a label for a head (an unknown mark, a
 dataset whose labels for it are missing or not trusted); it then counts for the other heads only. Note times are
 the labels' own, so this measures whether the classes can be told apart when the note is given, apart from whether
 the note model finds it. Splits are the index's (by guitar or player; GOAT validation by item), with the players of
@@ -32,7 +33,7 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.techniques import head_labels, pitch_comb
+from gtp.stage1.techniques import head_labels, pitch_comb, string_context
 from gtp.track import start_run
 
 
@@ -66,22 +67,56 @@ def stretches(n, length, most, device):
     return (cells >= start) & (cells < start + torch.randint(0, most + 1, (n, 1), device=device))
 
 
-def augmented(x, cfg):
-    """A normalised training batch (notes, channels, bins, frames) moved in time and frequency (the same move for
-    the whole batch, the vacated edge at the mean), with stretches of frames and bins set to the mean and a level
-    offset per note."""
-    for dim, most in ((3, cfg.shift_frames), (2, cfg.shift_bins)):
-        by = int(torch.randint(-most, most + 1, ())) if most else 0
-        if by:
-            x = torch.roll(x, by, dims=dim)
-            x.narrow(dim, 0 if by > 0 else x.shape[dim] + by, abs(by)).zero_()
-    for _ in range(cfg.time_masks):
-        x = x.masked_fill(stretches(len(x), x.shape[3], cfg.time_mask, x.device)[:, None, None, :], 0.0)
-    for _ in range(cfg.freq_masks):
-        x = x.masked_fill(stretches(len(x), x.shape[2], cfg.freq_mask, x.device)[:, None, :, None], 0.0)
-    if cfg.gain:
-        x = x + cfg.gain * torch.randn(len(x), 1, 1, 1, device=x.device)
+def moved(x, by, dim):
+    """`x` moved by `by` cells along `dim`, the vacated edge at zero (the mean of a normalised batch)."""
+    if by:
+        x = torch.roll(x, by, dims=dim)
+        x.narrow(dim, 0 if by > 0 else x.shape[dim] + by, abs(by)).zero_()
     return x
+
+
+def augmented(views, cfg):
+    """A normalised training batch, each view (notes, channels, bins, frames), changed at random: all views moved
+    alike in time and the first in frequency (one move for the whole batch), stretches of frames and bins set to
+    the mean per note, and a level offset per note."""
+    in_time = int(torch.randint(-cfg.shift_frames, cfg.shift_frames + 1, ()))
+    in_freq = int(torch.randint(-cfg.shift_bins, cfg.shift_bins + 1, ()))
+    out = []
+    for i, x in enumerate(views):
+        x = moved(moved(x, in_time, 3), in_freq if i == 0 else 0, 2)
+        for _ in range(cfg.time_masks):
+            x = x.masked_fill(stretches(len(x), x.shape[3], cfg.time_mask, x.device)[:, None, None, :], 0.0)
+        for _ in range(cfg.freq_masks):
+            x = x.masked_fill(stretches(len(x), x.shape[2], cfg.freq_mask, x.device)[:, None, :, None], 0.0)
+        if cfg.gain:
+            x = x + cfg.gain * torch.randn(len(x), 1, 1, 1, device=x.device)
+        out.append(x)
+    return out
+
+
+def on_device(x, rows, pool_bins, device):
+    """The cache's windows of `rows` on the device as float16, neighbouring frequency bins averaged in `pool_bins`."""
+    out = None
+    for i in range(0, len(rows), 8192):
+        chunk = torch.from_numpy(np.ascontiguousarray(x[rows[i : i + 8192]])).to(device)
+        if pool_bins > 1:
+            chunk = F.avg_pool2d(chunk.float(), (pool_bins, 1)).half()
+        if out is None:
+            out = torch.empty((len(rows), *chunk.shape[1:]), dtype=torch.float16, device=device)
+        out[i : i + 8192] = chunk
+    return out
+
+
+def bin_stats(xs):
+    """Mean and spread per frequency bin over a view's windows, shaped to broadcast against a batch."""
+    total, total_sq = np.zeros(xs.shape[2]), np.zeros(xs.shape[2])
+    for i in range(0, len(xs), 8192):
+        b = xs[i : i + 8192].float()
+        total += b.sum(dim=(0, 1, 3)).cpu().double().numpy()
+        total_sq += (b**2).sum(dim=(0, 1, 3)).cpu().double().numpy()
+    count = len(xs) * xs.shape[1] * xs.shape[3]
+    mean, var = total / count, np.maximum(total_sq / count - (total / count) ** 2, 1e-6)
+    return [torch.from_numpy(v).float().to(xs.device)[None, None, :, None] for v in (mean, np.sqrt(var))]
 
 
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'techniques'), config_name='train')
@@ -114,25 +149,27 @@ def main(cfg):
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')
 
     t0 = time.time()
+    caches = [(x, 1)]
+    for view in cfg.more_views:
+        _, view_rows, view_x, _ = load_cached_index(cfg.index_dir, view.feature, view.cache)
+        if not view_rows.equals(rows):
+            raise ValueError(f'{view.cache} lists other windows than {cfg.cache}')
+        caches.append((view_x, view.pool_bins))
     pitch = torch.tensor(notes['pitch'].to_numpy())
+    context = torch.from_numpy(string_context(notes)) if cfg.context else None
     data = {}
     for k, v in idx.items():
-        xs = torch.empty((len(v), *x.shape[1:]), dtype=torch.float16, device=device)
-        for i in range(0, len(v), 8192):
-            xs[i : i + 8192] = torch.from_numpy(np.ascontiguousarray(x[v[i : i + 8192]])).to(device)
-        data[k] = (xs, pitch[note[v]].to(device), torch.from_numpy(label[note[v]]).to(device))
-    info(f'windows {sizes} of {x.shape[2]} x {x.shape[3]} on {device} in {time.time() - t0:.0f}s')
+        data[k] = (
+            [on_device(view_x, v, pool_bins, device) for view_x, pool_bins in caches],
+            pitch[note[v]].to(device),
+            None if context is None else context[note[v]].to(device),
+            torch.from_numpy(label[note[v]]).to(device),
+        )
+    shapes = [tuple(xs.shape[1:]) for xs in data['train'][0]]
+    info(f'windows {sizes} of {shapes} on {device} in {time.time() - t0:.0f}s')
 
-    xs, _, ys = data['train']
-    total, total_sq = np.zeros(xs.shape[2]), np.zeros(xs.shape[2])
-    for i in range(0, len(xs), 8192):
-        b = xs[i : i + 8192].float()
-        total += b.sum(dim=(0, 1, 3)).cpu().double().numpy()
-        total_sq += (b**2).sum(dim=(0, 1, 3)).cpu().double().numpy()
-    count = len(xs) * xs.shape[1] * xs.shape[3]
-    mean = torch.from_numpy(total / count).float().to(device)[None, None, :, None]
-    std = torch.from_numpy(np.sqrt(np.maximum(total_sq / count - (total / count) ** 2, 1e-6))).float().to(device)
-    std = std[None, None, :, None]
+    stats = [bin_stats(xs) for xs in data['train'][0]]
+    ys = data['train'][3]
     weights = []
     for h, (name, classes) in enumerate(heads.items()):
         share = torch.bincount(ys[ys[:, h] >= 0, h], minlength=len(classes)).float()
@@ -140,34 +177,31 @@ def main(cfg):
         weight = share.clamp_min(1e-6) ** -cfg.class_weight_power
         weights.append(weight / (weight * share).sum())
         info(f'{name}: training share {dict(zip(classes, [round(v, 4) for v in share.tolist()], strict=True))}')
-    comb = torch.from_numpy(pitch_comb(x.shape[2], cfg.pitch_harmonics)).to(device) if cfg.pitch_harmonics else None
+    comb = torch.from_numpy(pitch_comb(shapes[0][1], cfg.pitch_harmonics)).to(device) if cfg.pitch_harmonics else None
 
     def batches(k, shuffle=False):
-        xs, ps, ys = data[k]
-        order = torch.randperm(len(xs), device=device) if shuffle else torch.arange(len(xs), device=device)
-        for i in range(0, len(xs), cfg.optim.batch):
+        views, ps, cs, ys = data[k]
+        order = torch.randperm(len(ps), device=device) if shuffle else torch.arange(len(ps), device=device)
+        for i in range(0, len(ps), cfg.optim.batch):
             b = order[i : i + cfg.optim.batch]
-            xb = (xs[b].float() - mean) / std
+            xb = [(xs[b].float() - mean) / std for xs, (mean, std) in zip(views, stats, strict=True)]
             if shuffle:
                 xb = augmented(xb, cfg.augment)
             if comb is not None:
-                xb = torch.cat([xb, comb[ps[b]][:, None, :, None].expand(-1, 1, -1, xb.shape[3])], dim=1)
-            yield xb, ps[b], ys[b]
+                marked = comb[ps[b]][:, None, :, None].expand(-1, 1, -1, xb[0].shape[3])
+                xb[0] = torch.cat([xb[0], marked], dim=1)
+            yield xb, ps[b], None if cs is None else cs[b], ys[b]
 
     sizes_of = [len(c) for c in heads.values()]
+    shapes[0] = (shapes[0][0] + (comb is not None), *shapes[0][1:])
     model = instantiate(
-        cfg.model,
-        in_channels=x.shape[1] + (comb is not None),
-        n_freq=x.shape[2],
-        n_frames=x.shape[3],
-        n_classes=sum(sizes_of),
+        cfg.model, views=shapes, n_classes=sum(sizes_of), context=0 if context is None else context.shape[1]
     ).to(device)
-    every = torch.ones(1, sum(sizes_of), dtype=torch.bool, device=device)
 
     def logits_of(k):
         model.eval()
         with torch.no_grad():
-            return torch.cat([model(xb, pb, every).cpu() for xb, pb, _ in batches(k)]).split(sizes_of, dim=1)
+            return torch.cat([model(xb, pb, cb).cpu() for xb, pb, cb, _ in batches(k)]).split(sizes_of, dim=1)
 
     def report(k):
         frame = notes.iloc[note[idx[k]]].reset_index(drop=True)
@@ -188,8 +222,8 @@ def main(cfg):
     for epoch in range(cfg.optim.epochs):
         model.train()
         t0, loss_sum, n_batches = time.time(), 0.0, 0
-        for xb, pb, yb in batches('train', shuffle=True):
-            parts = model(xb, pb, every).split(sizes_of, dim=1)
+        for xb, pb, cb, yb in batches('train', shuffle=True):
+            parts = model(xb, pb, cb).split(sizes_of, dim=1)
             loss = sum(
                 F.cross_entropy(
                     part, yb[:, h], weight=weights[h], ignore_index=-1, label_smoothing=cfg.optim.label_smoothing
@@ -209,7 +243,10 @@ def main(cfg):
         info(f'epoch {epoch:2d} loss {loss_sum / n_batches:.3f} val macro F1 {per} ({time.time() - t0:.0f}s)')
 
     torch.save(model.state_dict(), run.dir / 'model.pt')
-    np.savez(run.dir / 'classifier.npz', mean=mean.cpu().numpy(), std=std.cpu().numpy())
+    scale = {
+        f'{k}{i}': v.cpu().numpy() for i, pair in enumerate(stats) for k, v in zip(('mean', 'std'), pair, strict=True)
+    }
+    np.savez(run.dir / 'classifier.npz', **scale)
     metrics = {'heads': heads, 'windows': sizes, 'history': history}
     for k in idx:
         if k != 'train':

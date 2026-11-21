@@ -4,10 +4,11 @@ defaults:
 
 name: techniques
 index_dir: data/technique_index2
-feature: logmel229
+feature: cqt36
 # The window cache: 16 frames (0.19 s) before the onset, to hear the note before, and 68 (0.79 s) after, to hear
-# the pitch move.
-cache: logmel229_wide
+# the pitch move. This one follows each note's pitch: 5 semitones either side of it and of its next three partials,
+# a third of a semitone per bin. `logmel229` with `logmel229_wide` is the whole spectrum instead.
+cache: cqt36_pitch
 # What the classifier says about a note. A head's class is the last of its classes one of whose marks the note
 # carries, the first class for a note with none; a note with a mark in `unknown` has no label for the head.
 heads:
@@ -18,7 +19,9 @@ heads:
     classes: {picked: [], legato: [hammered], slide: [slid, slide_in]}
     unknown: [dead, tie, grace, tapping, harmonic, pinch_harmonic]
   pitch:
-    classes: {steady: [], vibrato: [vibrato], bend: [bend]}
+    # Vibrato notes count as steady: with vibrato as a third class nothing else got better or worse, and it was
+    # found on 10% of a held-out player's notes.
+    classes: {steady: [], bend: [bend]}
     unknown: [dead, tie, bend_take, slide_out, whammy, trill, tremolo_picking, harmonic, pinch_harmonic]
 # Labels that are missing or not trusted, so the notes do not count for these heads in training or scoring:
 # GOAT's dead marks are mostly not played dead (listening test, 20 Nov); an IDMT slide is one note whose pitch
@@ -30,9 +33,15 @@ unlabelled:
 # player1, who also plays most of its training pieces; player2 (32 pieces on another guitar) is a new player.
 validate_on:
   - {dataset: goat, player: player2}
+# More views of each note, from other window caches of the same index, each through conv blocks of its own;
+# `pool_bins` averages that many neighbouring frequency bins. E.g. the whole spectrum next to a pitch-following
+# first view: [{feature: logmel229, cache: logmel229_wide, pool_bins: 4}].
+more_views: []
+# Tell the network about the note before on the same string: its fret and how long ago it started and ended.
+context: false
 # Partials of the note's pitch marked in a second input channel, so the network knows which of the sounding notes
-# it is asked about; 0 = no such channel.
-pitch_harmonics: 8
+# it is asked about (log-mel first view only); 0 = no such channel.
+pitch_harmonics: 0
 # Random changes to each training batch, against memorising the training notes. The window is moved by up to
 # `shift_frames` in time and `shift_bins` in frequency; `time_masks` stretches of up to `time_mask` frames and
 # `freq_masks` of up to `freq_mask` bins are blanked per note; `gain` is the spread of a level offset per note, in
@@ -59,13 +68,11 @@ report_test: false
 seed: 0
 
 model:
-  _target_: gtp.stage1.strings.StringNet
+  _target_: gtp.stage1.techniques.TechniqueNet
   width: 1.0
-  use_pitch: true
   pool: flatten
-  pool_first: false
-  dropout: 0.3
-  conv_dropout: 0.0
+  dropout: 0.5
+  conv_dropout: 0.1
 
 optim:
   epochs: 30

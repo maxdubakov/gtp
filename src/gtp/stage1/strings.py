@@ -217,7 +217,6 @@ class StringNet(nn.Module):
     so which timbre means "G string" depends on the family.
     `n_classes` other than the six strings makes it a classifier of something else heard in the note (its playing
     technique); `candidates` then is an all-true mask.
-    `dropout` acts before the head, `conv_dropout` drops whole feature maps after each conv block.
     """
 
     def __init__(
@@ -231,8 +230,6 @@ class StringNet(nn.Module):
         pool='flatten',
         use_family=False,
         n_classes=N_STRINGS,
-        dropout=0.3,
-        conv_dropout=0.0,
     ):
         super().__init__()
         chans = [max(4, round(c * width)) for c in (32, 64, 128)]
@@ -240,8 +237,6 @@ class StringNet(nn.Module):
         for c in chans:
             conv, bn, relu, halve = nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)
             layers += [conv, halve, bn, relu] if pool_first else [conv, bn, relu, halve]
-            # Added only when used, so the layer numbering of checkpoints trained without it stays as it was.
-            layers += [nn.Dropout2d(conv_dropout)] if conv_dropout else []
             prev = c
         self.encoder = nn.Sequential(*layers)
         self.pool = POOLS[pool]
@@ -251,7 +246,7 @@ class StringNet(nn.Module):
         self.pitch_emb = nn.Embedding(128, 16) if use_pitch else None
         self.family_emb = nn.Embedding(len(FAMILIES), 8) if use_family else None
         width_in = 256 + (16 if use_pitch else 0) + (8 if use_family else 0)
-        self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(width_in, 128), nn.ReLU(), nn.Linear(128, n_classes))
+        self.head = nn.Sequential(nn.Dropout(0.3), nn.Linear(width_in, 128), nn.ReLU(), nn.Linear(128, n_classes))
 
     def forward(self, x, pitch, candidates, family=None):
         h = self.proj(self.pool(self.encoder(x)))

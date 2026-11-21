@@ -2,8 +2,11 @@
 
 import librosa
 import numpy as np
+import pandas as pd
+import torch
+from torch import nn
 
-from gtp.stage1.strings import CQT36_LOWEST, HOP, SAMPLE_RATE
+from gtp.stage1.strings import CQT36_LOWEST, HOP, POOLS, SAMPLE_RATE
 
 
 def class_of(techniques, classes, other_marks):
@@ -76,3 +79,53 @@ def pitch_windows(spec, onsets, pitches, pre, post, semitones, harmonics):
             for r, s in zip(rows, starts, strict=True)
         ]
     )
+
+
+def string_context(notes):
+    """(notes, 4) numbers about the note before each note on its string, zeros where there is none: a one, that
+    note's fret minus this one's in octaves, and the seconds since it started and since it ended (negative while it
+    still sounds), each clipped. A hammer-on, a pull-off or a slide is a way of getting from that note to this one."""
+    ordered = notes.sort_values(['rec', 'string', 'onset'], kind='stable')
+    before = ordered.groupby(['rec', 'string'], sort=False)[['onset', 'offset', 'fret']].shift()
+    out = np.stack(
+        [
+            np.ones(len(ordered)),
+            ((before['fret'] - ordered['fret']) / 12).clip(-1, 1),
+            (ordered['onset'] - before['onset']).clip(0, 2),
+            (ordered['onset'] - before['offset']).clip(-1, 1),
+        ],
+        axis=1,
+    )
+    out[before['onset'].isna().to_numpy()] = 0
+    return pd.DataFrame(out, index=ordered.index).reindex(notes.index).to_numpy(dtype=np.float32)
+
+
+class TechniqueNet(nn.Module):
+    """Per-note classifier of playing techniques. Each view of the note (a spectrogram window of some kind, given as
+    its (channels, bins, frames)) goes through three conv blocks of its own; the views' features, the note's pitch
+    and, with `context`, that many numbers about its surroundings (string_context) go to one head. `pool` is how a
+    view's time axis is collapsed (gtp.stage1.strings.POOLS)."""
+
+    def __init__(self, views, n_classes, width=1.0, pool='flatten', dropout=0.3, conv_dropout=0.0, context=0):
+        super().__init__()
+        self.pool = POOLS[pool]
+        self.encoders, self.projs = nn.ModuleList(), nn.ModuleList()
+        for view in views:
+            layers, prev = [], view[0]
+            for c in (max(4, round(c * width)) for c in (32, 64, 128)):
+                layers += [nn.Conv2d(prev, c, 3, padding=1), nn.BatchNorm2d(c), nn.ReLU(), nn.MaxPool2d(2)]
+                layers += [nn.Dropout2d(conv_dropout)]
+                prev = c
+            encoder = nn.Sequential(*layers)
+            with torch.no_grad():
+                dim = self.pool(encoder(torch.zeros(1, *view))).shape[1]
+            self.encoders.append(encoder)
+            self.projs.append(nn.Sequential(nn.Linear(dim, 256), nn.LayerNorm(256), nn.ReLU()))
+        self.pitch_emb = nn.Embedding(128, 16)
+        width_in = 256 * len(views) + 16 + context
+        self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(width_in, 128), nn.ReLU(), nn.Linear(128, n_classes))
+
+    def forward(self, views, pitch, context=None):
+        h = [proj(self.pool(enc(x))) for enc, proj, x in zip(self.encoders, self.projs, views, strict=True)]
+        h += [self.pitch_emb(pitch)] + ([] if context is None else [context])
+        return self.head(torch.cat(h, dim=1))
