@@ -10,7 +10,9 @@ TICKS_PER_QUARTER = 960
 def note_techniques(note, beat):
     """Names of the playing techniques written on a note or on its beat. `hammer` marks the note a hammer-on or
     pull-off starts from and `slide` the note a slide to the next note starts from; parse_gp_track marks the notes
-    they lead to as `hammered` and `slid`. `slide_in` and `slide_out` are slides from or to no particular note."""
+    they lead to as `hammered` and `slid`. A shift slide, whose landing note is picked again, is also marked
+    `slide_shift`, and its landing note `slid_shift` in place of `slid`. `slide_in` and `slide_out` are slides from
+    or to no particular note."""
     e, b = note.effect, beat.effect
     slides = set(e.slides)
     marks = {
@@ -19,6 +21,7 @@ def note_techniques(note, beat):
         'palm_mute': e.palmMute,
         'bend': e.bend is not None,
         'slide': bool(slides & {gp.SlideType.shiftSlideTo, gp.SlideType.legatoSlideTo}),
+        'slide_shift': gp.SlideType.shiftSlideTo in slides,
         'slide_in': bool(slides & {gp.SlideType.intoFromAbove, gp.SlideType.intoFromBelow}),
         'slide_out': bool(slides & {gp.SlideType.outDownwards, gp.SlideType.outUpwards}),
         'hammer': e.hammer,
@@ -93,7 +96,8 @@ def parse_gp_track(gp_path, track_idx, techniques=False):
         for n in sorted(notes, key=lambda n: n['start']):
             before = last.get(n['string'], ())
             last[n['string']] = list(n['techniques'])
-            n['techniques'] += [led for mark, led in (('hammer', 'hammered'), ('slide', 'slid')) if mark in before]
+            slid = 'slid_shift' if 'slide_shift' in before else 'slid'
+            n['techniques'] += [led for mark, led in (('hammer', 'hammered'), ('slide', slid)) if mark in before]
 
     # Clamp implausible tempos to None — the source files occasionally have
     # garbage values like 5 or 375 BPM, which give the model a fake, useless

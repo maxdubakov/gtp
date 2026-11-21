@@ -1,0 +1,17 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+runs_dir: results/techniques/runs
+# Runs whose name (after the timestamp) matches; their counts are averaged.
+pattern: 'a_base_s*'
+# Validation notes counted: a dataset, a player and a chain.
+group: {dataset: goat, player: player2, chain: di}
+# These heads' matrices are also printed per number of frets between the note and the one before it on its string.
+by_frets_heads: [start, attack, glide]
+by_frets: [[1, 1], [2, 2], [3, 24]]
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

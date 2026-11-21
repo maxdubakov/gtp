@@ -10,6 +10,10 @@ patterns: ['*']
 columns:
   - {name: p2 legato, group: goat/player2/di, head: start, class: legato}
   - {name: p2 slide, group: goat/player2/di, head: start, class: slide}
+  - {name: p2 connected, group: goat/player2/di, head: attack, class: connected}
+  - {name: p2 glide, group: goat/player2/di, head: glide, class: slide}
+  - {name: p1 connected, group: goat/player1/di, head: attack, class: connected}
+  - {name: p1 glide, group: goat/player1/di, head: glide, class: slide}
   - {name: p2 bend, group: goat/player2/di, head: pitch, class: bend}
   - {name: p2 palm, group: goat/player2/di, head: muting, class: palm_mute}
   - {name: p1 legato, group: goat/player1/di, head: start, class: legato}

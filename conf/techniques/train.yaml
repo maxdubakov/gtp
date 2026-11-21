@@ -15,8 +15,14 @@ heads:
   muting:
     classes: {plain: [], palm_mute: [palm_mute], dead: [dead]}
     unknown: [harmonic, pinch_harmonic, ghost, tie]
-  start:
-    classes: {picked: [], legato: [hammered], slide: [slid, slide_in]}
+  # Whether the note is picked, or connected to the note before without a new pick stroke: a hammer-on, a pull-off
+  # or a legato slide. A shift slide lands on a picked note (`slid_shift`).
+  attack:
+    classes: {picked: [], connected: [hammered, slid]}
+    unknown: [dead, tie, grace, tapping, harmonic, pinch_harmonic]
+  # Whether the pitch slides into the note, picked again or not.
+  glide:
+    classes: {none: [], slide: [slid, slid_shift, slide_in]}
     unknown: [dead, tie, grace, tapping, harmonic, pinch_harmonic]
   pitch:
     # Vibrato notes count as steady: with vibrato as a third class nothing else got better or worse, and it was
@@ -28,7 +34,7 @@ heads:
 # glides, not a note slid into.
 unlabelled:
   - {dataset: goat, marks: [dead], heads: [muting]}
-  - {dataset: idmt, marks: [slide], heads: [start, pitch]}
+  - {dataset: idmt, marks: [slide], heads: [attack, glide, pitch]}
 # Players whose recordings validate instead of train. All of GOAT's own validation and test pieces are played by
 # player1, who also plays most of its training pieces; player2 (32 pieces on another guitar) is a new player.
 validate_on:
