@@ -1,8 +1,8 @@
 """Train a per-note classifier of playing techniques on the technique index (build_index.py and its window cache).
 
 The input is the spectrogram window around a labelled note's onset, in one or more views (window caches of the
-index), and optionally a few numbers about the note before it on its string; the output is one class per head
-(`heads`): how the note is muted, how it starts, what its pitch does. A note can lack a label for a head (an unknown mark, a
+index), and optionally a few numbers about the note before it on its string and about how hard its attack is; the
+output is one class per head (`heads`): how the note is muted, how it starts, what its pitch does. A note can lack a label for a head (an unknown mark, a
 dataset whose labels for it are missing or not trusted); it then counts for the other heads only. Note times are
 the labels' own, so this measures whether the classes can be told apart when the note is given, apart from whether
 the note model finds it. Splits are the index's (by guitar or player; GOAT validation by item), with the players of
@@ -33,7 +33,7 @@ from gtp import REPO_ROOT
 from gtp.device import auto_device
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.techniques import head_labels, pitch_comb, string_context
+from gtp.stage1.techniques import attack_burst, head_labels, pitch_comb, string_context
 from gtp.track import start_run
 
 
@@ -119,6 +119,21 @@ def bin_stats(xs):
     return [torch.from_numpy(v).float().to(xs.device)[None, None, :, None] for v in (mean, np.sqrt(var))]
 
 
+def attack_numbers(index_dir, view, notes, rows):
+    """(windows, 2) and their scale: each window's attack burst (gtp.stage1.techniques.attack_burst) and how far it
+    is below a strong attack of its recording (the upper quartile of the recording's bursts in the same render),
+    both divided by the spread of all bursts. A player's hammer-ons are soft against that player's own pick strokes."""
+    _, view_rows, x, meta = load_cached_index(index_dir, view.feature, view.cache)
+    if not view_rows.equals(rows):
+        raise ValueError(f'{view.cache} lists other windows than the first view')
+    pre = meta['layout']['pre_frames']
+    burst = np.concatenate([attack_burst(x[i : i + 20000, 0].astype(np.float32), pre) for i in range(0, len(x), 20000)])
+    of = pd.DataFrame({'rec': notes['rec'].to_numpy()[rows['note']], 'variant': rows['variant'], 'burst': burst})
+    strong = of.groupby(['rec', 'variant'])['burst'].transform(lambda b: b.quantile(0.75)).to_numpy()
+    scale = float(burst.std())
+    return (np.stack([burst, burst - strong], axis=1) / scale).astype(np.float32), scale
+
+
 @hydra.main(version_base='1.3', config_path=str(REPO_ROOT / 'conf' / 'techniques'), config_name='train')
 def main(cfg):
     torch.manual_seed(cfg.seed)
@@ -156,13 +171,17 @@ def main(cfg):
             raise ValueError(f'{view.cache} lists other windows than {cfg.cache}')
         caches.append((view_x, view.pool_bins))
     pitch = torch.tensor(notes['pitch'].to_numpy())
-    context = torch.from_numpy(string_context(notes)) if cfg.context else None
+    context, attack_scale = [string_context(notes)[note]] if cfg.context else [], None
+    if cfg.attack:
+        numbers, attack_scale = attack_numbers(cfg.index_dir, cfg.attack, notes, rows)
+        context.append(numbers)
+    context = torch.from_numpy(np.concatenate(context, axis=1)) if context else None
     data = {}
     for k, v in idx.items():
         data[k] = (
             [on_device(view_x, v, pool_bins, device) for view_x, pool_bins in caches],
             pitch[note[v]].to(device),
-            None if context is None else context[note[v]].to(device),
+            None if context is None else context[v].to(device),
             torch.from_numpy(label[note[v]]).to(device),
         )
     shapes = [tuple(xs.shape[1:]) for xs in data['train'][0]]
@@ -246,6 +265,8 @@ def main(cfg):
     scale = {
         f'{k}{i}': v.cpu().numpy() for i, pair in enumerate(stats) for k, v in zip(('mean', 'std'), pair, strict=True)
     }
+    if attack_scale is not None:
+        scale['attack_scale'] = np.float32(attack_scale)
     np.savez(run.dir / 'classifier.npz', **scale)
     metrics = {'heads': heads, 'windows': sizes, 'history': history}
     for k in idx:
