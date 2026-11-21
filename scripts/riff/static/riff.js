@@ -1,12 +1,24 @@
 'use strict';
 
 const STRING_NAMES = ['e', 'B', 'G', 'D', 'A', 'E'];
-const LAYOUT = { left: 30, ruler: 22, tabTop: 48, gap: 26 };
+// The lane holds palm mutes above the top string; it opens only while technique marks are shown.
+const LAYOUT = { left: 30, ruler: 22, tabTop: 48, gap: 26, lane: 18 };
 // Container/codec choices in order of preference; the audio track only serves playback and lining up the WAV.
 const MIME_TYPES = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1,opus', 'video/mp4'];
 // A sounding note stays highlighted at least this long, so short notes still flash.
 const MIN_LIT = 0.15;
 const POLL_MS = 1000;
+// A slide or slur links back to the previous note on its string only if that note ended at most this long before.
+const LINK_GAP = 1.5;
+const TECHNIQUE_LEGEND = {
+  hammer_on: 'H hammer-on',
+  pull_off: 'P pull-off',
+  slide: '/ slide',
+  bend: '\u2934 bend',
+  palm_mute: 'P.M. palm mute',
+  dead: 'x dead note',
+};
+const MARK_COLORS = { lit: '#2f6fde', past: '#a9a9b0', future: '#55555a' };
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $('#canvas');
@@ -258,7 +270,28 @@ function closeRiff() {
 function showProcessing(html) {
   $('#processing').innerHTML = html;
   $('#processing').hidden = false;
-  video.hidden = canvas.hidden = hscroll.hidden = true;
+  video.hidden = canvas.hidden = hscroll.hidden = $('#legend').hidden = true;
+}
+
+const hasTechnique = (n, kind) => !!n.techniques && n.techniques.includes(kind);
+
+// The previous note on each note's string when it is close enough to link to, and the runs of palm-muted notes.
+function techniqueMarks(notes) {
+  const prev = new Map();
+  const last = new Map();
+  const runs = [];
+  let run = null;
+  for (const n of [...notes].sort((a, b) => a.start - b.start)) {
+    const p = last.get(n.string);
+    if (p && n.start - p.end <= LINK_GAP) prev.set(n, p);
+    last.set(n.string, n);
+    if (!hasTechnique(n, 'palm_mute')) run = null;
+    else if (run && n.start - run.end <= LINK_GAP) {
+      run.notes.push(n);
+      run.end = Math.max(run.end, n.end);
+    } else runs.push((run = { notes: [n], end: n.end }));
+  }
+  return { prev, runs };
 }
 
 async function openRiff(id, token) {
@@ -285,13 +318,18 @@ async function openRiff(id, token) {
   }
   if (token !== routeToken) return;
   const notes = riff.prediction.notes;
+  const kinds = Object.keys(TECHNIQUE_LEGEND).filter((k) => notes.some((n) => hasTechnique(n, k)));
   R = {
     id,
     notes,
     duration: Math.max(riff.riff.duration || 0, ...notes.map((n) => n.end)),
     pps: 120,
+    marks: kinds.length ? techniqueMarks(notes) : null,
+    showMarks: false,
     needsDraw: true,
   };
+  $('#techniques-toggle').hidden = !R.marks;
+  $('#legend').textContent = kinds.map((k) => TECHNIQUE_LEGEND[k]).join(' \u00b7 ');
   $('#processing').hidden = true;
   video.hidden = canvas.hidden = hscroll.hidden = false;
   video.src = `/api/riffs/${encodeURIComponent(id)}/video`;
@@ -299,6 +337,13 @@ async function openRiff(id, token) {
   if (riff.prediction.unplaced.length) info.push(`${riff.prediction.unplaced.length} without a tab`);
   if (riff.riff.processing_s != null) info.push(`transcribed in ${riff.riff.processing_s} s`);
   $('#riff-info').textContent = info.join(' · ');
+  showTechniques();
+}
+
+function showTechniques() {
+  R.showMarks = !!R.marks && $('#techniques').checked;
+  canvas.classList.toggle('marks', R.showMarks);
+  $('#legend').hidden = !R.showMarks;
   resizeCanvas();
 }
 
@@ -315,7 +360,7 @@ function seek(t) {
 }
 
 function stringY(s) {
-  return LAYOUT.tabTop + (s - 1) * LAYOUT.gap;
+  return LAYOUT.tabTop + (R.showMarks ? LAYOUT.lane : 0) + (s - 1) * LAYOUT.gap;
 }
 
 function tx(t) {
@@ -346,6 +391,106 @@ function zoom(factor, anchorX = canvas.clientWidth / 2) {
 
 function rulerStep() {
   return [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60].find((s) => s * R.pps >= 60) || 120;
+}
+
+function noteState(n, now) {
+  if (n.start <= now && now < Math.max(n.end, n.start + MIN_LIT)) return 'lit';
+  return n.start < now ? 'past' : 'future';
+}
+
+function drawSlur(c, from, b, letter) {
+  const x0 = from ? from.x + from.w / 2 : b.x - 10;
+  const x1 = b.x + b.w / 2;
+  const y = b.y - 11;
+  const rise = Math.min(7, 3 + (x1 - x0) * 0.15);
+  c.beginPath();
+  c.moveTo(x0, y);
+  c.quadraticCurveTo((x0 + x1) / 2, y - 2 * rise, x1, y);
+  c.stroke();
+  c.strokeStyle = '#ffffff';
+  c.lineWidth = 3;
+  c.strokeText(letter, (x0 + x1) / 2, y - rise - 6);
+  c.fillText(letter, (x0 + x1) / 2, y - rise - 6);
+  c.lineWidth = 1.2;
+  c.strokeStyle = c.fillStyle;
+}
+
+function drawSlide(c, from, b, dir) {
+  // Far apart boxes get only the last stretch of the line, so it still reads as a slant.
+  let xa = from ? Math.max(from.x + from.w, b.x - 18) : b.x - 14;
+  let xb = from ? b.x : b.x - 2;
+  if (xb - xa < 10) {
+    xa = (xa + xb) / 2 - 5;
+    xb = xa + 10;
+  }
+  c.beginPath();
+  c.moveTo(xa, b.y + 5 * dir);
+  c.lineTo(xb, b.y - 5 * dir);
+  c.stroke();
+}
+
+function drawBend(c, b) {
+  const x = b.x + b.w + 7;
+  c.beginPath();
+  c.moveTo(b.x + b.w, b.y);
+  c.quadraticCurveTo(x, b.y, x, b.y - 14);
+  c.stroke();
+  c.beginPath();
+  c.moveTo(x, b.y - 20);
+  c.lineTo(x - 3.5, b.y - 13);
+  c.lineTo(x + 3.5, b.y - 13);
+  c.closePath();
+  c.fill();
+}
+
+function drawPalmMutes(c, boxOf, t0, t1, now) {
+  const y = LAYOUT.ruler + 13;
+  c.textAlign = 'left';
+  for (const run of R.marks.runs) {
+    if (run.end < t0 - 1 || run.notes[0].start > t1 + 1) continue;
+    const states = run.notes.map((n) => noteState(n, now));
+    const state = states.includes('lit') ? 'lit' : states.every((s) => s === 'past') ? 'past' : 'future';
+    const boxes = run.notes.map(boxOf);
+    const x0 = Math.min(...boxes.map((b) => b.x));
+    const x1 = Math.max(...boxes.map((b) => b.x + b.w));
+    c.strokeStyle = c.fillStyle = MARK_COLORS[state];
+    const tw = c.measureText('P.M.').width;
+    // A run that began off to the left keeps its label at the left edge until its end scrolls by.
+    const xt = Math.max(x0, Math.min(LAYOUT.left + 2, x1 - tw - 4));
+    c.fillText('P.M.', xt, y);
+    const xd = xt + tw + 4;
+    if (run.notes.length < 2 || x1 - xd < 6) continue;
+    c.setLineDash([3, 3]);
+    c.beginPath();
+    c.moveTo(xd, y + 0.5);
+    c.lineTo(x1, y + 0.5);
+    c.stroke();
+    c.setLineDash([]);
+    c.beginPath();
+    c.moveTo(x1, y - 3.5);
+    c.lineTo(x1, y + 4);
+    c.stroke();
+  }
+}
+
+function drawMarks(c, boxes, t0, t1, now) {
+  const boxOf = (n) => boxes.get(n) || { x: tx(n.start) - 1, w: 17, y: stringY(n.string) };
+  c.lineWidth = 1.2;
+  c.font = 'bold 10px ui-monospace, Menlo, monospace';
+  c.textAlign = 'center';
+  for (const [n, b] of boxes) {
+    if (!n.techniques) continue;
+    const p = R.marks.prev.get(n);
+    c.strokeStyle = c.fillStyle = MARK_COLORS[b.state];
+    for (const kind of n.techniques) {
+      if (kind === 'hammer_on' || kind === 'pull_off') drawSlur(c, p && boxOf(p), b, kind === 'hammer_on' ? 'H' : 'P');
+      else if (kind === 'slide') drawSlide(c, p && boxOf(p), b, p && n.fret < p.fret ? -1 : 1);
+      else if (kind === 'bend') drawBend(c, b);
+    }
+  }
+  drawPalmMutes(c, boxOf, t0, t1, now);
+  c.lineWidth = 1;
+  c.textAlign = 'center';
 }
 
 function draw() {
@@ -389,19 +534,23 @@ function draw() {
 
   // Notes that would hide each other on one string are laid side by side; their bars keep the true onset.
   const rightEdge = new Map();
+  const boxes = new Map();
   c.font = '13px ui-monospace, Menlo, monospace';
   c.textAlign = 'center';
   for (const n of R.notes) {
-    if (n.end < t0 - 1 || n.start > t1) continue;
-    const lit = n.start <= now && now < Math.max(n.end, n.start + MIN_LIT);
-    const past = !lit && n.start < now;
+    // Notes just past the right edge still get a box, for the marks that reach back into view.
+    if (n.end < t0 - 1 || n.start > t1 + 1) continue;
+    const state = noteState(n, now);
+    const lit = state === 'lit';
+    const past = state === 'past';
     const y = stringY(n.string);
     c.fillStyle = lit ? 'rgba(47,111,222,0.35)' : 'rgba(80,80,90,0.15)';
     c.fillRect(tx(n.start), y - 2, Math.max(2, (n.end - n.start) * R.pps), 4);
-    const label = String(n.fret);
+    const label = R.showMarks && hasTechnique(n, 'dead') ? 'x' : String(n.fret);
     const bw = Math.max(17, c.measureText(label).width + 8);
     const x = Math.max(tx(n.start), (rightEdge.get(n.string) ?? -Infinity) + 2);
     rightEdge.set(n.string, x - 1 + bw);
+    boxes.set(n, { x: x - 1, w: bw, y, state });
     c.beginPath();
     c.roundRect(x - 1, y - 9, bw, 18, 3);
     c.fillStyle = lit ? '#2f6fde' : '#ffffff';
@@ -411,6 +560,7 @@ function draw() {
     c.fillStyle = lit ? '#ffffff' : past ? '#8a8a92' : '#1d1d1f';
     c.fillText(label, x - 1 + bw / 2, y + 0.5);
   }
+  if (R.showMarks) drawMarks(c, boxes, t0, t1, now);
 
   const px = Math.round(tx(now)) + 0.5;
   if (px >= LAYOUT.left) {
@@ -478,6 +628,10 @@ $('#record').addEventListener('click', toggleRecording);
 $('#play').addEventListener('click', togglePlay);
 $('#zoom-in').addEventListener('click', () => zoom(1.5));
 $('#zoom-out').addEventListener('click', () => zoom(1 / 1.5));
+$('#techniques').addEventListener('change', (e) => {
+  e.target.blur();
+  if (R) showTechniques();
+});
 window.addEventListener('hashchange', route);
 window.addEventListener('beforeunload', (e) => {
   if (rec.recording || rec.uploading) e.preventDefault();

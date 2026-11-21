@@ -55,6 +55,7 @@
         <button id="zoom-out" title="Zoom out (Ctrl/Cmd + wheel)">&minus;</button>
         <button id="zoom-in" title="Zoom in (Ctrl/Cmd + wheel)">+</button>
         <label><input type="checkbox" id="follow" checked> Follow</label>
+        <label id="techniques-toggle" hidden><input type="checkbox" id="techniques" checked> Techniques</label>
       </span>
       <span id="riff-info" class="group right hint"></span>
     </div>
@@ -62,6 +63,7 @@
     <video id="video" controls playsinline hidden></video>
     <canvas id="canvas" hidden></canvas>
     <div id="hscroll" hidden><div id="hspacer"></div></div>
+    <div id="legend" class="hint" hidden></div>
   </main>
   <script src="/wav.js"></script>
   <script src="/riff.js"></script>

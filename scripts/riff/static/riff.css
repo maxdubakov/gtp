@@ -241,6 +241,10 @@ button:disabled {
   cursor: pointer;
 }
 
+#canvas.marks {
+  height: 228px;
+}
+
 #hscroll {
   overflow-x: auto;
   overflow-y: hidden;
@@ -251,4 +255,9 @@ button:disabled {
 
 #hspacer {
   height: 1px;
+}
+
+#legend {
+  padding: 4px 2px;
+  font-size: 12px;
 }
