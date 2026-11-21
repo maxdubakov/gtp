@@ -9,6 +9,9 @@ feature: cqt36
 # the pitch move. This one follows each note's pitch: 5 semitones either side of it and of its next three partials,
 # a third of a semitone per bin. `logmel229` with `logmel229_wide` is the whole spectrum instead.
 cache: cqt36_pitch
+# Neighbouring frequency bins of the first view averaged in groups of this many, so that a wide spectrum fits on the
+# GPU.
+pool_bins: 1
 # What the classifier says about a note. A head's class is the last of its classes one of whose marks the note
 # carries, the first class for a note with none; a note with a mark in `unknown` has no label for the head.
 heads:

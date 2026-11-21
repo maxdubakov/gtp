@@ -153,7 +153,7 @@ def main(cfg):
     info(f'{run.name}\n{OmegaConf.to_yaml(cfg)}')
 
     t0 = time.time()
-    caches = [(x, 1)]
+    caches = [(x, cfg.pool_bins)]
     for view in cfg.more_views:
         _, view_rows, view_x, _ = load_cached_index(cfg.index_dir, view.feature, view.cache)
         if not view_rows.equals(rows):
