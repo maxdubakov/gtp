@@ -23,6 +23,7 @@ from gtp.stage1 import strings
 from gtp.stage1.inference import SAMPLE_RATE as STAGE1_SR
 from gtp.stage1.inference import PianoTranscription
 from gtp.stage1.string_evidence import classifier_probs, fuse_recordings, physical, settings
+from gtp.stage1.tagger import TechniqueTagger
 from gtp.stage2.fusion import decode_beam, log_ratio, piece_rows, sorted_notes, valid_tabs
 from gtp.stage2.genres import UNKNOWN
 from gtp.stage2.inference import build_anchor_prefix, generate_tabs, load_checkpoint
@@ -36,6 +37,8 @@ STAGE2_DEFAULT = (
     REPO_ROOT / 'runs' / 'stage2' / '2026-11-08_11-58-31_p05_baseline' / 'checkpoints' / 'step_0060000_final.pth'
 )
 CLASSIFIER_RUNS_DEFAULT = 'results/strings/runs/*goatexp-di_s*'
+TECHNIQUE_RUNS_DEFAULT = 'results/techniques/runs/*_demo_s?'
+TECHNIQUE_PRIOR_DEFAULT = 'results/techniques/priors/2026-11-21_16-48-47_tab_prior_5k'
 STD_TUNING = [64, 59, 55, 50, 45, 40]
 SR = 44100
 
@@ -185,11 +188,14 @@ class Pipeline:
         stage1_checkpoint=STAGE1_DEFAULT,
         stage2_checkpoint=STAGE2_DEFAULT,
         classifier_runs=CLASSIFIER_RUNS_DEFAULT,
+        technique_runs=TECHNIQUE_RUNS_DEFAULT,
+        technique_prior=TECHNIQUE_PRIOR_DEFAULT,
         device=None,
     ):
         self.device = device or auto_device()
         self.stage1_checkpoint, self.stage2_checkpoint = stage1_checkpoint, stage2_checkpoint
         self.classifier_runs = classifier_runs
+        self.technique_runs, self.technique_prior = technique_runs, technique_prior
         # Stage 1's recurrent layers run several times faster on the CPU than on Apple's GPU.
         self.transcriptor = PianoTranscription(
             checkpoint_path=str(stage1_checkpoint), device='cpu' if self.device == 'mps' else self.device
@@ -212,6 +218,15 @@ class Pipeline:
     @cached_property
     def classifiers(self):
         return [strings.StringClassifier.from_run(run, self.device) for run in self.runs]
+
+    @cached_property
+    def tagger(self):
+        runs = sorted(glob.glob(str(REPO_ROOT / self.technique_runs)))
+        if not runs:
+            raise FileNotFoundError(f'No technique classifier runs match {self.technique_runs}')
+        # The prior's recurrent layers do not run on Apple's GPU.
+        device = self.device if self.device == 'cuda' else 'cpu'
+        return TechniqueTagger(runs, self.technique_prior, device=device)
 
     def stage1(self, audio):
         """Note events of `audio` (mono, at SR)."""
@@ -251,9 +266,11 @@ class Pipeline:
         anchor=None,
         fallback='first_viable',
         pooled=(),
+        techniques=False,
     ):
         """`audio` at SR, also in the file `wav_path`. `anchor` is 'string:fret,...' for the first notes (Stage 2
-        alone then); `pooled` comes from earlier_takes()."""
+        alone then); `pooled` comes from earlier_takes(). With `techniques`, each placed note also gets the marks
+        of its playing technique (TechniqueTagger.tab_marks)."""
         anchor_tabs = parse_anchor(anchor)
         sha, diff = git_state()
         pipeline = {
@@ -318,6 +335,15 @@ class Pipeline:
             placed = [{**n, 'string': t[0], 'fret': t[1]} for n, t in zip(notes, padded_tabs, strict=True) if t]
             unplaced = [n for n, t in zip(notes, padded_tabs, strict=True) if t is None]
         print(f'  stage 2 elapsed: {time.time() - t0:.1f}s')
+        if techniques and placed:
+            t0 = time.time()
+            for n, marks in zip(placed, self.tagger.tab_marks(audio, SR, placed), strict=True):
+                n['techniques'] = marks
+            pipeline |= {
+                'technique_runs': [repo_relative(r) for r in sorted(glob.glob(str(REPO_ROOT / self.technique_runs)))],
+                'technique_prior': self.technique_prior,
+            }
+            print(f'  techniques elapsed: {time.time() - t0:.1f}s')
         return out | {
             'placed': placed,
             'unplaced': unplaced,

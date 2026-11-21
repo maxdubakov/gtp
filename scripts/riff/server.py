@@ -175,7 +175,7 @@ class Riffs:
         n = round(shift * sr)
         pcm = np.concatenate([np.zeros(n, dtype=np.float32), pcm]) if n > 0 else pcm[-n:]
         print(f'{take_id}: {len(pcm) / sr:.1f}s at {sr} Hz, audio offset {shift:+.3f}s (match {confidence:.2f})')
-        result = self.pipeline.run(pcm, sr, lam=self.cfg.lam, beams=self.cfg.beams)
+        result = self.pipeline.run(pcm, sr, lam=self.cfg.lam, beams=self.cfg.beams, techniques=self.cfg.techniques)
         prediction = takes.prediction_doc(
             take_id, result['placed'], result['tuning'], 0, None, result['pipeline'], result['unplaced']
         )

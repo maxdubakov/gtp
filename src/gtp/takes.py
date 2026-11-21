@@ -119,7 +119,8 @@ def ordered(notes):
 
 
 def prediction_doc(take_id, notes, tuning, capo, tempo, pipeline, unplaced=()):
-    """`notes`: dicts with pitch/start/end/velocity/string/fret/evidence; ids follow time order.
+    """`notes`: dicts with pitch/start/end/velocity/string/fret/evidence and optionally techniques (the marks of
+    gtp.stage1.tagger.TechniqueTagger.tab_marks); ids follow time order.
 
     `unplaced`: Stage 1 notes Stage 2 could not put on a string, kept for the record only.
     """
@@ -132,6 +133,7 @@ def prediction_doc(take_id, notes, tuning, capo, tempo, pipeline, unplaced=()):
             'string': int(n['string']),
             'fret': int(n['fret']),
             'evidence': None if n.get('evidence') is None else [round(float(p), 4) for p in n['evidence']],
+            'techniques': [str(t) for t in n.get('techniques', [])],
         }
         for n in notes
     ]

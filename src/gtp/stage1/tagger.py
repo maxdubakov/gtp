@@ -57,7 +57,7 @@ class TechniqueTagger:
         windows = pitch_windows(spec, notes['onset'].to_numpy(), notes['pitch'].to_numpy(), *self.models[0][2])
         x = torch.from_numpy(windows.astype(np.float16)).to(self.device)
         pitch = torch.tensor(notes['pitch'].to_numpy(), device=self.device)
-        context = torch.from_numpy(string_context(notes)).to(self.device)
+        context = torch.tensor(string_context(notes), device=self.device)
         sizes_of = [len(c) for c in self.heads.values()]
         total = [0.0] * len(sizes_of)
         with torch.no_grad():
@@ -77,8 +77,23 @@ class TechniqueTagger:
                 out[name] = out[name] + self.weight * gains[name]
         return {name: log_softmax(part) for name, part in out.items()}
 
-    def tag(self, audio, sr, notes):
-        """Per note, the names of the classes it is given that are not a head's first (plain) class, e.g.
-        ['palm_mute', 'connected']."""
-        named = {name: part.argmax(axis=1) for name, part in self.log_probs(audio, sr, pd.DataFrame(notes)).items()}
-        return [[self.heads[h][k[i]] for h, k in named.items() if k[i]] for i in range(len(notes))]
+    def tab_marks(self, audio, sr, notes):
+        """Per note (dicts with start, end, pitch, string, fret), the marks a tab prints on it: palm_mute, dead,
+        bend, slide (the pitch slides into the note), hammer_on and pull_off (not picked; which of the two is read
+        from the fret of the note before on the string, and a note with none before it gets neither)."""
+        frame = pd.DataFrame(notes).rename(columns={'start': 'onset', 'end': 'offset'})
+        named = {
+            name: [self.heads[name][k] for k in part.argmax(axis=1)]
+            for name, part in self.log_probs(audio, sr, frame).items()
+        }
+        ordered = frame.sort_values(['string', 'onset'], kind='stable')
+        step = (ordered['fret'] - ordered.groupby('string')['fret'].shift()).reindex(frame.index).to_numpy()
+        out = []
+        for i in range(len(frame)):
+            marks = [named[h][i] for h in ('muting', 'pitch') if named[h][i] != self.heads[h][0]]
+            if named['glide'][i] == 'slide':
+                marks.append('slide')
+            elif named['attack'][i] == 'connected' and step[i] and not np.isnan(step[i]):
+                marks.append('hammer_on' if step[i] > 0 else 'pull_off')
+            out.append(marks)
+        return out

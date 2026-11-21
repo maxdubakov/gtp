@@ -9,6 +9,8 @@ port: 8766
 device: null
 lam: 1.3
 beams: 8
+# Mark each note's playing technique (palm mute, bend, slide, hammer-on, pull-off) in the tab.
+techniques: true
 ffmpeg: /opt/homebrew/bin/ffmpeg
 
 # A server writes nothing but riff folders: no Hydra run dir or saved config.
