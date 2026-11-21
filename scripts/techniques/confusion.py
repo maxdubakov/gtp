@@ -20,7 +20,7 @@ from omegaconf import OmegaConf
 from gtp import REPO_ROOT
 from gtp.log import info
 from gtp.stage1.string_data import load_cached_index
-from gtp.stage1.techniques import head_labels
+from gtp.stage1.techniques import head_labels, joined
 
 
 def matrix(labels, predicted, classes):
@@ -35,16 +35,6 @@ def shown(counts, classes):
     table = pd.DataFrame(cells, index=[f'is {c}' for c in classes], columns=[f'named {c}' for c in classes])
     f1 = 2 * np.diag(counts) / np.maximum(counts.sum(axis=0) + counts.sum(axis=1), 1)
     return f'{table.to_string()}\nF1 ' + ', '.join(f'{c} {v:.3f}' for c, v in zip(classes, f1, strict=True))
-
-
-def joined(first, second, sizes, classes):
-    """Class of the joint head per note from its two heads' classes (-1 where either is): `classes` lists, per
-    joint class, the pairs of the two heads' class indices that make it."""
-    table = np.full(sizes, -1)
-    for k, pairs in enumerate(classes):
-        for i, j in pairs:
-            table[i, j] = k
-    return np.where((first >= 0) & (second >= 0), table[first, second], -1)
 
 
 def logits(run):

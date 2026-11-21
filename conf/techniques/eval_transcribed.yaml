@@ -1,0 +1,30 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+runs_dir: results/techniques/runs
+# Classifier runs: each is scored alone (the table gives their mean and spread), then all together as one ensemble.
+pattern: 'd_ex_s*'
+# The tab prior's run directory (train_prior.py) and how much it counts; null = classifier alone.
+prior: results/techniques/priors/2026-11-21_16-48-47_tab_prior_5k
+weight: 1.0
+# Validation recordings scored.
+group: {dataset: goat, player: player2, chain: di}
+stage1_checkpoint: models/finetuned/z8_step_0045000.pth
+# The note model's notes of each recording are kept here.
+transcriptions: data/technique_transcribed
+# A found note is one of the same pitch that starts within this many seconds of the label.
+onset_tolerance: 0.05
+# The symbol a tab prints, read from two heads as in confusion.yaml.
+joint:
+  symbol:
+    heads: [attack, glide]
+    classes:
+      picked: [[picked, none]]
+      legato: [[connected, none]]
+      slide: [[picked, slide], [connected, slide]]
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

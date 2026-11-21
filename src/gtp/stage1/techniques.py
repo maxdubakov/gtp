@@ -60,6 +60,16 @@ def head_labels(notes, heads, unlabelled):
     return out
 
 
+def joined(first, second, sizes, classes):
+    """Class of the joint head per note from its two heads' classes (-1 where either is): `classes` lists, per
+    joint class, the pairs of the two heads' class indices that make it."""
+    table = np.full(sizes, -1)
+    for k, pairs in enumerate(classes):
+        for i, j in pairs:
+            table[i, j] = k
+    return np.where((first >= 0) & (second >= 0), table[first, second], -1)
+
+
 def scores(labels, predicted, classes):
     """Per-class precision, recall, F1 and count over the labelled notes, and the macro F1 over the classes present."""
     labels, predicted = labels[labels >= 0], predicted[labels >= 0]

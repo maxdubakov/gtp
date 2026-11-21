@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+runs_dir: results/techniques/runs
+# Runs averaged: their names after the timestamp. They must have scored the same validation notes.
+patterns: ['d_ex_s*']
+# The ensemble's own run name.
+name: ???
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

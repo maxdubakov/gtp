@@ -157,29 +157,41 @@ def log_softmax(x):
     return torch.log_softmax(torch.from_numpy(x), dim=1).numpy()
 
 
-def index_prior(prior_dir, notes, heads, device):
-    """A trained prior (train_prior.py's run directory) read over a technique index's notes, each recording as one
-    tab. Per head, (notes, classes): what the prior adds to each class's log share in its training tabs, and its
-    log-probabilities alone; zeros and NaN for tied notes. `heads` are the classifier's {head: classes}."""
-    trained, metrics = (
-        OmegaConf.load(prior_dir / '.hydra' / 'config.yaml'),
-        json.loads((prior_dir / 'metrics.json').read_text()),
-    )
+def load_prior(prior_dir, heads, device):
+    """A trained prior (train_prior.py's run directory) and each head's class shares in its training tabs. `heads`
+    are the classifier's {head: classes}, which the prior must answer too."""
+    trained = OmegaConf.load(prior_dir / '.hydra' / 'config.yaml')
+    metrics = json.loads((prior_dir / 'metrics.json').read_text())
     if metrics['heads'] != heads:
         raise ValueError(f'the prior answers {metrics["heads"]}, the classifier {heads}')
-    sizes_of = [len(c) for c in heads.values()]
-    model = instantiate(trained.model, n_classes=sum(sizes_of)).to(device)
+    model = instantiate(trained.model, n_classes=sum(len(c) for c in heads.values())).to(device)
     model.load_state_dict(torch.load(prior_dir / 'model.pt', map_location=device, weights_only=True))
+    return model, metrics['shares']
+
+
+def prior_over(prior, notes, heads, device):
+    """A prior (load_prior) read over notes (rec, onset, offset, string, fret and, where notes can be tied,
+    techniques), each recording as one tab. Per head, (notes, classes): what the prior adds to each class's log
+    share in its training tabs, and its log-probabilities alone; zeros and NaN for tied notes."""
+    model, shares = prior
     ordered = notes.sort_values(['rec', 'onset', 'string'], kind='stable')
-    tie = ordered['techniques'].fillna('').str.split(',').map(lambda marks: 'tie' in marks).to_numpy()
+    tie = np.zeros(len(ordered), dtype=bool)
+    if 'techniques' in ordered:
+        tie = ordered['techniques'].fillna('').str.split(',').map(lambda marks: 'tie' in marks).to_numpy()
     columns = (ordered[c].to_numpy() for c in ('onset', 'offset', 'string', 'fret'))
     kept, tab = tab_arrays(ordered['rec'].factorize()[0], *columns, tie)
     at = notes.index.get_indexer(ordered.index[kept])
+    sizes_of = [len(c) for c in heads.values()]
     gains, alone = {}, {}
     parts = np.split(read_tab(model, tab, device), np.cumsum(sizes_of)[:-1], axis=1)
-    for (name, classes), logits, share in zip(heads.items(), parts, metrics['shares'], strict=True):
+    for (name, classes), logits, share in zip(heads.items(), parts, shares, strict=True):
         gains[name] = np.zeros((len(notes), len(classes)), dtype=np.float32)
         alone[name] = np.full((len(notes), len(classes)), np.nan, dtype=np.float32)
         alone[name][at] = log_softmax(logits)
         gains[name][at] = alone[name][at] - np.log(share, dtype=np.float32)
     return gains, alone
+
+
+def index_prior(prior_dir, notes, heads, device):
+    """prior_over for the prior in `prior_dir`."""
+    return prior_over(load_prior(prior_dir, heads, device), notes, heads, device)
