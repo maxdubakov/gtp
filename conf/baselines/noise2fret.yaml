@@ -1,0 +1,52 @@
+defaults:
+  - _self_
+  - override hydra/job_logging: none
+
+name: noise2fret
+# goat: their GOAT test protocol (reproduction); guitarset: their GuitarSet test protocol (reproduction);
+# index: the index recordings of `guitars`, under their protocols (label-placed windows) and from audio alone.
+task: index
+# Clone of github.com/RiccardoVib/Noise2Fret and the unzipped checkpoints of Zenodo record 23361924.
+repo: ${oc.env:HOME}/Projects/third_party/noise2fret/repo
+weights: ${oc.env:HOME}/Projects/third_party/noise2fret/weights
+# Their preprocessing writes its windows next to the audio links made here, outside our data/.
+work: ${oc.env:HOME}/Projects/third_party/noise2fret/work
+checkpoints:
+  goat: GOAT_N2F/my_checkpoints/best_checkpoint.pth
+  goat_laux: GOAT_N2F_Laux/my_checkpoints/best_checkpoint.pth
+  guitarset: CheckpointsGuitarSet/GuitarSet_N2F/my_checkpoints/best_checkpoint.pth
+  guitarset_laux: CheckpointsGuitarSet/GuitarSet_N2F_Laux/my_checkpoints/best_checkpoint.pth
+goat_dir: data/goat/GOAT
+guitarset_dir: data/guitarset
+index_dir: data/string_index
+guitars: [sire-t7]
+# Recordings per (dataset, chain), for a smoke test; null = all.
+limit: null
+# Their GOAT windows: 100 ms from each labelled onset. Their GuitarSet windows: a fixed grid at 22050 Hz, hop 512
+# (windowed_guitarset.py, as called in diffusion_training_GS.py).
+goat_window_s: 0.1
+gs:
+  sr: 22050
+  hop: 512
+  win_s: 0.1
+  cluster_frames: 3
+  mute_index: 0
+  test_player: '00'
+# Our labels time each string of a chord separately; notes on different strings starting within this many seconds
+# of a group's first note are one labelled event, as a Guitar Pro beat is in theirs.
+chord_tol_s: 0.05
+# Audio-only windows: `grid` tiles the recording with 100 ms windows (every event at the window's centre);
+# `onsets` starts a window at each onset librosa detects (default settings) and keeps its first event at that onset.
+audio_windows: [grid, onsets]
+onset_tolerance: 0.05
+# Our run on the same recordings, put beside theirs.
+ours: results/e2e/index/2026-11-18_00-32-41_step5_z8_test
+ours_method: pipeline
+seed: 0
+batch: 64
+device: cuda
+threads: 8
+
+hydra:
+  run:
+    dir: ${repo_root:}/results/baselines/noise2fret/${now:%Y-%m-%d_%H-%M-%S}_${name}
